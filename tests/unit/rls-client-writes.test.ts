@@ -66,9 +66,17 @@ describe("RLS client write simulation", () => {
   it("authenticated user direct job update is denied without write policy", async () => {
     const rlsDenied = { error: { code: "42501", message: "permission denied" }, data: null };
     const userClient = {
-      from: () => ({
-        update: () => Promise.resolve(rlsDenied),
-        insert: () => Promise.resolve(rlsDenied),
+      from: (_table: string) => ({
+        update: (_payload: unknown) => {
+          void _table;
+          void _payload;
+          return Promise.resolve(rlsDenied);
+        },
+        insert: (_payload: unknown) => {
+          void _table;
+          void _payload;
+          return Promise.resolve(rlsDenied);
+        },
       }),
     };
 
@@ -84,8 +92,16 @@ describe("RLS client write simulation", () => {
   it("service role client bypasses RLS for writes", async () => {
     const serviceClient = {
       from: (_table: string) => ({
-        update: (_payload: unknown) => Promise.resolve({ error: null, data: { status: "cancelled" } }),
-        insert: (_payload: unknown) => Promise.resolve({ error: null, data: { id: "evt-1" } }),
+        update: (_payload: unknown) => {
+          void _table;
+          void _payload;
+          return Promise.resolve({ error: null, data: { status: "cancelled" } });
+        },
+        insert: (_payload: unknown) => {
+          void _table;
+          void _payload;
+          return Promise.resolve({ error: null, data: { id: "evt-1" } });
+        },
       }),
     };
 
