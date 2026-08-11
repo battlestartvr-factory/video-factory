@@ -1,6 +1,3 @@
-<<<<<<< HEAD
-# video-factory
-=======
 # ИИ-контент-завод
 
 Внутренняя веб-панель для генерации контента (сценарии, посты, изображения, видео) команды Battle Start VR.
@@ -19,7 +16,7 @@ cp .env.example .env.local
 ### 2. Supabase
 
 1. Создайте проект на [supabase.com](https://supabase.com)
-2. В SQL Editor выполните `supabase/migrations/20260311000000_initial_schema.sql`
+2. В SQL Editor выполните миграции из `supabase/migrations/` по порядку
 3. Отключите public signup: Authentication → Providers → Email → Disable sign ups
 4. Создайте первого пользователя в Dashboard → Authentication → Users
 5. Назначьте admin:
@@ -89,4 +86,3 @@ Public signup отключён. Admin создаётся через Supabase Das
 - [Архитектура](docs/architecture.md)
 - [n8n контракт](docs/n8n-contract.md)
 - [Deployment](docs/deployment.md)
->>>>>>> 2863fe7 (feat: implement AI content factory MVP web panel)
