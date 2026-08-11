@@ -1,7 +1,7 @@
 import { v4 as uuidv4 } from "uuid";
 import { getSessionUser, getProfile, canEditProject } from "@/lib/auth/session";
 import { apiSuccess, apiError } from "@/lib/api/response";
-import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { createSupabaseServerClient, createSupabaseServiceClient } from "@/lib/supabase/server";
 import { dispatchJobToN8n } from "@/lib/n8n/client";
 import { scheduleMockWorkflow } from "@/lib/n8n/mock-workflow";
 import { serverEnv } from "@/lib/env/env.server";
@@ -36,7 +36,8 @@ export async function POST(
       return apiError("INVALID_STATE", "Повтор доступен только для failed/cancelled", 400, requestId);
     }
 
-    await supabase
+    const service = createSupabaseServiceClient();
+    await service
       .from("jobs")
       .update({
         status: "queued",
@@ -48,7 +49,7 @@ export async function POST(
       })
       .eq("id", id);
 
-    await supabase.from("job_events").insert({
+    await service.from("job_events").insert({
       job_id: id,
       event_type: "job.retry",
       status: "queued",

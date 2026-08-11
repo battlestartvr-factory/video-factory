@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { createSupabaseServerClient, createSupabaseServiceClient } from "@/lib/supabase/server";
 import { getSessionUser } from "@/lib/auth/session";
 import { apiSuccess, apiError } from "@/lib/api/response";
 import { createProjectSchema } from "@/lib/validation/schemas";
@@ -19,8 +19,8 @@ export async function POST(request: Request) {
       return apiError("VALIDATION_ERROR", "Некорректные данные", 400, requestId);
     }
 
-    const supabase = await createSupabaseServerClient();
-    const { data: project, error } = await supabase
+    const service = createSupabaseServiceClient();
+    const { data: project, error } = await service
       .from("projects")
       .insert({
         name: parsed.data.name,
@@ -37,7 +37,7 @@ export async function POST(request: Request) {
       return apiError("CREATE_FAILED", "Не удалось создать проект", 500, requestId);
     }
 
-    await supabase.from("project_members").insert({
+    await service.from("project_members").insert({
       project_id: project.id,
       user_id: user.id,
       member_role: "owner",

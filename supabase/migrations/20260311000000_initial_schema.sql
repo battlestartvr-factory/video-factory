@@ -168,13 +168,13 @@ CREATE TABLE IF NOT EXISTS usage_records (
 );
 
 -- Updated_at trigger
-CREATE OR REPLACE FUNCTION set_updated_at()
+CREATE OR REPLACE FUNCTION public.set_updated_at()
 RETURNS TRIGGER AS $$
 BEGIN
   NEW.updated_at = NOW();
   RETURN NEW;
 END;
-$$ LANGUAGE plpgsql;
+$$ LANGUAGE plpgsql SET search_path = public;
 
 DROP TRIGGER IF EXISTS profiles_updated_at ON profiles;
 CREATE TRIGGER profiles_updated_at BEFORE UPDATE ON profiles FOR EACH ROW EXECUTE FUNCTION set_updated_at();
@@ -189,7 +189,7 @@ DROP TRIGGER IF EXISTS jobs_updated_at ON jobs;
 CREATE TRIGGER jobs_updated_at BEFORE UPDATE ON jobs FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
 -- Auto-create profile on signup
-CREATE OR REPLACE FUNCTION handle_new_user()
+CREATE OR REPLACE FUNCTION public.handle_new_user()
 RETURNS TRIGGER AS $$
 BEGIN
   INSERT INTO public.profiles (id, email, display_name, role)
@@ -197,7 +197,7 @@ BEGIN
   ON CONFLICT (id) DO NOTHING;
   RETURN NEW;
 END;
-$$ LANGUAGE plpgsql SECURITY DEFINER;
+$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public;
 
 DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users;
 CREATE TRIGGER on_auth_user_created
@@ -216,29 +216,29 @@ ALTER TABLE usage_records ENABLE ROW LEVEL SECURITY;
 ALTER TABLE processed_webhook_events ENABLE ROW LEVEL SECURITY;
 
 -- Helper: is admin
-CREATE OR REPLACE FUNCTION is_admin(uid UUID)
+CREATE OR REPLACE FUNCTION public.is_admin(uid UUID)
 RETURNS BOOLEAN AS $$
-  SELECT EXISTS (SELECT 1 FROM profiles WHERE id = uid AND role = 'admin');
-$$ LANGUAGE sql STABLE SECURITY DEFINER;
+  SELECT EXISTS (SELECT 1 FROM public.profiles WHERE id = uid AND role = 'admin');
+$$ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public;
 
 -- Helper: project access
-CREATE OR REPLACE FUNCTION has_project_access(uid UUID, pid UUID)
+CREATE OR REPLACE FUNCTION public.has_project_access(uid UUID, pid UUID)
 RETURNS BOOLEAN AS $$
-  SELECT is_admin(uid) OR EXISTS (
-    SELECT 1 FROM project_members WHERE project_id = pid AND user_id = uid
+  SELECT public.is_admin(uid) OR EXISTS (
+    SELECT 1 FROM public.project_members WHERE project_id = pid AND user_id = uid
   );
-$$ LANGUAGE sql STABLE SECURITY DEFINER;
+$$ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public;
 
-CREATE OR REPLACE FUNCTION can_edit_project(uid UUID, pid UUID)
+CREATE OR REPLACE FUNCTION public.can_edit_project(uid UUID, pid UUID)
 RETURNS BOOLEAN AS $$
-  SELECT is_admin(uid) OR EXISTS (
-    SELECT 1 FROM project_members
+  SELECT public.is_admin(uid) OR EXISTS (
+    SELECT 1 FROM public.project_members
     WHERE project_id = pid AND user_id = uid AND member_role IN ('owner', 'editor')
   );
-$$ LANGUAGE sql STABLE SECURITY DEFINER;
+$$ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public;
 
 -- Prevent non-admin users from escalating role or changing protected fields
-CREATE OR REPLACE FUNCTION protect_profile_sensitive_fields()
+CREATE OR REPLACE FUNCTION public.protect_profile_sensitive_fields()
 RETURNS TRIGGER AS $$
 BEGIN
   -- Service role / backend bypass (auth.uid() is NULL)
@@ -246,7 +246,7 @@ BEGIN
     RETURN NEW;
   END IF;
 
-  IF NOT is_admin(auth.uid()) THEN
+  IF NOT public.is_admin(auth.uid()) THEN
     IF NEW.role IS DISTINCT FROM OLD.role THEN
       RAISE EXCEPTION 'permission denied: cannot change role';
     END IF;
@@ -267,110 +267,65 @@ CREATE TRIGGER protect_profile_sensitive_fields
   BEFORE UPDATE ON profiles
   FOR EACH ROW EXECUTE FUNCTION protect_profile_sensitive_fields();
 
--- Profiles policies
+-- Profiles policies (client may read and update own display_name)
 DROP POLICY IF EXISTS profiles_select ON profiles;
 CREATE POLICY profiles_select ON profiles FOR SELECT USING (
-  auth.uid() = id OR is_admin(auth.uid())
+  auth.uid() = id OR public.is_admin(auth.uid())
 );
 
--- Members may update own display_name only; role/email guarded by trigger above
 DROP POLICY IF EXISTS profiles_update_self ON profiles;
 CREATE POLICY profiles_update_self ON profiles FOR UPDATE
   USING (auth.uid() = id)
   WITH CHECK (auth.uid() = id);
 
--- Admins may update any profile including role
 DROP POLICY IF EXISTS profiles_update_admin ON profiles;
 CREATE POLICY profiles_update_admin ON profiles FOR UPDATE
-  USING (is_admin(auth.uid()))
-  WITH CHECK (is_admin(auth.uid()));
+  USING (public.is_admin(auth.uid()))
+  WITH CHECK (public.is_admin(auth.uid()));
 
--- Projects policies
+-- Production tables: client SELECT only. Writes via service role (Next.js API).
 DROP POLICY IF EXISTS projects_select ON projects;
 CREATE POLICY projects_select ON projects FOR SELECT USING (
-  has_project_access(auth.uid(), id)
+  public.has_project_access(auth.uid(), id)
 );
 
-DROP POLICY IF EXISTS projects_insert ON projects;
-CREATE POLICY projects_insert ON projects FOR INSERT WITH CHECK (
-  auth.uid() = created_by
-);
-
-DROP POLICY IF EXISTS projects_update ON projects;
-CREATE POLICY projects_update ON projects FOR UPDATE USING (
-  can_edit_project(auth.uid(), id)
-);
-
--- Project members policies
 DROP POLICY IF EXISTS project_members_select ON project_members;
 CREATE POLICY project_members_select ON project_members FOR SELECT USING (
-  has_project_access(auth.uid(), project_id)
+  public.has_project_access(auth.uid(), project_id)
 );
 
-DROP POLICY IF EXISTS project_members_insert ON project_members;
-CREATE POLICY project_members_insert ON project_members FOR INSERT WITH CHECK (
-  can_edit_project(auth.uid(), project_id) OR is_admin(auth.uid())
-);
-
-DROP POLICY IF EXISTS project_members_update ON project_members;
-CREATE POLICY project_members_update ON project_members FOR UPDATE USING (
-  can_edit_project(auth.uid(), project_id) OR is_admin(auth.uid())
-);
-
-DROP POLICY IF EXISTS project_members_delete ON project_members;
-CREATE POLICY project_members_delete ON project_members FOR DELETE USING (
-  can_edit_project(auth.uid(), project_id) OR is_admin(auth.uid())
-);
-
--- Jobs policies
 DROP POLICY IF EXISTS jobs_select ON jobs;
 CREATE POLICY jobs_select ON jobs FOR SELECT USING (
-  has_project_access(auth.uid(), project_id)
+  public.has_project_access(auth.uid(), project_id)
 );
 
-DROP POLICY IF EXISTS jobs_insert ON jobs;
-CREATE POLICY jobs_insert ON jobs FOR INSERT WITH CHECK (
-  can_edit_project(auth.uid(), project_id) AND auth.uid() = created_by
-);
-
-DROP POLICY IF EXISTS jobs_update_client ON jobs;
-CREATE POLICY jobs_update_client ON jobs FOR UPDATE USING (
-  can_edit_project(auth.uid(), project_id)
-);
-
--- Job events
 DROP POLICY IF EXISTS job_events_select ON job_events;
 CREATE POLICY job_events_select ON job_events FOR SELECT USING (
-  EXISTS (SELECT 1 FROM jobs j WHERE j.id = job_id AND has_project_access(auth.uid(), j.project_id))
+  EXISTS (
+    SELECT 1 FROM public.jobs j
+    WHERE j.id = job_id AND public.has_project_access(auth.uid(), j.project_id)
+  )
 );
 
-DROP POLICY IF EXISTS job_events_insert ON job_events;
-CREATE POLICY job_events_insert ON job_events FOR INSERT WITH CHECK (
-  EXISTS (SELECT 1 FROM jobs j WHERE j.id = job_id AND has_project_access(auth.uid(), j.project_id))
-);
-
--- Assets
 DROP POLICY IF EXISTS assets_select ON assets;
 CREATE POLICY assets_select ON assets FOR SELECT USING (
-  has_project_access(auth.uid(), project_id)
+  public.has_project_access(auth.uid(), project_id)
 );
 
--- Reviews
 DROP POLICY IF EXISTS reviews_select ON reviews;
 CREATE POLICY reviews_select ON reviews FOR SELECT USING (
-  EXISTS (SELECT 1 FROM jobs j WHERE j.id = job_id AND has_project_access(auth.uid(), j.project_id))
+  EXISTS (
+    SELECT 1 FROM public.jobs j
+    WHERE j.id = job_id AND public.has_project_access(auth.uid(), j.project_id)
+  )
 );
 
-DROP POLICY IF EXISTS reviews_insert ON reviews;
-CREATE POLICY reviews_insert ON reviews FOR INSERT WITH CHECK (
-  EXISTS (SELECT 1 FROM jobs j WHERE j.id = job_id AND can_edit_project(auth.uid(), j.project_id))
-  AND auth.uid() = user_id
-);
-
--- Usage records
 DROP POLICY IF EXISTS usage_select ON usage_records;
 CREATE POLICY usage_select ON usage_records FOR SELECT USING (
-  EXISTS (SELECT 1 FROM jobs j WHERE j.id = job_id AND has_project_access(auth.uid(), j.project_id))
+  EXISTS (
+    SELECT 1 FROM public.jobs j
+    WHERE j.id = job_id AND public.has_project_access(auth.uid(), j.project_id)
+  )
 );
 
 -- processed_webhook_events: service role only (no client policies)

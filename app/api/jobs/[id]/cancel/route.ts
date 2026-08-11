@@ -1,6 +1,6 @@
 import { getSessionUser, getProfile, canEditProject } from "@/lib/auth/session";
 import { apiSuccess, apiError } from "@/lib/api/response";
-import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { createSupabaseServerClient, createSupabaseServiceClient } from "@/lib/supabase/server";
 import { assertTransition } from "@/lib/jobs/status-transitions";
 import { generateRequestId, createLogger } from "@/lib/logging/logger";
 import type { JobStatus } from "@/lib/types/database";
@@ -41,13 +41,13 @@ export async function POST(
 
     assertTransition(currentStatus, "cancelled");
 
-    const supabase = await createSupabaseServerClient();
-    await supabase
+    const service = createSupabaseServiceClient();
+    await service
       .from("jobs")
       .update({ status: "cancelled", completed_at: new Date().toISOString() })
       .eq("id", id);
 
-    await supabase.from("job_events").insert({
+    await service.from("job_events").insert({
       job_id: id,
       event_type: "job.cancelled",
       status: "cancelled",

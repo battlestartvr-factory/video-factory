@@ -7,7 +7,7 @@ BEGIN
     RETURN NEW;
   END IF;
 
-  IF NOT is_admin(auth.uid()) THEN
+  IF NOT public.is_admin(auth.uid()) THEN
     IF NEW.role IS DISTINCT FROM OLD.role THEN
       RAISE EXCEPTION 'permission denied: cannot change role';
     END IF;

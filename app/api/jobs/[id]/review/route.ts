@@ -1,7 +1,7 @@
 import { getSessionUser, getProfile, canEditProject } from "@/lib/auth/session";
 import { apiSuccess, apiError } from "@/lib/api/response";
 import { reviewJobSchema } from "@/lib/validation/schemas";
-import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { createSupabaseServerClient, createSupabaseServiceClient } from "@/lib/supabase/server";
 import { assertTransition } from "@/lib/jobs/status-transitions";
 import { generateRequestId } from "@/lib/logging/logger";
 import type { JobStatus } from "@/lib/types/database";
@@ -39,7 +39,8 @@ export async function POST(
       return apiError("INVALID_STATE", "Задача не на согласовании", 400, requestId);
     }
 
-    await supabase.from("reviews").insert({
+    const service = createSupabaseServiceClient();
+    await service.from("reviews").insert({
       job_id: id,
       user_id: user.id,
       decision: parsed.data.decision,
@@ -50,7 +51,7 @@ export async function POST(
       parsed.data.decision === "approved" ? "completed" : "processing";
     assertTransition("review", newStatus);
 
-    await supabase
+    await service
       .from("jobs")
       .update({
         status: newStatus,
@@ -63,7 +64,7 @@ export async function POST(
       })
       .eq("id", id);
 
-    await supabase.from("job_events").insert({
+    await service.from("job_events").insert({
       job_id: id,
       event_type: `review.${parsed.data.decision}`,
       status: newStatus,

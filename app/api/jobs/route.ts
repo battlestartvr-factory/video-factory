@@ -3,7 +3,7 @@ import { getSessionUser, getProfile, canEditProject } from "@/lib/auth/session";
 import { apiSuccess, apiError } from "@/lib/api/response";
 import { checkRateLimit } from "@/lib/api/rate-limit";
 import { createJobSchema } from "@/lib/validation/schemas";
-import { createSupabaseServerClient, createSupabaseServiceClient } from "@/lib/supabase/server";
+import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { getStorageProvider } from "@/lib/storage/providers";
 import { dispatchJobToN8n } from "@/lib/n8n/client";
 import { scheduleMockWorkflow } from "@/lib/n8n/mock-workflow";
@@ -47,8 +47,8 @@ export async function POST(request: Request) {
       return apiError("INVALID_SOURCE", "Некорректная ссылка Google Drive", 400, requestId);
     }
 
-    const supabase = await createSupabaseServerClient();
-    const { data: job, error } = await supabase
+    const service = createSupabaseServiceClient();
+    const { data: job, error } = await service
       .from("jobs")
       .insert({
         project_id: parsed.data.projectId,
@@ -72,7 +72,7 @@ export async function POST(request: Request) {
       return apiError("CREATE_FAILED", "Не удалось создать задачу", 500, requestId);
     }
 
-    await supabase.from("job_events").insert({
+    await service.from("job_events").insert({
       job_id: job.id,
       event_type: "job.created",
       status: "queued",
