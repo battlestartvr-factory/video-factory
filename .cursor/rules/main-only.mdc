@@ -1,0 +1,13 @@
+---
+description: Git workflow — only main
+alwaysApply: true
+---
+
+* Всегда работать только в ветке `main`.
+* Перед изменениями выполнять `git checkout main` и `git pull --ff-only origin main`.
+* Не создавать feature/fix/cursor ветки.
+* Не создавать Pull Request.
+* Не использовать worktree для отдельных веток.
+* Коммитить проверенные изменения непосредственно в `main`.
+* После успешных проверок выполнять обычный `git push origin main`.
+* Никогда не использовать force push и не переписывать историю `main`.
