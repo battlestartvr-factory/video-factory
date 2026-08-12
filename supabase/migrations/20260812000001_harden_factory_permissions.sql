@@ -114,4 +114,22 @@ BEGIN
   END LOOP;
 END $$;
 
+-- ---------------------------------------------------------------------------
+-- 5. Strip all anon access (CREATE OR REPLACE VIEW may preserve default grants)
+-- ---------------------------------------------------------------------------
+REVOKE ALL PRIVILEGES ON TABLE
+  public.factory_jobs,
+  public.factory_job_stages,
+  public.provider_models,
+  public.provider_tasks,
+  public.factory_assets,
+  public.factory_approvals,
+  public.factory_workflow_events,
+  public.factory_cost_events,
+  public.processed_webhook_events,
+  public.factory_job_stages_safe,
+  public.factory_assets_safe,
+  public.factory_job_detail
+FROM anon;
+
 -- service_role retains full privileges via Supabase defaults; no REVOKE here.

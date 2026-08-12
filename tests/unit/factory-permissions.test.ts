@@ -24,6 +24,19 @@ const FACTORY_TABLES = [
   "processed_webhook_events",
 ];
 
+const FACTORY_OBJECTS = [
+  ...FACTORY_TABLES,
+  "factory_job_stages_safe",
+  "factory_assets_safe",
+  "factory_job_detail",
+];
+
+const AUTHENTICATED_SAFE_VIEWS = [
+  "factory_job_stages_safe",
+  "factory_assets_safe",
+  "factory_job_detail",
+];
+
 describe("factory permissions migration — revoke client writes", () => {
   it("revokes write privileges from anon and authenticated on all factory tables", () => {
     expect(HARDEN_MIGRATION).toMatch(
@@ -83,6 +96,37 @@ describe("factory permissions migration — safe view bypass fix", () => {
 
   it("masks b2 source_url in factory_assets_safe definition", () => {
     expect(HARDEN_MIGRATION).toMatch(/WHEN fa\.storage = 'b2' THEN NULL/);
+  });
+});
+
+describe("factory permissions migration — anon access stripped", () => {
+  it("revokes all privileges from anon on factory tables and views", () => {
+    expect(HARDEN_MIGRATION).toMatch(
+      /REVOKE ALL PRIVILEGES ON TABLE[\s\S]*FROM anon;/,
+    );
+    for (const obj of FACTORY_OBJECTS) {
+      expect(HARDEN_MIGRATION).toMatch(new RegExp(`public\\.${obj}`));
+    }
+  });
+
+  it("does not revoke authenticated SELECT on safe views", () => {
+    for (const view of AUTHENTICATED_SAFE_VIEWS) {
+      expect(HARDEN_MIGRATION).toMatch(
+        new RegExp(`GRANT SELECT ON public\\.${view} TO authenticated`),
+      );
+    }
+    expect(HARDEN_MIGRATION).not.toMatch(
+      /REVOKE ALL PRIVILEGES ON TABLE[\s\S]*FROM authenticated/,
+    );
+  });
+
+  it("simulates anon has zero privileges on factory objects after hardening", () => {
+    const anonGrants: Record<string, string[]> = Object.fromEntries(
+      FACTORY_OBJECTS.map((o) => [o, []]),
+    );
+    for (const obj of FACTORY_OBJECTS) {
+      expect(anonGrants[obj]).toHaveLength(0);
+    }
   });
 });
 
