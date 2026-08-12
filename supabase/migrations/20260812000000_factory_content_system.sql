@@ -332,53 +332,64 @@ SET search_path = public
 AS $$
   SELECT EXISTS (
     SELECT 1
-    FROM public.factory_jobs fj
+    FROM public.factory_jobs AS fj
     WHERE fj.id = p_job_id
       AND public.has_project_access(uid, fj.project_id)
   );
 $$;
 
--- ---------------------------------------------------------------------------
--- Safe views (browser-readable, no secrets / temporary signed URLs)
--- ---------------------------------------------------------------------------
-CREATE OR REPLACE VIEW public.factory_job_stages_safe AS
-SELECT
-  id,
-  job_id,
-  stage,
-  status,
-  attempt,
-  started_at,
-  finished_at,
-  created_at,
-  updated_at
-FROM public.factory_job_stages;
+REVOKE ALL ON FUNCTION public.has_factory_job_access(UUID, UUID) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.has_factory_job_access(UUID, UUID) FROM anon;
+GRANT EXECUTE ON FUNCTION public.has_factory_job_access(UUID, UUID) TO authenticated;
+GRANT EXECUTE ON FUNCTION public.has_factory_job_access(UUID, UUID) TO service_role;
 
-CREATE OR REPLACE VIEW public.factory_assets_safe AS
+-- ---------------------------------------------------------------------------
+-- Safe views (security_invoker=true — RLS of caller applies to base tables)
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE VIEW public.factory_job_stages_safe
+WITH (security_invoker = true)
+AS
 SELECT
-  id,
-  job_id,
-  stage_id,
-  variant_index,
-  kind,
-  storage,
+  js.id,
+  js.job_id,
+  js.stage,
+  js.status,
+  js.attempt,
+  js.started_at,
+  js.finished_at,
+  js.created_at,
+  js.updated_at
+FROM public.factory_job_stages AS js;
+
+CREATE OR REPLACE VIEW public.factory_assets_safe
+WITH (security_invoker = true)
+AS
+SELECT
+  fa.id,
+  fa.job_id,
+  fa.stage_id,
+  fa.variant_index,
+  fa.kind,
+  fa.storage,
   CASE
-    WHEN storage = 'b2' THEN NULL
-    ELSE source_url
+    WHEN fa.storage = 'b2' THEN NULL
+    ELSE fa.source_url
   END AS source_url,
-  drive_web_url,
+  fa.drive_web_url,
   CASE
-    WHEN storage = 'inline' OR kind = 'text' THEN text_content
+    WHEN fa.storage = 'inline' OR fa.kind = 'text' THEN fa.text_content
     ELSE NULL
   END AS text_content,
-  mime_type,
-  size_bytes,
-  approved,
-  created_at,
-  updated_at
-FROM public.factory_assets;
+  fa.mime_type,
+  fa.size_bytes,
+  fa.approved,
+  fa.created_at,
+  fa.updated_at
+FROM public.factory_assets AS fa;
 
-CREATE OR REPLACE VIEW public.factory_job_detail AS
+CREATE OR REPLACE VIEW public.factory_job_detail
+WITH (security_invoker = true)
+AS
 SELECT
   fj.id,
   fj.request_id,
@@ -403,13 +414,13 @@ SELECT
   COALESCE(
     (
       SELECT SUM(ce.cost_usd)
-      FROM public.factory_cost_events ce
+      FROM public.factory_cost_events AS ce
       WHERE ce.job_id = fj.id AND ce.estimated = false
     ),
     fj.actual_cost_usd,
     0
   ) AS aggregated_actual_cost_usd
-FROM public.factory_jobs fj;
+FROM public.factory_jobs AS fj;
 
 -- ---------------------------------------------------------------------------
 -- RPC: factory_create_or_get_job
@@ -506,7 +517,7 @@ BEGIN
 END;
 $$;
 
-REVOKE ALL ON FUNCTION public.factory_create_or_get_job(JSONB) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.factory_create_or_get_job(JSONB) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.factory_create_or_get_job(JSONB) TO service_role;
 
 -- ---------------------------------------------------------------------------
@@ -585,7 +596,7 @@ BEGIN
 END;
 $$;
 
-REVOKE ALL ON FUNCTION public.factory_claim_stage(UUID, TEXT, JSONB) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.factory_claim_stage(UUID, TEXT, JSONB) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.factory_claim_stage(UUID, TEXT, JSONB) TO service_role;
 
 -- ---------------------------------------------------------------------------
@@ -619,7 +630,7 @@ BEGIN
 END;
 $$;
 
-REVOKE ALL ON FUNCTION public.factory_record_event(UUID, UUID, TEXT, TEXT, JSONB) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.factory_record_event(UUID, UUID, TEXT, TEXT, JSONB) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.factory_record_event(UUID, UUID, TEXT, TEXT, JSONB) TO service_role;
 
 -- ---------------------------------------------------------------------------
@@ -697,7 +708,7 @@ BEGIN
 END;
 $$;
 
-REVOKE ALL ON FUNCTION public.factory_transition_job(UUID, TEXT[], TEXT, SMALLINT, TEXT, JSONB, JSONB) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.factory_transition_job(UUID, TEXT[], TEXT, SMALLINT, TEXT, JSONB, JSONB) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.factory_transition_job(UUID, TEXT[], TEXT, SMALLINT, TEXT, JSONB, JSONB) TO service_role;
 
 -- ---------------------------------------------------------------------------
@@ -795,7 +806,7 @@ BEGIN
 END;
 $$;
 
-REVOKE ALL ON FUNCTION public.factory_check_budget(UUID, TEXT, NUMERIC) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.factory_check_budget(UUID, TEXT, NUMERIC) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.factory_check_budget(UUID, TEXT, NUMERIC) TO service_role;
 
 -- ---------------------------------------------------------------------------

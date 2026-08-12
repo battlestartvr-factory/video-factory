@@ -55,7 +55,9 @@ describe("factory API routes — auth and service patterns", () => {
     );
     expect(source).toContain('import "server-only"');
     expect(source).toContain("x-factory-signature");
+    expect(source).toContain("getFactoryWebhookAuthHeader");
     expect(source).not.toContain("NEXT_PUBLIC_");
+    expect(source).not.toContain("createHmac");
   });
 
   it("env server validates factory vars without NEXT_PUBLIC prefix", () => {

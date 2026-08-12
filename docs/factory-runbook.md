@@ -103,6 +103,23 @@ curl http://localhost:3000/api/factory/jobs/<jobId> \
   -H "Cookie: <session-cookie>"
 ```
 
+## n8n auth contract (site → n8n)
+
+Header Auth in n8n expects an **exact static value**:
+
+```
+x-factory-signature: {FACTORY_WEBHOOK_SECRET}
+```
+
+Not HMAC, not derived from body or timestamp. Set the same value in n8n Webhook node Header Auth.
+
+Endpoints (relative to `N8N_FACTORY_BASE_URL`):
+
+- `POST /factory/jobs` — job created
+- `POST /factory/jobs/action` — approve / regenerate / cancel (jobId in JSON body)
+
+If `N8N_FACTORY_BASE_URL` already ends with `/factory/jobs` or contains `/webhook`, path joining avoids duplication (see `buildFactoryWebhookUrl` in `lib/factory/webhook-auth.ts`).
+
 ## Environment variables
 
 | Variable | Scope | Purpose |

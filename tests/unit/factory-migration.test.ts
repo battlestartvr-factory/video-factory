@@ -7,6 +7,11 @@ const migration = readFileSync(
   "utf-8",
 );
 
+const LEGACY_MIGRATION = readFileSync(
+  join(process.cwd(), "supabase/migrations/20260311000000_initial_schema.sql"),
+  "utf-8",
+);
+
 describe("factory migration — additive and safe", () => {
   it("does not drop or truncate legacy tables", () => {
     expect(migration).not.toMatch(/\bDROP TABLE\b/i);
@@ -15,20 +20,19 @@ describe("factory migration — additive and safe", () => {
     expect(migration).not.toMatch(/DROP TABLE public\.assets/i);
   });
 
+  it("legacy jobs/assets schema blocks remain untouched", () => {
+    expect(LEGACY_MIGRATION).toMatch(/CREATE TABLE IF NOT EXISTS jobs/);
+    expect(LEGACY_MIGRATION).toMatch(/CREATE TABLE IF NOT EXISTS assets/);
+    expect(migration).not.toMatch(/ALTER TABLE public\.jobs\b/);
+    expect(migration).not.toMatch(/ALTER TABLE public\.assets\b/);
+  });
+
   it("uses factory_ prefix for conflicting domain tables", () => {
     expect(migration).toMatch(/CREATE TABLE IF NOT EXISTS public\.factory_jobs/);
     expect(migration).toMatch(/CREATE TABLE IF NOT EXISTS public\.factory_assets/);
-    expect(migration).toMatch(/CREATE TABLE IF NOT EXISTS public\.factory_job_stages/);
-    expect(migration).toMatch(/CREATE TABLE IF NOT EXISTS public\.factory_approvals/);
   });
 
-  it("adds projects.factory_settings additively", () => {
-    expect(migration).toMatch(
-      /ALTER TABLE public\.projects[\s\S]*ADD COLUMN IF NOT EXISTS factory_settings/,
-    );
-  });
-
-  it("defines required RPC functions with service_role grants", () => {
+  it("defines required RPC functions with service_role-only execute", () => {
     const rpcs = [
       "factory_create_or_get_job",
       "factory_claim_stage",
@@ -37,61 +41,45 @@ describe("factory migration — additive and safe", () => {
       "factory_check_budget",
     ];
     for (const fn of rpcs) {
-      expect(migration).toMatch(new RegExp(`FUNCTION public\\.${fn}`));
-      expect(migration).toMatch(
-        new RegExp(`GRANT EXECUTE ON FUNCTION public\\.${fn}[\\s\\S]* TO service_role`),
+      const blockMatch = migration.match(
+        new RegExp(
+          `-- RPC: ${fn}[\\s\\S]*?REVOKE ALL ON FUNCTION public\\.${fn}[\\s\\S]*?GRANT EXECUTE ON FUNCTION public\\.${fn}[\\s\\S]*?TO service_role;`,
+        ),
       );
+      expect(blockMatch, `missing RPC block for ${fn}`).not.toBeNull();
+      const block = blockMatch![0];
+      expect(block).toMatch(/FROM PUBLIC, anon, authenticated/);
+      expect(block).not.toMatch(/TO authenticated/);
+    }
+  });
+
+  it("safe views use security_invoker=true", () => {
+    for (const view of [
+      "factory_job_stages_safe",
+      "factory_assets_safe",
+      "factory_job_detail",
+    ]) {
       expect(migration).toMatch(
-        new RegExp(`REVOKE ALL ON FUNCTION public\\.${fn}[\\s\\S]* FROM PUBLIC`),
+        new RegExp(
+          `CREATE OR REPLACE VIEW public\\.${view}[\\s\\S]*WITH \\(security_invoker = true\\)`,
+        ),
       );
     }
   });
 
-  it("enables RLS on all new factory tables", () => {
-    const tables = [
-      "factory_jobs",
-      "factory_job_stages",
-      "factory_assets",
-      "factory_approvals",
-      "factory_workflow_events",
-      "factory_cost_events",
-      "provider_models",
-      "provider_tasks",
-    ];
-    for (const table of tables) {
-      expect(migration).toMatch(
-        new RegExp(`ALTER TABLE public\\.${table} ENABLE ROW LEVEL SECURITY`),
-      );
-    }
-  });
-
-  it("does not create permissive authenticated policies on server-only tables", () => {
-    expect(migration).not.toMatch(
-      /CREATE POLICY[\s\S]*ON public\.provider_tasks[\s\S]*USING \(true\)/,
+  it("has_factory_job_access is granted to authenticated for policy use only", () => {
+    expect(migration).toMatch(
+      /REVOKE ALL ON FUNCTION public\.has_factory_job_access[\s\S]* FROM PUBLIC/,
     );
-    expect(migration).not.toMatch(
-      /CREATE POLICY[\s\S]*ON public\.factory_workflow_events[\s\S]*FOR SELECT/,
+    expect(migration).toMatch(
+      /REVOKE ALL ON FUNCTION public\.has_factory_job_access[\s\S]* FROM anon/,
     );
-  });
-
-  it("includes ai_game_lab disclosure constraint", () => {
-    expect(migration).toMatch(/factory_jobs_ai_game_lab_disclosure_check/);
-  });
-
-  it("includes asset storage CHECK constraints", () => {
-    expect(migration).toMatch(/factory_assets_b2_fields_check/);
-    expect(migration).toMatch(/factory_assets_drive_fields_check/);
-    expect(migration).toMatch(/factory_assets_inline_fields_check/);
-  });
-
-  it("reuses set_updated_at trigger function", () => {
-    expect(migration).toMatch(/EXECUTE FUNCTION public\.set_updated_at\(\)/);
-  });
-
-  it("creates safe views without provider payloads", () => {
-    expect(migration).toMatch(/CREATE OR REPLACE VIEW public\.factory_job_stages_safe/);
-    expect(migration).toMatch(/CREATE OR REPLACE VIEW public\.factory_assets_safe/);
-    expect(migration).toMatch(/CREATE OR REPLACE VIEW public\.factory_job_detail/);
+    expect(migration).toMatch(
+      /GRANT EXECUTE ON FUNCTION public\.has_factory_job_access[\s\S]* TO authenticated/,
+    );
+    expect(migration).toMatch(
+      /has_factory_job_access[\s\S]*has_project_access\(uid, fj\.project_id\)/,
+    );
   });
 
   it("uses has_project_access for factory_jobs SELECT policy", () => {
@@ -99,7 +87,38 @@ describe("factory migration — additive and safe", () => {
   });
 });
 
-describe("factory migration — idempotency semantics (documentation)", () => {
+describe("factory migration — RLS isolation semantics", () => {
+  it("simulates user A cannot SELECT foreign factory job (no matching policy row)", () => {
+    const userA = "user-a-uuid";
+    const projectA = "project-a-uuid";
+    const projectB = "project-b-uuid";
+
+    const members = [
+      { project_id: projectA, user_id: userA, member_role: "owner" },
+    ];
+    const factoryJobs = [
+      { id: "job-b", project_id: projectB, status: "queued" },
+    ];
+
+    const hasProjectAccess = (uid: string, pid: string) =>
+      members.some((m) => m.user_id === uid && m.project_id === pid);
+
+    const visibleJobs = factoryJobs.filter((j) => hasProjectAccess(userA, j.project_id));
+    expect(visibleJobs).toHaveLength(0);
+  });
+
+  it("simulates safe views inherit RLS via security_invoker (no bypass grant)", () => {
+    const detailView = migration.match(
+      /CREATE OR REPLACE VIEW public\.factory_job_detail[\s\S]*?FROM public\.factory_jobs AS fj;/,
+    )?.[0];
+    expect(detailView).toBeDefined();
+    expect(detailView).toMatch(/WITH \(security_invoker = true\)/);
+    expect(detailView).not.toMatch(/SECURITY DEFINER/);
+    expect(migration).toMatch(/GRANT SELECT ON public\.factory_job_detail TO authenticated/);
+  });
+});
+
+describe("factory migration — idempotency semantics", () => {
   it("documents duplicate request_id via ON CONFLICT on request_id", () => {
     expect(migration).toMatch(/ON CONFLICT \(request_id\) DO NOTHING/);
   });

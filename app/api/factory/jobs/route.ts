@@ -113,12 +113,19 @@ export async function POST(request: Request) {
     };
 
     try {
-      const dispatch = await createFactoryJob(n8nPayload);
-      logger.info("Factory job accepted", {
-        jobId: result.job_id,
-        duplicate: result.duplicate,
-        mock: dispatch.mock,
-      });
+      if (!result.duplicate) {
+        const dispatch = await createFactoryJob(n8nPayload);
+        logger.info("Factory job accepted", {
+          jobId: result.job_id,
+          duplicate: false,
+          mock: dispatch.mock,
+        });
+      } else {
+        logger.info("Factory job duplicate request_id — n8n dispatch skipped", {
+          jobId: result.job_id,
+          requestId: jobRequestId,
+        });
+      }
     } catch (error) {
       const message =
         error instanceof Error && error.message === "FACTORY_N8N_TIMEOUT"
