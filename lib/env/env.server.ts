@@ -7,6 +7,8 @@ const serverEnvSchema = z.object({
   SUPABASE_SERVICE_ROLE_KEY: z.string().optional().or(z.literal("")),
   N8N_WEBHOOK_URL: z.string().url().optional().or(z.literal("")),
   N8N_WEBHOOK_SECRET: z.string().optional().or(z.literal("")),
+  N8N_FACTORY_BASE_URL: z.string().url().optional().or(z.literal("")),
+  FACTORY_WEBHOOK_SECRET: z.string().optional().or(z.literal("")),
   APP_URL: z.string().url().default("http://localhost:3000"),
   MOCK_WORKFLOWS: z
     .enum(["true", "false"])
@@ -30,6 +32,10 @@ export const serverEnv = parseServerEnv();
 
 export function isN8nConfigured(): boolean {
   return Boolean(serverEnv.N8N_WEBHOOK_URL && serverEnv.N8N_WEBHOOK_SECRET);
+}
+
+export function isFactoryN8nConfigured(): boolean {
+  return Boolean(serverEnv.N8N_FACTORY_BASE_URL && serverEnv.FACTORY_WEBHOOK_SECRET);
 }
 
 export function isGoogleDriveConfigured(): boolean {

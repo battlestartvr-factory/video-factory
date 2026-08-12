@@ -38,6 +38,7 @@ export interface Project {
   default_language: string;
   target_platforms: string[];
   created_by: string;
+  factory_settings: Record<string, unknown>;
   created_at: string;
   updated_at: string;
 }
