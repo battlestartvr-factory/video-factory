@@ -27,6 +27,21 @@ UPDATE profiles SET role = 'admin' WHERE email = 'your@email.com';
 
 6. Скопируйте URL, anon key и service role key в `.env.local`
 
+### 2.1. Cursor: Agent Skills + Supabase MCP
+
+В репозитории уже установлены skills (`npx skills add supabase/agent-skills`) и конфиг MCP:
+
+- `.agents/skills/supabase` и `.agents/skills/supabase-postgres-best-practices`
+- `.cursor/mcp.json` → `https://mcp.supabase.com/mcp`
+
+Чтобы агент реально ходил в ваш проект Supabase:
+
+1. Cursor → **Settings → Tools & MCP** → сервер `supabase` → **Authenticate** (OAuth в браузере).
+2. Выберите организацию и проект.
+3. При необходимости перезапустите Cursor / агента.
+
+Для приложения по-прежнему нужны `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY` в `.env.local`.
+
 ### 3. Запуск
 
 ```bash
