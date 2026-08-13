@@ -22,6 +22,12 @@ const serverEnvSchema = z.object({
   GOOGLE_DRIVE_PRIVATE_KEY: z.string().optional().or(z.literal("")),
   GOOGLE_DRIVE_SHARED_FOLDER_ID: z.string().optional().or(z.literal("")),
   LOG_LEVEL: z.enum(["debug", "info", "warn", "error"]).default("info"),
+  INGEST_PROXY_TOKEN: z.string().optional().or(z.literal("")),
+  B2_S3_ENDPOINT: z.string().optional().or(z.literal("")),
+  B2_REGION: z.string().optional().or(z.literal("")),
+  B2_ACCESS_KEY_ID: z.string().optional().or(z.literal("")),
+  B2_SECRET_ACCESS_KEY: z.string().optional().or(z.literal("")),
+  B2_BUCKET: z.string().optional().or(z.literal("")),
 });
 
 function parseServerEnv() {

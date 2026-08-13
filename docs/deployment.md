@@ -24,6 +24,12 @@ APP_URL=https://your-app.vercel.app
 MOCK_WORKFLOWS=false
 GOOGLE_DRIVE_INTEGRATION_ENABLED=false
 LOG_LEVEL=info
+INGEST_PROXY_TOKEN=
+B2_S3_ENDPOINT=
+B2_REGION=
+B2_ACCESS_KEY_ID=
+B2_SECRET_ACCESS_KEY=
+B2_BUCKET=battlestart-factory-temp
 ```
 
 4. Deploy
