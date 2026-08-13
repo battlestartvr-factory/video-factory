@@ -1,6 +1,6 @@
 import { Sidebar, MobileNav } from "@/components/layout/sidebar";
 import { DemoBanner } from "@/components/ui/states";
-import { serverEnv } from "@/lib/env/env.server";
+import { isMockWorkflowsEnabled } from "@/lib/env/mock-workflows";
 
 export default function DashboardLayout({
   children,
@@ -9,7 +9,7 @@ export default function DashboardLayout({
 }) {
   return (
     <div className="gradient-bg flex min-h-dvh flex-col">
-      {serverEnv.MOCK_WORKFLOWS && <DemoBanner />}
+      {isMockWorkflowsEnabled() && <DemoBanner />}
       <div className="flex min-h-0 flex-1">
         <Sidebar />
         <div className="flex min-h-dvh flex-1 flex-col pb-20 md:pb-0">

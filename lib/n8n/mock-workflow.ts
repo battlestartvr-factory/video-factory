@@ -1,6 +1,6 @@
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { createLogger } from "@/lib/logging/logger";
-import { serverEnv } from "@/lib/env/env.server";
+import { isMockWorkflowsEnabled } from "@/lib/env/mock-workflows";
 import type { JobStatus } from "@/lib/types/database";
 
 const MOCK_STAGES = [
@@ -12,7 +12,7 @@ const MOCK_STAGES = [
 ];
 
 export async function runMockWorkflow(jobId: string): Promise<void> {
-  if (!serverEnv.MOCK_WORKFLOWS) return;
+  if (!isMockWorkflowsEnabled()) return;
 
   const logger = createLogger({ jobId, event: "mock.workflow" });
   const supabase = createSupabaseServiceClient();

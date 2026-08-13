@@ -4,6 +4,7 @@ import { checkRateLimit } from "@/lib/api/rate-limit";
 import { n8nJobUpdateSchema } from "@/lib/validation/schemas";
 import { verifyHmacSignature, verifyTimestamp } from "@/lib/n8n/hmac";
 import { assertTransition } from "@/lib/jobs/status-transitions";
+import { isMockWorkflowsEnabled } from "@/lib/env/mock-workflows";
 import { serverEnv } from "@/lib/env/env.server";
 import { generateRequestId, createLogger } from "@/lib/logging/logger";
 import type { JobStatus } from "@/lib/types/database";
@@ -21,7 +22,7 @@ export async function POST(request: Request) {
   const signature = request.headers.get("X-Webhook-Signature");
   const timestamp = request.headers.get("X-Webhook-Timestamp");
 
-  if (!serverEnv.MOCK_WORKFLOWS) {
+  if (!isMockWorkflowsEnabled()) {
     if (!serverEnv.N8N_WEBHOOK_SECRET) {
       return apiError("NOT_CONFIGURED", "Webhook secret not configured", 503, requestId);
     }

@@ -1,4 +1,5 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { getIntegrationsStatus } from "@/lib/integrations/status";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { t } from "@/lib/i18n/dictionary";
 
@@ -18,22 +19,6 @@ async function getProfile() {
   }
 }
 
-async function getIntegrationStatus() {
-  const res = await fetch(`${process.env.APP_URL ?? "http://localhost:3000"}/api/integrations/status`, {
-    cache: "no-store",
-  }).catch(() => null);
-  if (!res?.ok) {
-    return {
-      supabase: false,
-      n8n: false,
-      googleDrive: false,
-      mockWorkflows: true,
-    };
-  }
-  const json = await res.json();
-  return json.ok ? json.data : {};
-}
-
 function StatusDot({ connected }: { connected: boolean }) {
   return (
     <span
@@ -45,7 +30,14 @@ function StatusDot({ connected }: { connected: boolean }) {
 
 export default async function SettingsPage() {
   const profile = await getProfile();
-  const integrations = await getIntegrationStatus();
+  const integrations = await getIntegrationsStatus();
+
+  const rows = [
+    { key: "supabase" as const, label: "Supabase" },
+    { key: "n8n" as const, label: "n8n Cloud" },
+    { key: "googleDrive" as const, label: "Google Drive" },
+    { key: "mockWorkflows" as const, label: "Mock workflows" },
+  ];
 
   return (
     <div className="mx-auto max-w-2xl space-y-6">
@@ -67,19 +59,18 @@ export default async function SettingsPage() {
           <CardTitle>{t("settings.integrations")}</CardTitle>
         </CardHeader>
         <CardContent className="space-y-3 text-sm">
-          {[
-            { key: "supabase", label: "Supabase" },
-            { key: "n8n", label: "n8n Cloud" },
-            { key: "googleDrive", label: "Google Drive" },
-            { key: "mockWorkflows", label: "Mock workflows" },
-          ].map(({ key, label }) => {
-            const connected = integrations[key as keyof typeof integrations];
+          {rows.map(({ key, label }) => {
+            const status = integrations[key];
+            const connected = status.reachable;
             return (
-              <div key={key} className="flex items-center justify-between">
+              <div key={key} className="flex items-center justify-between gap-4">
                 <span className="text-zinc-300">{label}</span>
-                <span className="flex items-center gap-2 text-zinc-500">
-                  <StatusDot connected={Boolean(connected)} />
-                  {connected ? t("settings.connected") : t("settings.notConfigured")}
+                <span className="flex flex-col items-end gap-0.5 text-right">
+                  <span className="flex items-center gap-2 text-zinc-500">
+                    <StatusDot connected={connected} />
+                    {connected ? t("settings.connected") : t("settings.notConfigured")}
+                  </span>
+                  <span className="text-xs text-zinc-600">{status.message}</span>
                 </span>
               </div>
             );

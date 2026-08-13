@@ -5,6 +5,7 @@ export const FACTORY_TIMEOUT_MS = 12_000;
 /** n8n webhook relative paths (appended to N8N_FACTORY_BASE_URL). */
 export const FACTORY_JOBS_WEBHOOK_PATH = "/factory/jobs";
 export const FACTORY_JOB_ACTION_WEBHOOK_PATH = "/factory/jobs/action";
+export const FACTORY_INFRASTRUCTURE_CHECK_PATH = "/factory/infrastructure-check";
 
 /**
  * Static shared secret sent as x-factory-signature (n8n Header Auth exact match).
@@ -29,19 +30,30 @@ export function verifyFactoryWebhookAuthHeader(
   }
 }
 
+export function getFactoryWebhookCredentials(env: {
+  N8N_FACTORY_BASE_URL?: string;
+  FACTORY_WEBHOOK_SECRET?: string;
+}) {
+  const baseUrl = env.N8N_FACTORY_BASE_URL?.trim();
+  const secret = env.FACTORY_WEBHOOK_SECRET?.trim();
+
+  if (!baseUrl || !secret) {
+    return null;
+  }
+
+  return { baseUrl: baseUrl.replace(/\/+$/, ""), secret };
+}
+
 export function getFactoryWebhookConfig(env: {
   N8N_FACTORY_BASE_URL?: string;
   FACTORY_WEBHOOK_SECRET?: string;
   MOCK_WORKFLOWS?: boolean;
 }) {
-  const baseUrl = env.N8N_FACTORY_BASE_URL?.trim();
-  const secret = env.FACTORY_WEBHOOK_SECRET?.trim();
-
-  if (env.MOCK_WORKFLOWS || !baseUrl || !secret) {
+  if (env.MOCK_WORKFLOWS) {
     return null;
   }
 
-  return { baseUrl: baseUrl.replace(/\/+$/, ""), secret };
+  return getFactoryWebhookCredentials(env);
 }
 
 /**

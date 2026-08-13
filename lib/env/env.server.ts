@@ -10,10 +10,6 @@ const serverEnvSchema = z.object({
   N8N_FACTORY_BASE_URL: z.string().url().optional().or(z.literal("")),
   FACTORY_WEBHOOK_SECRET: z.string().optional().or(z.literal("")),
   APP_URL: z.string().url().default("http://localhost:3000"),
-  MOCK_WORKFLOWS: z
-    .enum(["true", "false"])
-    .optional()
-    .transform((v) => v === "true"),
   GOOGLE_DRIVE_INTEGRATION_ENABLED: z
     .enum(["true", "false"])
     .optional()

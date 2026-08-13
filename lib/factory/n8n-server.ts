@@ -1,6 +1,7 @@
 import "server-only";
 
 import { serverEnv } from "@/lib/env/env.server";
+import { isMockWorkflowsEnabled } from "@/lib/env/mock-workflows";
 import { createLogger } from "@/lib/logging/logger";
 import {
   FACTORY_JOB_ACTION_WEBHOOK_PATH,
@@ -16,7 +17,11 @@ import type {
 } from "@/lib/factory/contracts";
 
 function getFactoryConfig() {
-  return getFactoryWebhookConfig(serverEnv);
+  return getFactoryWebhookConfig({
+    N8N_FACTORY_BASE_URL: serverEnv.N8N_FACTORY_BASE_URL,
+    FACTORY_WEBHOOK_SECRET: serverEnv.FACTORY_WEBHOOK_SECRET,
+    MOCK_WORKFLOWS: isMockWorkflowsEnabled(),
+  });
 }
 
 async function postToFactoryWebhook(

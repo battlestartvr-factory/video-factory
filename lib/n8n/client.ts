@@ -1,4 +1,5 @@
 import { serverEnv } from "@/lib/env/env.server";
+import { isMockWorkflowsEnabled } from "@/lib/env/mock-workflows";
 import { buildWebhookHeaders } from "@/lib/n8n/hmac";
 import { createLogger } from "@/lib/logging/logger";
 import type { JobType, JobMode } from "@/lib/types/database";
@@ -27,7 +28,7 @@ export async function dispatchJobToN8n(
 ): Promise<{ dispatched: boolean; mock: boolean }> {
   const logger = createLogger({ jobId: payload.jobId, event: "job.created" });
 
-  if (serverEnv.MOCK_WORKFLOWS || !serverEnv.N8N_WEBHOOK_URL || !serverEnv.N8N_WEBHOOK_SECRET) {
+  if (isMockWorkflowsEnabled() || !serverEnv.N8N_WEBHOOK_URL || !serverEnv.N8N_WEBHOOK_SECRET) {
     logger.info("Using mock workflow dispatch");
     return { dispatched: true, mock: true };
   }
