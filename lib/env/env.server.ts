@@ -5,6 +5,7 @@ const serverEnvSchema = z.object({
   NEXT_PUBLIC_SUPABASE_URL: z.string().url().optional().or(z.literal("")),
   NEXT_PUBLIC_SUPABASE_ANON_KEY: z.string().optional().or(z.literal("")),
   SUPABASE_SERVICE_ROLE_KEY: z.string().optional().or(z.literal("")),
+  SUPABASE_SECRET_KEY: z.string().optional().or(z.literal("")),
   N8N_WEBHOOK_URL: z.string().url().optional().or(z.literal("")),
   N8N_WEBHOOK_SECRET: z.string().optional().or(z.literal("")),
   N8N_FACTORY_BASE_URL: z.string().url().optional().or(z.literal("")),

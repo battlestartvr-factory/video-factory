@@ -3,6 +3,10 @@ import "server-only";
 import { isMockWorkflowsEnabled } from "@/lib/env/mock-workflows";
 import { serverEnv } from "@/lib/env/env.server";
 import { getFactoryWebhookCredentials } from "@/lib/factory/webhook-auth";
+import {
+  resolveSupabaseServiceRoleKey,
+  resolveSupabaseUrl,
+} from "@/lib/supabase/service-config";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { runWf00InfrastructureCheck } from "@/lib/integrations/wf00-check";
 
@@ -21,9 +25,7 @@ export interface IntegrationsStatus {
 }
 
 function hasSupabaseEnv(): boolean {
-  return Boolean(
-    serverEnv.NEXT_PUBLIC_SUPABASE_URL && serverEnv.SUPABASE_SERVICE_ROLE_KEY,
-  );
+  return Boolean(resolveSupabaseUrl() && resolveSupabaseServiceRoleKey());
 }
 
 async function checkSupabaseStatus(checkedAt: string): Promise<IntegrationStatus> {

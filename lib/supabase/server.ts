@@ -2,7 +2,11 @@ import { createServerClient } from "@supabase/ssr";
 import { createClient } from "@supabase/supabase-js";
 import { cookies } from "next/headers";
 import { clientEnv } from "@/lib/env/env.client";
-import { serverEnv } from "@/lib/env/env.server";
+import {
+  assertServiceRoleKeyUsable,
+  resolveSupabaseServiceRoleKey,
+  resolveSupabaseUrl,
+} from "@/lib/supabase/service-config";
 
 export async function createSupabaseServerClient() {
   const cookieStore = await cookies();
@@ -32,12 +36,14 @@ export async function createSupabaseServerClient() {
 }
 
 export function createSupabaseServiceClient() {
-  const url = serverEnv.NEXT_PUBLIC_SUPABASE_URL;
-  const key = serverEnv.SUPABASE_SERVICE_ROLE_KEY;
+  const url = resolveSupabaseUrl();
+  const key = resolveSupabaseServiceRoleKey();
 
   if (!url || !key) {
     throw new Error("Supabase service role is not configured");
   }
+
+  assertServiceRoleKeyUsable(key);
 
   return createClient(url, key, {
     auth: { persistSession: false, autoRefreshToken: false },

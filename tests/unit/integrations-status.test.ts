@@ -28,6 +28,8 @@ vi.mock("@/lib/integrations/wf00-check", () => ({
 
 describe("getIntegrationsStatus", () => {
   beforeEach(() => {
+    vi.stubEnv("NEXT_PUBLIC_SUPABASE_URL", "https://example.supabase.co");
+    vi.stubEnv("SUPABASE_SERVICE_ROLE_KEY", "service-role-key");
     runWf00InfrastructureCheck.mockReset();
     runWf00InfrastructureCheck.mockResolvedValue({
       ok: true,
