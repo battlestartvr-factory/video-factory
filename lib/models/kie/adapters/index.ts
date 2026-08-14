@@ -8,7 +8,7 @@ import {
   toOpenAiMessages,
   toResponsesInput,
 } from "./base";
-import { kieClaudeSonnetAdapter } from "./claude-sonnet";
+import { kieAnthropicProvider } from "./kie-anthropic";
 
 export class KieOpenAIChatAdapter implements KieAdapter {
   async run(ctx: KieAdapterContext, input: AgentRequest) {
@@ -176,7 +176,7 @@ export function getKieLlmAdapter(kind: KieAdapterContext["model"]["adapter"]): K
     case "responses":
       return kieResponsesAdapter;
     case "claude_sonnet":
-      return kieClaudeSonnetAdapter;
+      return kieAnthropicProvider;
     default:
       return kieOpenAIChatAdapter;
   }

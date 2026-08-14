@@ -3,17 +3,14 @@ import { AGENT_ERROR_CODES } from "@/lib/agent/config";
 import { runAgentToolLoop } from "@/lib/agent/loop";
 import type { AgentProvider, AgentProviderResponse, AgentRequest, ToolContext } from "@/lib/agent/types";
 import {
-  assertClaudeMessagesNonEmpty,
-  buildClaudeSonnetMessages,
-  buildClaudeSonnetRequestBody,
-  buildClaudeSonnetTools,
-  kieClaudeSonnetAdapter,
-  parseClaudeSonnetResponse,
-  resolveClaudeThinkingFlag,
-  toKieClaudeTool,
-} from "@/lib/models/kie/adapters/claude-sonnet";
+  assertAnthropicMessagesNonEmpty,
+  buildAnthropicMessages,
+  buildAnthropicRequestParams,
+  buildKieAnthropicBaseUrl,
+  resolveAnthropicThinkingMode,
+  toAnthropicTool,
+} from "@/lib/models/kie/adapters/kie-anthropic";
 import { resolveToolsForTurn } from "@/lib/agent/tools";
-import { joinKieUrl } from "@/lib/models/kie/adapters/base";
 import { KieProviderError } from "@/lib/models/kie/errors";
 import { getKieModelById } from "@/lib/models/kie/registry";
 import { resolveReasoning } from "@/lib/models/kie/reasoning";
@@ -21,12 +18,46 @@ import { resolveReasoning } from "@/lib/models/kie/reasoning";
 const KIE_ROOT = "https://api.kie.ai";
 const model = getKieModelById("claude-sonnet-5")!;
 
-describe("KieClaudeSonnetAdapter request contract", () => {
-  it("resolves claude-sonnet-5 to canonical KIE URL", () => {
-    expect(joinKieUrl(KIE_ROOT, model.endpoint)).toBe(`${KIE_ROOT}/claude/v1/messages`);
+describe("KieAnthropicProvider request contract", () => {
+  it("resolves claude-sonnet-5 to KIE Anthropic-compatible base URL", () => {
+    expect(buildKieAnthropicBaseUrl(KIE_ROOT)).toBe(`${KIE_ROOT}/claude`);
   });
 
-  it('builds plain "Say hello" payload matching KIE playground', () => {
+  it('production-equivalent plain chat: "ты умеешь монтировать видео?"', () => {
+    const userText = "ты умеешь монтировать видео?";
+    const input: AgentRequest = {
+      model: "claude-sonnet-5",
+      system: "Universal Agent base instructions with runtime policy and preset layers.",
+      messages: [{ role: "user", content: userText }],
+      tools: [],
+    };
+
+    const { params, messages, systemChars, currentUserChars, lastMessageChars } =
+      buildAnthropicRequestParams(input, {
+        baseUrl: KIE_ROOT,
+        apiKey: "test",
+        model,
+      });
+
+    expect(messages.length).toBe(1);
+    expect(messages[0]?.role).toBe("user");
+    expect(messages[0]?.content).toBe(userText);
+    expect(String(messages[0]?.content)).not.toContain("<agent_instructions>");
+    expect(String(messages[0]?.content)).not.toContain("<user_request>");
+
+    expect(params.system).toBe(input.system);
+    expect(params.model).toBe("claude-sonnet-5");
+    expect(params.max_tokens).toBe(4096);
+    expect(params.stream).toBe(false);
+    expect(params.thinkingFlag).toBeUndefined();
+    expect(params.tools).toBeUndefined();
+
+    expect(currentUserChars).toBe(userText.length);
+    expect(lastMessageChars).toBe(userText.length);
+    expect(systemChars).toBeGreaterThan(userText.length);
+  });
+
+  it('builds plain "Say hello" payload with system separate from user message', () => {
     const input: AgentRequest = {
       model: "claude-sonnet-5",
       system: "Base agent instructions.",
@@ -34,28 +65,17 @@ describe("KieClaudeSonnetAdapter request contract", () => {
       tools: [],
     };
 
-    const { body, messages } = buildClaudeSonnetRequestBody(input, {
+    const { params, messages } = buildAnthropicRequestParams(input, {
       baseUrl: KIE_ROOT,
       apiKey: "test",
       model,
     });
 
-    expect(body.model).toBe("claude-sonnet-5");
-    expect(body.stream).toBe(false);
-    expect(body.max_tokens).toBe(4096);
-    expect(body.system).toBeUndefined();
-    expect(body.thinkingFlag).toBeUndefined();
-    expect(body.tools).toBeUndefined();
-    expect(messages.length).toBe(1);
-    expect(messages[0]?.role).toBe("user");
-    expect(typeof messages[0]?.content).toBe("string");
-    expect(messages[0]?.content).toContain("<agent_instructions>");
-    expect(messages[0]?.content).toContain("Base agent instructions.");
-    expect(messages[0]?.content).toContain("<user_request>");
-    expect(messages[0]?.content).toContain("Say hello");
+    expect(params.system).toBe("Base agent instructions.");
+    expect(messages).toEqual([{ role: "user", content: "Say hello" }]);
   });
 
-  it("never loses the current user message (production regression)", () => {
+  it("never modifies the current user message (Russian plain chat)", () => {
     const input: AgentRequest = {
       model: "claude-sonnet-5",
       system: "Universal Agent base instructions.",
@@ -63,16 +83,13 @@ describe("KieClaudeSonnetAdapter request contract", () => {
       tools: [],
     };
 
-    const messages = buildClaudeSonnetMessages(input);
+    const messages = buildAnthropicMessages(input);
 
-    expect(messages.length).toBeGreaterThanOrEqual(1);
-    expect(messages.at(-1)?.role).toBe("user");
-    const lastContent = messages.at(-1)?.content;
-    expect(typeof lastContent).toBe("string");
-    expect(lastContent).toContain("Привет");
+    expect(messages.length).toBe(1);
+    expect(messages[0]).toEqual({ role: "user", content: "Привет" });
   });
 
-  it("includes prior history plus enveloped current user turn", () => {
+  it("includes prior history plus unmodified current user turn", () => {
     const input: AgentRequest = {
       model: "claude-sonnet-5",
       system: "Instructions",
@@ -84,22 +101,40 @@ describe("KieClaudeSonnetAdapter request contract", () => {
       tools: [],
     };
 
-    const messages = buildClaudeSonnetMessages(input);
+    const messages = buildAnthropicMessages(input);
 
-    expect(messages).toHaveLength(3);
-    expect(messages[0]?.content).toContain("First question");
-    expect(messages[0]?.content).toContain("<agent_instructions>");
-    expect(messages[1]).toEqual({ role: "assistant", content: "First answer" });
-    expect(messages[2]).toEqual({ role: "user", content: "Follow up" });
+    expect(messages).toEqual([
+      { role: "user", content: "First question" },
+      { role: "assistant", content: "First answer" },
+      { role: "user", content: "Follow up" },
+    ]);
+  });
+
+  it("keeps system instructions out of messages", () => {
+    const input: AgentRequest = {
+      model: "claude-sonnet-5",
+      system: "Runtime policy and global instructions.",
+      messages: [{ role: "user", content: "Hello" }],
+      tools: [],
+    };
+
+    const { params, messages } = buildAnthropicRequestParams(input, {
+      baseUrl: KIE_ROOT,
+      apiKey: "test",
+      model,
+    });
+
+    expect(params.system).toContain("Runtime policy");
+    expect(JSON.stringify(messages)).not.toContain("Runtime policy");
   });
 
   it("rejects empty messages locally without calling provider", () => {
-    expect(() =>
-      assertClaudeMessagesNonEmpty([]),
-    ).toThrowError(expect.objectContaining({ code: AGENT_ERROR_CODES.CLAUDE_EMPTY_MESSAGES }));
+    expect(() => assertAnthropicMessagesNonEmpty([])).toThrowError(
+      expect.objectContaining({ code: AGENT_ERROR_CODES.CLAUDE_EMPTY_MESSAGES }),
+    );
 
     expect(() =>
-      buildClaudeSonnetRequestBody(
+      buildAnthropicRequestParams(
         {
           model: "claude-sonnet-5",
           system: "Instructions",
@@ -112,7 +147,7 @@ describe("KieClaudeSonnetAdapter request contract", () => {
   });
 
   it("Standard thinking omits thinkingFlag", () => {
-    const { body } = buildClaudeSonnetRequestBody(
+    const { params } = buildAnthropicRequestParams(
       {
         model: "claude-sonnet-5",
         system: "",
@@ -121,12 +156,19 @@ describe("KieClaudeSonnetAdapter request contract", () => {
       },
       { baseUrl: KIE_ROOT, apiKey: "test", model, reasoningLevel: "standard" },
     );
-    expect(body.thinkingFlag).toBeUndefined();
-    expect(resolveClaudeThinkingFlag({ baseUrl: KIE_ROOT, apiKey: "test", model, reasoningLevel: "standard" }).thinkingMode).toBe("standard");
+    expect(params.thinkingFlag).toBeUndefined();
+    expect(
+      resolveAnthropicThinkingMode({
+        baseUrl: KIE_ROOT,
+        apiKey: "test",
+        model,
+        reasoningLevel: "standard",
+      }).thinkingMode,
+    ).toBe("standard");
   });
 
   it("Thinking mode sends thinkingFlag: true", () => {
-    const { body } = buildClaudeSonnetRequestBody(
+    const { params } = buildAnthropicRequestParams(
       {
         model: "claude-sonnet-5",
         system: "",
@@ -135,7 +177,7 @@ describe("KieClaudeSonnetAdapter request contract", () => {
       },
       { baseUrl: KIE_ROOT, apiKey: "test", model, reasoningLevel: "thinking" },
     );
-    expect(body.thinkingFlag).toBe(true);
+    expect(params.thinkingFlag).toBe(true);
   });
 
   it("maps resolveReasoning Standard without thinkingFlag", () => {
@@ -146,8 +188,8 @@ describe("KieClaudeSonnetAdapter request contract", () => {
     expect(resolveReasoning(model, "thinking").providerParam).toEqual({ thinkingFlag: true });
   });
 
-  it("builds KIE tool schema with input_schema via toKieClaudeTool", () => {
-    const tool = toKieClaudeTool({
+  it("builds Anthropic tool schema via toAnthropicTool", () => {
+    const tool = toAnthropicTool({
       name: "search_knowledge",
       description: "Search knowledge base",
       parameters: { type: "object", properties: { query: { type: "string" } }, required: ["query"] },
@@ -166,7 +208,7 @@ describe("KieClaudeSonnetAdapter request contract", () => {
 
   it("rejects OpenAI function wrapper for Claude", () => {
     expect(() =>
-      toKieClaudeTool({
+      toAnthropicTool({
         name: "search_knowledge",
         description: "Search",
         parameters: { type: "object", properties: {} },
@@ -177,24 +219,8 @@ describe("KieClaudeSonnetAdapter request contract", () => {
     );
   });
 
-  it("builds KIE tool schema with input_schema", () => {
-    const tools = buildClaudeSonnetTools([
-      {
-        name: "search_knowledge",
-        description: "Search knowledge base",
-        parameters: { type: "object", properties: { query: { type: "string" } } },
-      },
-    ]);
-
-    expect(tools[0]).toEqual({
-      name: "search_knowledge",
-      description: "Search knowledge base",
-      input_schema: { type: "object", properties: { query: { type: "string" } }, required: [] },
-    });
-  });
-
-  it("includes tools in request body when provided", () => {
-    const { body } = buildClaudeSonnetRequestBody(
+  it("includes tools in request params when provided", () => {
+    const { params } = buildAnthropicRequestParams(
       {
         model: "claude-sonnet-5",
         system: "test",
@@ -210,56 +236,59 @@ describe("KieClaudeSonnetAdapter request contract", () => {
       { baseUrl: KIE_ROOT, apiKey: "test", model },
     );
 
-    expect(Array.isArray(body.tools)).toBe(true);
-    expect((body.tools as Array<{ name: string }>)[0]?.name).toBe("search_knowledge");
-    expect(body.tools).not.toEqual(
-      expect.arrayContaining([expect.objectContaining({ type: "function" })]),
-    );
+    expect(Array.isArray(params.tools)).toBe(true);
+    const firstTool = params.tools?.[0] as { name: string; input_schema: unknown } | undefined;
+    expect(firstTool?.name).toBe("search_knowledge");
+    expect(firstTool?.input_schema).toBeDefined();
   });
 });
 
-describe("KieClaudeSonnetAdapter response parsing", () => {
-  it("parses text content from stream:false JSON", () => {
-    const parsed = parseClaudeSonnetResponse({
+describe("KieAnthropicProvider SDK integration", () => {
+  it("uses Anthropic SDK against KIE Claude proxy for plain hello", async () => {
+    const createMock = vi.fn().mockResolvedValue({
+      id: "msg_1",
+      type: "message",
+      role: "assistant",
       content: [{ type: "text", text: "Hello!" }],
+      model: "claude-sonnet-5",
       stop_reason: "end_turn",
-      usage: { input_tokens: 10, output_tokens: 5 },
+      stop_sequence: null,
+      usage: {
+        input_tokens: 10,
+        output_tokens: 5,
+        cache_creation: null,
+        cache_creation_input_tokens: 0,
+        cache_read_input_tokens: 0,
+        inference_geo: null,
+        server_tool_use: null,
+        service_tier: "standard",
+        output_tokens_details: null,
+      },
     });
 
-    expect(parsed.content).toBe("Hello!");
-    expect(parsed.toolCalls).toEqual([]);
-    expect(parsed.finishReason).toBe("stop");
-    expect(parsed.usage.total_tokens).toBe(15);
-  });
+    class MockAnthropic {
+      messages = { create: createMock };
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+      constructor(_opts: unknown) {}
+    }
 
-  it("parses tool_use blocks", () => {
-    const parsed = parseClaudeSonnetResponse({
-      content: [
-        { type: "tool_use", id: "toolu_1", name: "search_knowledge", input: { query: "test" } },
-      ],
-      stop_reason: "tool_use",
-    });
+    vi.doMock("@anthropic-ai/sdk", () => ({
+      default: MockAnthropic,
+      APIError: class APIError extends Error {
+        status?: number;
+        error?: unknown;
+        constructor(status: number, message: string, error?: unknown) {
+          super(message);
+          this.status = status;
+          this.error = error;
+        }
+      },
+    }));
 
-    expect(parsed.toolCalls).toEqual([
-      { id: "toolu_1", name: "search_knowledge", arguments: { query: "test" } },
-    ]);
-    expect(parsed.finishReason).toBe("tool_calls");
-  });
-});
+    vi.resetModules();
+    const { kieAnthropicProvider: provider } = await import("@/lib/models/kie/adapters/kie-anthropic");
 
-describe("KieClaudeSonnetAdapter HTTP", () => {
-  it("sends native fetch to KIE Claude endpoint for plain hello", async () => {
-    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      new Response(
-        JSON.stringify({
-          content: [{ type: "text", text: "Hello!" }],
-          stop_reason: "end_turn",
-        }),
-        { status: 200, headers: { "content-type": "application/json" } },
-      ),
-    );
-
-    const result = await kieClaudeSonnetAdapter.run(
+    const result = await provider.run(
       { baseUrl: KIE_ROOT, apiKey: "test-key", model },
       {
         model: "claude-sonnet-5",
@@ -270,26 +299,24 @@ describe("KieClaudeSonnetAdapter HTTP", () => {
     );
 
     expect(result.content).toBe("Hello!");
-    expect(fetchSpy).toHaveBeenCalledOnce();
+    expect(createMock).toHaveBeenCalledOnce();
 
-    const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
-    expect(url).toBe(`${KIE_ROOT}/claude/v1/messages`);
-    expect((init.headers as Record<string, string>).Authorization).toBe("Bearer test-key");
-
-    const body = JSON.parse(init.body as string) as {
+    const callArgs = createMock.mock.calls[0]?.[0] as {
       model: string;
+      system: string;
       messages: Array<{ role: string; content: string }>;
       tools?: unknown;
       thinkingFlag?: unknown;
     };
 
-    expect(body.model).toBe("claude-sonnet-5");
-    expect(body.messages.length).toBeGreaterThanOrEqual(1);
-    expect(body.messages.at(-1)?.role).toBe("user");
-    expect(body.messages.at(-1)?.content).toContain("Say hello");
-    expect(body.tools).toBeUndefined();
+    expect(callArgs.model).toBe("claude-sonnet-5");
+    expect(callArgs.system).toBe("Be helpful.");
+    expect(callArgs.messages).toEqual([{ role: "user", content: "Say hello" }]);
+    expect(callArgs.tools).toBeUndefined();
+    expect(callArgs.thinkingFlag).toBeUndefined();
 
-    fetchSpy.mockRestore();
+    vi.doUnmock("@anthropic-ai/sdk");
+    vi.resetModules();
   });
 });
 
@@ -305,14 +332,14 @@ describe("Claude context-aware tools regression", () => {
       tools: resolved.tools,
     };
 
-    const { body, messages } = buildClaudeSonnetRequestBody(input, {
+    const { params, messages } = buildAnthropicRequestParams(input, {
       baseUrl: KIE_ROOT,
       apiKey: "test",
       model,
     });
 
     expect(messages.length).toBe(1);
-    expect(body.tools).toBeUndefined();
+    expect(params.tools).toBeUndefined();
   });
 
   it("knowledge request passes only knowledge tools to Claude", () => {
@@ -323,7 +350,7 @@ describe("Claude context-aware tools regression", () => {
     expect(resolved.tools.length).toBeGreaterThan(0);
     expect(resolved.tools.length).toBeLessThanOrEqual(4);
 
-    const { body } = buildClaudeSonnetRequestBody(
+    const { params } = buildAnthropicRequestParams(
       {
         model: "claude-sonnet-5",
         system: "test",
@@ -333,7 +360,7 @@ describe("Claude context-aware tools regression", () => {
       { baseUrl: KIE_ROOT, apiKey: "test", model },
     );
 
-    const tools = body.tools as Array<{ name: string; input_schema: unknown }>;
+    const tools = (params.tools ?? []) as Array<{ name: string; input_schema: unknown }>;
     expect(tools.every((tool) => tool.input_schema && typeof tool.input_schema === "object")).toBe(true);
     expect(tools.map((tool) => tool.name)).toEqual(resolved.toolNames);
   });
@@ -351,7 +378,7 @@ describe("Claude Sonnet tool roundtrip", () => {
     attachments: [],
   };
 
-  it("executes search_knowledge then returns final answer via adapter-shaped provider", async () => {
+  it("executes search_knowledge then returns final answer via provider-shaped loop", async () => {
     let call = 0;
     const provider: AgentProvider = {
       async run() {
@@ -390,8 +417,8 @@ describe("Claude Sonnet tool roundtrip", () => {
     expect(result.stopReason).toBe("final");
   });
 
-  it("adapter request includes tool_result blocks after tool execution", () => {
-    const messages = buildClaudeSonnetMessages({
+  it("Anthropic messages include tool_result blocks after tool execution", () => {
+    const messages = buildAnthropicMessages({
       model: "claude-sonnet-5",
       system: "test",
       messages: [

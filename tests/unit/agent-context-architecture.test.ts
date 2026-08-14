@@ -12,7 +12,7 @@ import { DEFAULT_GLOBAL_AGENT_INSTRUCTIONS } from "@/lib/agent/default-agent-ins
 import { CONTEXT_BUDGET, AGENT_ERROR_CODES } from "@/lib/agent/config";
 import { toOpenAiMessages } from "@/lib/models/kie/adapters/base";
 import { toResponsesInput } from "@/lib/models/kie/adapters/base";
-import { buildClaudeSonnetMessages } from "@/lib/models/kie/adapters/claude-sonnet";
+import { buildAnthropicMessages } from "@/lib/models/kie/adapters/kie-anthropic";
 import type { AgentConfig } from "@/lib/agent/agent-config-service";
 import type { Chat, ChatMessage, MemoryItem } from "@/lib/types/workspace";
 
@@ -268,8 +268,8 @@ describe("provider payload regression — current user message", () => {
     expect(serialized).toContain("Привет");
   });
 
-  it("Claude payload contains Привет", () => {
-    const messages = buildClaudeSonnetMessages({
+  it("Claude payload contains Привет as plain user message", () => {
+    const messages = buildAnthropicMessages({
       model: "claude-sonnet-5",
       system,
       messages: [{ role: "user", content: "Привет" }],
@@ -277,7 +277,7 @@ describe("provider payload regression — current user message", () => {
     });
     const last = messages.at(-1);
     expect(last?.role).toBe("user");
-    expect(String(last?.content)).toContain("Привет");
+    expect(last?.content).toBe("Привет");
   });
 });
 
