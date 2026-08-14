@@ -1,9 +1,10 @@
 import { getSessionUser } from "@/lib/auth/session";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { apiSuccess, apiError, readJsonBody } from "@/lib/api/response";
-import { generateRequestId } from "@/lib/logging/logger";
+import { generateRequestId, createLogger } from "@/lib/logging/logger";
 import { sendMessageSchema } from "@/lib/validation/workspace-schemas";
-import type { ChatMessage, MessageMetadata } from "@/lib/types/workspace";
+import { attachAssistantToRun, runUniversalAgent } from "@/lib/agent";
+import type { Chat, ChatMessage } from "@/lib/types/workspace";
 
 type Params = { params: Promise<{ chatId: string }> };
 
@@ -44,19 +45,9 @@ function generateAutoTitle(content: string): string {
   return cleaned.slice(0, 47) + "…";
 }
 
-function detectAction(content: string): Record<string, unknown> | null {
-  const lower = content.toLowerCase();
-  if (lower.includes("сгенерируй видео") || lower.includes("generate video")) {
-    return { action: "generate_video", prompt: content };
-  }
-  if (lower.includes("сгенерируй изображение") || lower.includes("generate image")) {
-    return { action: "generate_image", prompt: content };
-  }
-  return null;
-}
-
 export async function POST(request: Request, { params }: Params) {
   const requestId = generateRequestId();
+  const logger = createLogger({ request_id: requestId, event: "chat.message" });
   const user = await getSessionUser();
   if (!user) return apiError("UNAUTHORIZED", "Требуется авторизация", 401, requestId);
 
@@ -70,21 +61,29 @@ export async function POST(request: Request, { params }: Params) {
   const { data: chat } = await service.from("chats").select("*").eq("id", chatId).eq("user_id", user.id).single();
   if (!chat) return apiError("NOT_FOUND", "Чат не найден", 404, requestId);
 
+  const attachmentIds = parsed.data.attachmentIds ?? [];
   const { data: userMsg, error: userError } = await service
     .from("chat_messages")
     .insert({
       chat_id: chatId,
       role: "user",
       content: parsed.data.content,
-      metadata: parsed.data.attachmentIds?.length
-        ? { attachments: parsed.data.attachmentIds }
-        : {},
+      metadata: attachmentIds.length ? { attachments: attachmentIds } : {},
     })
     .select()
     .single();
 
   if (userError || !userMsg) {
     return apiError("CREATE_FAILED", "Не удалось отправить сообщение", 500, requestId);
+  }
+
+  if (attachmentIds.length) {
+    await service
+      .from("chat_attachments")
+      .update({ message_id: userMsg.id })
+      .in("id", attachmentIds)
+      .eq("user_id", user.id)
+      .eq("chat_id", chatId);
   }
 
   if (chat.title === "Новый чат") {
@@ -94,46 +93,80 @@ export async function POST(request: Request, { params }: Params) {
       .eq("id", chatId);
   }
 
-  const detectedAction = detectAction(parsed.data.content);
-  let assistantMetadata: MessageMetadata = { type: "text" };
+  const typedChat = chat as Chat;
+  const userMessage = userMsg as ChatMessage;
 
-  if (detectedAction) {
-    assistantMetadata = {
-      type: "task",
-      task: {
-        action: detectedAction.action as string,
-        prompt: parsed.data.content,
-        model: parsed.data.modelId ?? chat.model_id ?? undefined,
-        status: "queued",
-        progress: 0,
-        settings: {},
+  let agentResult;
+  try {
+    agentResult = await runUniversalAgent({
+      requestId,
+      userId: user.id,
+      chat: typedChat,
+      userMessage,
+      modelId: parsed.data.modelId ?? typedChat.model_id,
+      presetId: parsed.data.presetId ?? typedChat.preset_id,
+      attachmentIds,
+    });
+  } catch (error) {
+    logger.error("universal_agent_failed", {
+      chat_id: chatId,
+      error_code: "INTERNAL_ERROR",
+      message: error instanceof Error ? error.message : "unknown",
+    });
+    agentResult = {
+      content: "Не удалось обработать сообщение агентом.",
+      metadata: {
+        type: "error" as const,
+        error: { code: "INTERNAL_ERROR", message: "Не удалось обработать сообщение", retryable: true },
       },
+      agentRunId: "",
+      events: [],
+      status: "failed" as const,
     };
   }
-
-  const assistantContent = detectedAction
-    ? "Задача создана и поставлена в очередь. Результат появится здесь после выполнения."
-    : "Сообщение получено. Полная интеграция с AI-агентом будет подключена на следующем этапе.";
 
   const { data: assistantMsg, error: assistantError } = await service
     .from("chat_messages")
     .insert({
       chat_id: chatId,
       role: "assistant",
-      content: assistantContent,
-      metadata: assistantMetadata,
+      content: agentResult.content,
+      metadata: agentResult.metadata,
     })
     .select()
     .single();
 
-  if (assistantError) {
+  if (assistantError || !assistantMsg) {
     return apiError("CREATE_FAILED", "Не удалось создать ответ", 500, requestId);
+  }
+
+  if (agentResult.agentRunId) {
+    await attachAssistantToRun(agentResult.agentRunId, assistantMsg.id);
+  }
+
+  const generationIds = (agentResult.metadata.generations ?? [])
+    .map((item) => item.generationId)
+    .concat(agentResult.metadata.generation ? [agentResult.metadata.generation.generationId] : []);
+  if (generationIds.length) {
+    await service
+      .from("generations")
+      .update({ message_id: assistantMsg.id })
+      .in("id", generationIds)
+      .eq("user_id", user.id);
   }
 
   await service.from("chats").update({ updated_at: new Date().toISOString() }).eq("id", chatId);
 
-  return apiSuccess({
-    userMessage: userMsg as ChatMessage,
-    assistantMessage: assistantMsg as ChatMessage,
-  }, 201);
+  return apiSuccess(
+    {
+      userMessage,
+      assistantMessage: assistantMsg as ChatMessage,
+      agentRun: {
+        id: agentResult.agentRunId,
+        status: agentResult.status,
+        events: agentResult.events,
+      },
+    },
+    201,
+  );
 }

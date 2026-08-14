@@ -3,6 +3,11 @@ import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { apiSuccess, apiError, readJsonBody } from "@/lib/api/response";
 import { generateRequestId } from "@/lib/logging/logger";
 import { createGenerationSchema } from "@/lib/validation/workspace-schemas";
+import {
+  createImageGeneration,
+  createVideoGeneration,
+  GenerationValidationError,
+} from "@/lib/generation";
 import type { Generation } from "@/lib/types/workspace";
 
 export async function GET(request: Request) {
@@ -40,27 +45,27 @@ export async function POST(request: Request) {
   const parsed = createGenerationSchema.safeParse(body);
   if (!parsed.success) return apiError("VALIDATION_ERROR", "Некорректные данные", 400, requestId);
 
-  const service = createSupabaseServiceClient();
-  const { data, error } = await service
-    .from("generations")
-    .insert({
-      user_id: user.id,
-      type: parsed.data.type,
-      mode: parsed.data.mode,
+  try {
+    const common = {
+      userId: user.id,
+      projectId: parsed.data.projectId,
+      chatId: parsed.data.chatId,
       prompt: parsed.data.prompt,
-      model_id: parsed.data.modelId,
-      preset_id: parsed.data.presetId ?? null,
-      settings: parsed.data.settings ?? {},
-      reference_assets: parsed.data.referenceAssets ?? [],
-      project_id: parsed.data.projectId ?? null,
-      chat_id: parsed.data.chatId ?? null,
-      status: "queued",
-    })
-    .select()
-    .single();
-
-  if (error || !data) return apiError("CREATE_FAILED", "Не удалось создать генерацию", 500, requestId);
-
-  // Future: dispatch to n8n/factory pipeline. For now, mark as pending.
-  return apiSuccess(data as Generation, 201);
+      model: parsed.data.modelId,
+      presetId: parsed.data.presetId,
+      mode: parsed.data.mode,
+      settings: parsed.data.settings,
+      referenceAssets: parsed.data.referenceAssets,
+    };
+    const result =
+      parsed.data.type === "image"
+        ? await createImageGeneration(common)
+        : await createVideoGeneration(common);
+    return apiSuccess(result.generation, 201);
+  } catch (error) {
+    if (error instanceof GenerationValidationError) {
+      return apiError(error.code, error.message, 400, requestId);
+    }
+    return apiError("CREATE_FAILED", "Не удалось создать генерацию", 500, requestId);
+  }
 }

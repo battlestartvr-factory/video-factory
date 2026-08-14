@@ -12,6 +12,7 @@ describe("model registry", () => {
   it("modelSupports checks capabilities", () => {
     expect(modelSupports("kling-3", "endFrame")).toBe(true);
     expect(modelSupports("bytedance-v1-lite-i2v", "endFrame")).toBe(false);
+    expect(modelSupports("gemini-3-flash", "toolCalling")).toBe(true);
   });
 
   it("getModelById returns model", () => {

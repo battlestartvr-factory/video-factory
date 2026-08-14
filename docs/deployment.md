@@ -30,6 +30,13 @@ B2_REGION=
 B2_ACCESS_KEY_ID=
 B2_SECRET_ACCESS_KEY=
 B2_BUCKET=battlestart-factory-temp
+AGENT_LLM_BASE_URL=
+AGENT_LLM_API_KEY=
+AGENT_LLM_DEFAULT_MODEL=
+AGENT_LLM_ALLOWED_MODELS=
+WEB_SEARCH_PROVIDER=
+WEB_SEARCH_API_KEY=
+WEB_SEARCH_BASE_URL=
 ```
 
 4. Deploy
@@ -63,3 +70,6 @@ GitHub Actions runs lint, typecheck, test, build on push/PR.
 - [ ] n8n webhook configured
 - [ ] MOCK_WORKFLOWS=false in production
 - [ ] Visual references added to `public/references/` (optional)
+- [ ] `supabase/migrations/20260814120000_universal_agent.sql` applied
+- [ ] Agent LLM env vars set if Chat should call a model
+- [ ] Web search env vars set if live research is required

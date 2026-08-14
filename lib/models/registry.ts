@@ -13,6 +13,7 @@ export const MODEL_REGISTRY: AIModel[] = [
     capabilities: {
       chat: true,
       vision: true,
+      toolCalling: true,
     },
   },
   {
