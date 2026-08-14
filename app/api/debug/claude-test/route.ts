@@ -37,28 +37,52 @@ export async function POST() {
     );
   }
 
-  const response = await kieFetch(
-    { baseUrl: config.baseUrl, apiKey: config.apiKey, model },
-    KIE_REQUEST_BODY,
-    AGENT_PROVIDER_TIMEOUT_MS,
-  );
-
-  const rawBody = await response.text();
-  let responseBody: unknown = rawBody;
   try {
-    responseBody = JSON.parse(rawBody) as unknown;
-  } catch {
-    // keep raw text when KIE returns non-JSON
-  }
+    console.log("CLAUDE_SMOKE_START", {
+      model: "claude-sonnet-5",
+      hasKey: Boolean(process.env.KIE_API_KEY),
+    });
 
-  return NextResponse.json(
-    {
-      httpStatus: response.status,
-      responseBody,
-    },
-    {
-      status: 200,
-      headers: { "Cache-Control": "no-store" },
-    },
-  );
+    const response = await kieFetch(
+      { baseUrl: config.baseUrl, apiKey: config.apiKey, model },
+      KIE_REQUEST_BODY,
+      AGENT_PROVIDER_TIMEOUT_MS,
+    );
+
+    console.log("CLAUDE_SMOKE_RESPONSE", {
+      status: response.status,
+    });
+
+    const rawBody = await response.text();
+    let responseBody: unknown = rawBody;
+    try {
+      responseBody = JSON.parse(rawBody) as unknown;
+    } catch {
+      // keep raw text when KIE returns non-JSON
+    }
+
+    return NextResponse.json(
+      {
+        httpStatus: response.status,
+        responseBody,
+      },
+      {
+        status: 200,
+        headers: { "Cache-Control": "no-store" },
+      },
+    );
+  } catch (error) {
+    console.error("CLAUDE_SMOKE_TEST_FAILED", error);
+
+    return NextResponse.json(
+      {
+        error: {
+          type: "api_error",
+          message: error instanceof Error ? error.message : String(error),
+          stack: error instanceof Error ? error.stack : null,
+        },
+      },
+      { status: 500 },
+    );
+  }
 }
