@@ -290,7 +290,7 @@ describe("deleteKnowledgeDocument", () => {
       status: "ready",
     };
 
-    mockDeleteFile.mockResolvedValue(undefined);
+    mockDeleteFile.mockResolvedValue({ httpStatus: 204 });
 
     mockFrom.mockImplementation((table: string) => {
       if (table === "knowledge_documents") {
@@ -317,7 +317,7 @@ describe("deleteKnowledgeDocument", () => {
       status: "ready",
     };
 
-    mockDeleteFile.mockRejectedValue({ code: 404, message: "File not found" });
+    mockDeleteFile.mockResolvedValue({ httpStatus: 404 });
 
     mockFrom.mockImplementation((table: string) => {
       if (table === "knowledge_documents") {
@@ -333,7 +333,43 @@ describe("deleteKnowledgeDocument", () => {
     await expect(deleteKnowledgeDocument("user-1", "doc-del-2")).resolves.toBeUndefined();
   });
 
-  it("throws DRIVE_DELETE_FAILED for non-404 Drive errors", async () => {
+  it("throws DRIVE_DELETE_PERMISSION_DENIED for 403 Drive errors", async () => {
+    const { DriveStorageError } = await import("@/lib/storage/drive-errors");
+    const doc = {
+      id: "doc-del-4",
+      user_id: "user-1",
+      filename: "forbidden.pdf",
+      drive_file_id: "drive-forbidden",
+      status: "ready",
+      metadata: {},
+    };
+
+    mockDeleteFile.mockRejectedValue(
+      new DriveStorageError(
+        "DRIVE_DELETE_PERMISSION_DENIED",
+        "Permission denied",
+        { stage: "file_delete", googleHttpStatus: 403 },
+      ),
+    );
+
+    mockFrom.mockImplementation((table: string) => {
+      if (table === "knowledge_documents") {
+        const chain = chainable({ data: doc, error: null });
+        chain.update.mockReturnValue(chain);
+        chain.delete.mockReturnValue(chain);
+        chain.eq.mockReturnValue(chain);
+        return chain;
+      }
+      return chainable();
+    });
+
+    const { deleteKnowledgeDocument } = await import("@/lib/knowledge/knowledge-service");
+    await expect(deleteKnowledgeDocument("user-1", "doc-del-4")).rejects.toThrow(
+      "DRIVE_DELETE_PERMISSION_DENIED",
+    );
+  });
+
+  it("throws DRIVE_DELETE_FAILED for other Drive errors", async () => {
     const doc = {
       id: "doc-del-3",
       user_id: "user-1",

@@ -7,7 +7,9 @@ export type DriveErrorCode =
   | "DRIVE_FOLDER_NOT_FOUND"
   | "DRIVE_FOLDER_CREATE_FAILED"
   | "DRIVE_UPLOAD_SESSION_FAILED"
-  | "DRIVE_UPLOAD_FAILED";
+  | "DRIVE_UPLOAD_FAILED"
+  | "DRIVE_DELETE_PERMISSION_DENIED"
+  | "DRIVE_DELETE_FAILED";
 
 export interface DriveErrorDetails {
   stage: string;
@@ -61,6 +63,10 @@ function extractGoogleApiError(err: unknown): { httpStatus?: number; reason?: st
   };
 }
 
+export function getGoogleApiHttpStatus(err: unknown): number | undefined {
+  return extractGoogleApiError(err).httpStatus;
+}
+
 export function mapGoogleHttpStatusToDriveError(
   httpStatus: number,
   _stage: string,
@@ -103,6 +109,8 @@ export function driveErrorHttpStatus(code: DriveErrorCode): number {
       return 503;
     case "DRIVE_FOLDER_ACCESS_DENIED":
       return 403;
+    case "DRIVE_DELETE_PERMISSION_DENIED":
+      return 403;
     case "DRIVE_FOLDER_NOT_FOUND":
       return 404;
     case "DRIVE_AUTH_FAILED":
@@ -128,5 +136,9 @@ export function driveErrorUserMessage(code: DriveErrorCode): string {
       return "Не удалось создать сессию загрузки в Google Drive";
     case "DRIVE_UPLOAD_FAILED":
       return "Не удалось загрузить файл в Google Drive";
+    case "DRIVE_DELETE_PERMISSION_DENIED":
+      return "Нет прав на удаление файла из Google Drive";
+    case "DRIVE_DELETE_FAILED":
+      return "Не удалось удалить файл из Google Drive";
   }
 }

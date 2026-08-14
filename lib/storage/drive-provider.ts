@@ -7,6 +7,7 @@ import {
 } from "@/lib/storage/drive-auth";
 import {
   DriveStorageError,
+  getGoogleApiHttpStatus,
   normalizeDriveError,
   type DriveAuthMode,
 } from "@/lib/storage/drive-errors";
@@ -45,6 +46,10 @@ export interface ResumableUploadSession {
   driveFileId?: string;
 }
 
+export interface DriveDeleteFileResult {
+  httpStatus: number;
+}
+
 export interface DriveStorageProvider {
   authMode: DriveAuthMode;
   isConfigured(): boolean;
@@ -62,7 +67,7 @@ export interface DriveStorageProvider {
   }): Promise<string>;
   finalizeUpload(driveFileId: string): Promise<DriveFileMetadata>;
   downloadFile(driveFileId: string): Promise<Buffer>;
-  deleteFile(driveFileId: string): Promise<void>;
+  deleteFile(driveFileId: string): Promise<DriveDeleteFileResult>;
   getFileMetadata(driveFileId: string): Promise<DriveFileMetadata>;
 }
 
@@ -358,13 +363,28 @@ class GoogleDriveStorageProviderImpl implements DriveStorageProvider {
     return Buffer.from(response.data as ArrayBuffer);
   }
 
-  async deleteFile(driveFileId: string): Promise<void> {
-    await this.ensureRootFolderReady();
+  async deleteFile(driveFileId: string): Promise<DriveDeleteFileResult> {
     const { drive } = this.getAuthAndDrive();
-    await drive.files.delete({
-      fileId: driveFileId,
-      ...SHARED_DRIVE_MUTATION_OPTIONS,
-    });
+    try {
+      const response = await drive.files.delete({
+        fileId: driveFileId,
+        ...SHARED_DRIVE_MUTATION_OPTIONS,
+      });
+      return { httpStatus: response.status ?? 204 };
+    } catch (err) {
+      const httpStatus = getGoogleApiHttpStatus(err);
+      if (httpStatus === 404) {
+        return { httpStatus: 404 };
+      }
+      if (httpStatus === 403) {
+        throw new DriveStorageError(
+          "DRIVE_DELETE_PERMISSION_DENIED",
+          "Permission denied: cannot delete file from Google Drive",
+          { stage: "file_delete", googleHttpStatus: 403 },
+        );
+      }
+      throw normalizeDriveError(err, "file_delete", "DRIVE_DELETE_FAILED");
+    }
   }
 
   async getFileMetadata(driveFileId: string): Promise<DriveFileMetadata> {

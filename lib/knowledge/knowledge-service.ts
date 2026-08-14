@@ -8,6 +8,7 @@ import {
   isDriveStorageConfigured,
   resolveKnowledgeFolderSegments,
 } from "@/lib/storage/drive-provider";
+import { DriveStorageError } from "@/lib/storage/drive-errors";
 import { processKnowledgeDocument } from "./document-processor";
 import {
   combineRankScore,
@@ -482,34 +483,43 @@ export async function deleteKnowledgeDocument(userId: string, documentId: string
   let driveAlreadyGone = false;
 
   if (typedDoc.drive_file_id && isDriveStorageConfigured()) {
+    const driveFileId = typedDoc.drive_file_id;
+    logger.info("before_drive_delete", { file_id: driveFileId });
+
     try {
       const drive = getDriveStorageProvider();
-      await drive.deleteFile(typedDoc.drive_file_id);
-      driveDeleted = true;
-    } catch (driveError) {
-      if (isDriveFileNotFoundError(driveError)) {
+      const { httpStatus } = await drive.deleteFile(driveFileId);
+      logger.info("after_drive_delete", { status: httpStatus });
+
+      if (httpStatus === 404) {
         driveAlreadyGone = true;
-        logger.info("drive_file_already_deleted", {
-          drive_file_id: typedDoc.drive_file_id,
-        });
       } else {
-        await service
-          .from("knowledge_documents")
-          .update({
-            status: "failed",
-            metadata: {
-              ...(typedDoc.metadata ?? {}),
-              delete_audit: {
-                drive_delete_failed: true,
-                drive_file_id: typedDoc.drive_file_id,
-                error: driveError instanceof Error ? driveError.message : "unknown",
-                attempted_at: new Date().toISOString(),
-              },
-            },
-          })
-          .eq("id", documentId);
-        throw new Error("DRIVE_DELETE_FAILED");
+        driveDeleted = true;
       }
+    } catch (driveError) {
+      const errorCode =
+        driveError instanceof DriveStorageError &&
+        driveError.code === "DRIVE_DELETE_PERMISSION_DENIED"
+          ? "DRIVE_DELETE_PERMISSION_DENIED"
+          : "DRIVE_DELETE_FAILED";
+
+      await service
+        .from("knowledge_documents")
+        .update({
+          status: "failed",
+          metadata: {
+            ...(typedDoc.metadata ?? {}),
+            delete_audit: {
+              drive_delete_failed: true,
+              drive_file_id: driveFileId,
+              error: driveError instanceof Error ? driveError.message : "unknown",
+              error_code: errorCode,
+              attempted_at: new Date().toISOString(),
+            },
+          },
+        })
+        .eq("id", documentId);
+      throw new Error(errorCode);
     }
   }
 
@@ -526,12 +536,6 @@ export async function deleteKnowledgeDocument(userId: string, documentId: string
     drive_deleted: driveDeleted,
     drive_already_gone: driveAlreadyGone,
   });
-}
-
-function isDriveFileNotFoundError(err: unknown): boolean {
-  if (!err || typeof err !== "object") return false;
-  const candidate = err as { code?: number; response?: { status?: number } };
-  return candidate.code === 404 || candidate.response?.status === 404;
 }
 
 export { escapeIlike };
