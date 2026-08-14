@@ -73,6 +73,8 @@ export interface GenerationCardData {
   status: GenerationStatus;
   prompt: string;
   modelId: string;
+  modelName?: string;
+  quality?: string;
   outputs?: Array<{ url?: string; kind?: string }>;
 }
 

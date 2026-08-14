@@ -1,3 +1,4 @@
+import { getKieModelById } from "@/lib/models/kie";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { createAgentAction } from "@/lib/actions/action-service";
 import { assertProjectAccess } from "@/lib/projects/access";
@@ -17,6 +18,8 @@ export interface CanonicalGenerationInput {
   agentRunId?: string | null;
   prompt: string;
   model?: string;
+  quality?: string;
+  selectionSource?: string;
   presetId?: string | null;
   inputAssetIds?: string[];
   startFrameAssetId?: string;
@@ -38,6 +41,8 @@ export interface CanonicalGenerationResult {
 }
 
 export function toGenerationCard(generation: Generation): GenerationCardData {
+  const model = getKieModelById(generation.model_id);
+  const settings = generation.settings ?? {};
   return {
     generationId: generation.id,
     type: generation.type,
@@ -45,6 +50,8 @@ export function toGenerationCard(generation: Generation): GenerationCardData {
     status: generation.status,
     prompt: generation.prompt,
     modelId: generation.model_id,
+    modelName: model?.displayName,
+    quality: typeof settings.quality === "string" ? settings.quality : undefined,
     outputs: generation.outputs,
   };
 }
@@ -156,6 +163,12 @@ export async function createImageGeneration(
     inputAssetIds: input.inputAssetIds,
     aspectRatio: typeof settingsIn.aspectRatio === "string" ? settingsIn.aspectRatio : undefined,
     resolution: typeof settingsIn.resolution === "string" ? settingsIn.resolution : undefined,
+    quality:
+      typeof settingsIn.quality === "string"
+        ? (settingsIn.quality as import("@/lib/models/kie/types").MediaQuality)
+        : input.quality
+          ? (input.quality as import("@/lib/models/kie/types").MediaQuality)
+          : undefined,
     outputs:
       typeof settingsIn.numOutputs === "number"
         ? settingsIn.numOutputs
@@ -163,6 +176,7 @@ export async function createImageGeneration(
           ? settingsIn.outputs
           : undefined,
     mode: input.mode,
+    selectionSource: (input.selectionSource as import("@/lib/models/kie/types").SelectionSource) ?? "agent",
   });
   const assets = input.inputAssetIds?.length
     ? await resolveOwnedAssets(input.userId, input.inputAssetIds)
@@ -175,7 +189,14 @@ export async function createImageGeneration(
     prompt: input.prompt,
     modelId: validated.model.id,
     presetId: input.presetId,
-    settings: { ...settingsIn, ...validated.settings },
+    settings: {
+      ...settingsIn,
+      ...validated.settings,
+      model_id: validated.model.id,
+      requested_quality: validated.settings.quality,
+      effective_quality: validated.settings.effectiveQuality,
+      selection_source: validated.settings.selectionSource ?? "default",
+    },
     referenceAssets: assets,
     projectId: input.projectId,
     chatId: input.chatId,
@@ -198,6 +219,12 @@ export async function createVideoGeneration(
     endFrameAssetId,
     aspectRatio: typeof settingsIn.aspectRatio === "string" ? settingsIn.aspectRatio : undefined,
     resolution: typeof settingsIn.resolution === "string" ? settingsIn.resolution : undefined,
+    quality:
+      typeof settingsIn.quality === "string"
+        ? (settingsIn.quality as import("@/lib/models/kie/types").MediaQuality)
+        : input.quality
+          ? (input.quality as import("@/lib/models/kie/types").MediaQuality)
+          : undefined,
     durationSec:
       typeof settingsIn.duration_sec === "number"
         ? settingsIn.duration_sec
@@ -213,6 +240,7 @@ export async function createVideoGeneration(
           ? settingsIn.outputs
           : undefined,
     mode: input.mode,
+    selectionSource: (input.selectionSource as import("@/lib/models/kie/types").SelectionSource) ?? "agent",
   });
 
   const assetIds = [
@@ -245,6 +273,10 @@ export async function createVideoGeneration(
       ...validated.settings,
       start_frame_asset_id: startFrameAssetId,
       end_frame_asset_id: endFrameAssetId,
+      model_id: validated.model.id,
+      requested_quality: validated.settings.quality,
+      effective_quality: validated.settings.effectiveQuality,
+      selection_source: validated.settings.selectionSource ?? "default",
     },
     referenceAssets: withRoles,
     projectId: input.projectId,

@@ -49,7 +49,7 @@ export async function POST(request: Request) {
       user_id: user.id,
       project_id: parsed.data.projectId ?? null,
       title: parsed.data.title ?? "Новый чат",
-      model_id: parsed.data.modelId ?? "gemini-3-flash",
+      model_id: parsed.data.modelId ?? "gemini-3-6-flash",
       preset_id: parsed.data.presetId ?? "00000000-0000-4000-8000-000000000001",
     })
     .select()

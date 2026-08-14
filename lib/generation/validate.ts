@@ -1,6 +1,17 @@
-import { getModelById } from "@/lib/models/registry";
+import {
+  getKieModelById,
+  getDefaultImageModel,
+  getDefaultVideoModel,
+  resolveModelId,
+  resolveQuality,
+  selectImageModel,
+  selectVideoModel,
+  checkModelCapabilityMismatch,
+  suggestAlternativeModel,
+} from "@/lib/models/kie";
+import type { MediaQuality, SelectionSource } from "@/lib/models/kie/types";
 import { DEFAULT_IMAGE_MODEL, DEFAULT_VIDEO_MODEL, CONTENT_LIMITS } from "@/lib/agent/config";
-import type { AIModel } from "@/lib/types/workspace";
+import type { KieModelEntry } from "@/lib/models/kie/types";
 
 export class GenerationValidationError extends Error {
   constructor(
@@ -13,17 +24,20 @@ export class GenerationValidationError extends Error {
 }
 
 export interface ValidatedImageRequest {
-  model: AIModel;
+  model: KieModelEntry;
   mode: string;
   settings: {
     aspectRatio?: string;
     resolution?: string;
     numOutputs: number;
+    quality?: MediaQuality;
+    effectiveQuality?: string;
+    selectionSource?: SelectionSource;
   };
 }
 
 export interface ValidatedVideoRequest {
-  model: AIModel;
+  model: KieModelEntry;
   mode: string;
   settings: {
     aspectRatio?: string;
@@ -32,25 +46,34 @@ export interface ValidatedVideoRequest {
     numOutputs: number;
     startFrameAssetId?: string;
     endFrameAssetId?: string;
+    quality?: MediaQuality;
+    effectiveQuality?: string;
+    selectionSource?: SelectionSource;
   };
 }
 
-export function resolveImageModel(modelId?: string): AIModel {
-  const id = modelId || DEFAULT_IMAGE_MODEL;
-  const model = getModelById(id);
-  if (!model || !model.capabilities.imageGeneration) {
-    throw new GenerationValidationError("MODEL_CAPABILITY_MISSING", "Модель не поддерживает генерацию изображений");
+export function resolveImageModel(modelId?: string): KieModelEntry {
+  if (modelId && modelId !== "auto") {
+    const model = getKieModelById(resolveModelId(modelId));
+    if (model?.capabilities.imageGeneration) return model;
+    throw new GenerationValidationError(
+      "MODEL_CAPABILITY_MISSING",
+      "Модель не поддерживает генерацию изображений",
+    );
   }
-  return model;
+  return getDefaultImageModel();
 }
 
-export function resolveVideoModel(modelId?: string): AIModel {
-  const id = modelId || DEFAULT_VIDEO_MODEL;
-  const model = getModelById(id);
-  if (!model || !model.capabilities.videoGeneration) {
-    throw new GenerationValidationError("MODEL_CAPABILITY_MISSING", "Модель не поддерживает генерацию видео");
+export function resolveVideoModel(modelId?: string): KieModelEntry {
+  if (modelId && modelId !== "auto") {
+    const model = getKieModelById(resolveModelId(modelId));
+    if (model?.capabilities.videoGeneration) return model;
+    throw new GenerationValidationError(
+      "MODEL_CAPABILITY_MISSING",
+      "Модель не поддерживает генерацию видео",
+    );
   }
-  return model;
+  return getDefaultVideoModel();
 }
 
 export function inferImageMode(inputAssetIds: string[], requested?: string): string {
@@ -70,17 +93,44 @@ export function inferVideoMode(input: {
   return "text-to-video";
 }
 
+function requiredCapabilitiesForVideoMode(mode: string): (keyof KieModelEntry["capabilities"])[] {
+  switch (mode) {
+    case "start-end-frames":
+      return ["endFrame", "startFrame"];
+    case "image-to-video":
+      return ["imageToVideo"];
+    case "reference-to-video":
+      return ["referenceToVideo"];
+    default:
+      return ["textToVideo"];
+  }
+}
+
 export function validateImageGenerationRequest(input: {
   modelId?: string;
   inputAssetIds?: string[];
   aspectRatio?: string;
   resolution?: string;
+  quality?: MediaQuality;
   outputs?: number;
   mode?: string;
+  selectionSource?: SelectionSource;
 }): ValidatedImageRequest {
-  const model = resolveImageModel(input.modelId);
   const inputAssetIds = input.inputAssetIds ?? [];
   const mode = inferImageMode(inputAssetIds, input.mode);
+
+  const selection = selectImageModel({
+    explicitModelId: input.selectionSource === "user" ? input.modelId : undefined,
+    uiModelId: input.selectionSource === "ui" ? input.modelId : input.modelId,
+    mode,
+    referenceCount: inputAssetIds.length,
+    needsTypography: mode === "text-to-image",
+  });
+
+  const model = input.modelId && input.modelId !== "auto"
+    ? resolveImageModel(input.modelId)
+    : selection.model;
+
   const numOutputs = Math.min(
     Math.max(input.outputs ?? 1, 1),
     CONTENT_LIMITS.maxImageOutputs,
@@ -91,7 +141,11 @@ export function validateImageGenerationRequest(input: {
       throw new GenerationValidationError("VALIDATION_ERROR", "Неподдерживаемое соотношение сторон");
     }
   }
-  if (input.resolution && model.capabilities.resolutions?.length) {
+
+  let qualityMeta: { requestedQuality: MediaQuality; effectiveQuality: string } | undefined;
+  if (model.quality) {
+    qualityMeta = resolveQuality(model, input.quality);
+  } else if (input.resolution && model.capabilities.resolutions?.length) {
     if (!model.capabilities.resolutions.includes(input.resolution)) {
       throw new GenerationValidationError("VALIDATION_ERROR", "Неподдерживаемое разрешение");
     }
@@ -104,6 +158,9 @@ export function validateImageGenerationRequest(input: {
       aspectRatio: input.aspectRatio,
       resolution: input.resolution,
       numOutputs,
+      quality: qualityMeta?.requestedQuality ?? input.quality,
+      effectiveQuality: qualityMeta?.effectiveQuality,
+      selectionSource: input.selectionSource ?? selection.selectionSource,
     },
   };
 }
@@ -115,11 +172,12 @@ export function validateVideoGenerationRequest(input: {
   endFrameAssetId?: string;
   aspectRatio?: string;
   resolution?: string;
+  quality?: MediaQuality;
   durationSec?: number;
   outputs?: number;
   mode?: string;
+  selectionSource?: SelectionSource;
 }): ValidatedVideoRequest {
-  const model = resolveVideoModel(input.modelId);
   const inputAssetIds = input.inputAssetIds ?? [];
   const mode = inferVideoMode({
     startFrameAssetId: input.startFrameAssetId,
@@ -127,6 +185,30 @@ export function validateVideoGenerationRequest(input: {
     inputAssetIds,
     requested: input.mode,
   });
+
+  const selection = selectVideoModel({
+    uiModelId: input.modelId,
+    mode,
+    needsEndFrame: Boolean(input.endFrameAssetId),
+    referenceCount: inputAssetIds.length,
+  });
+
+  const model = input.modelId && input.modelId !== "auto"
+    ? resolveVideoModel(input.modelId)
+    : selection.model;
+
+  // Check capability mismatch — do not silently swap model
+  const required = requiredCapabilitiesForVideoMode(mode);
+  const missing = checkModelCapabilityMismatch(model.id, required);
+  if (missing.length && input.modelId && input.modelId !== "auto") {
+    const alt = suggestAlternativeModel("video", required);
+    const altName = alt?.displayName ?? "другую модель";
+    throw new GenerationValidationError(
+      "MODEL_CAPABILITY_MISMATCH",
+      `Для этой операции выбранная модель не поддерживает нужный режим. Могу использовать ${altName}.`,
+    );
+  }
+
   const numOutputs = Math.min(
     Math.max(input.outputs ?? 1, 1),
     CONTENT_LIMITS.maxVideoOutputs,
@@ -166,6 +248,11 @@ export function validateVideoGenerationRequest(input: {
     throw new GenerationValidationError("VALIDATION_ERROR", "Неподдерживаемая длительность");
   }
 
+  let qualityMeta: { requestedQuality: MediaQuality; effectiveQuality: string } | undefined;
+  if (model.quality) {
+    qualityMeta = resolveQuality(model, input.quality);
+  }
+
   return {
     model,
     mode,
@@ -176,6 +263,11 @@ export function validateVideoGenerationRequest(input: {
       numOutputs,
       startFrameAssetId: input.startFrameAssetId,
       endFrameAssetId: input.endFrameAssetId,
+      quality: qualityMeta?.requestedQuality ?? input.quality,
+      effectiveQuality: qualityMeta?.effectiveQuality,
+      selectionSource: input.selectionSource ?? selection.selectionSource,
     },
   };
 }
+
+export { DEFAULT_IMAGE_MODEL, DEFAULT_VIDEO_MODEL };

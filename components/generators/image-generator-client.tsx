@@ -7,8 +7,11 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input, Textarea, Label, Select } from "@/components/ui/input";
 import { EmptyState, Skeleton } from "@/components/ui/states";
 import { ModelSelector } from "@/components/chat/model-selector";
+import { QualitySelector } from "@/components/chat/quality-selector";
 import { PresetSelector } from "@/components/chat/preset-selector";
 import { getModelById } from "@/lib/models/registry";
+import { DEFAULT_IMAGE_MODEL, DEFAULT_MEDIA_QUALITY } from "@/lib/agent/config";
+import type { MediaQuality } from "@/lib/models/kie/types";
 import { t } from "@/lib/i18n/dictionary";
 import type { Generation, Preset } from "@/lib/types/workspace";
 
@@ -22,7 +25,8 @@ const IMAGE_MODES = [
 export function ImageGeneratorClient() {
   const [mode, setMode] = useState("text-to-image");
   const [prompt, setPrompt] = useState("");
-  const [modelId, setModelId] = useState("nano-banana-2-lite");
+  const [modelId, setModelId] = useState(DEFAULT_IMAGE_MODEL);
+  const [quality, setQuality] = useState<MediaQuality>(DEFAULT_MEDIA_QUALITY);
   const [presetId, setPresetId] = useState("00000000-0000-4000-8000-000000000002");
   const [aspectRatio, setAspectRatio] = useState("16:9");
   const [resolution, setResolution] = useState("1024");
@@ -58,7 +62,7 @@ export function ImageGeneratorClient() {
         prompt,
         modelId,
         presetId,
-        settings: { aspectRatio, resolution, numOutputs },
+        settings: { aspectRatio, resolution, numOutputs, quality },
       }),
     });
     const data = await res.json();
@@ -96,7 +100,15 @@ export function ImageGeneratorClient() {
               <div className="flex flex-wrap gap-3">
                 <div>
                   <Label className="mb-1 block text-xs">Модель</Label>
-                  <ModelSelector value={modelId} onChange={setModelId} type="image" />
+                  <ModelSelector value={modelId} onChange={setModelId} type="image" includeAuto />
+                </div>
+                <div>
+                  <Label className="mb-1 block text-xs">Quality</Label>
+                  <QualitySelector
+                    modelId={modelId}
+                    value={quality}
+                    onChange={(q) => setQuality(q as MediaQuality)}
+                  />
                 </div>
                 <div>
                   <Label className="mb-1 block text-xs">Пресет</Label>

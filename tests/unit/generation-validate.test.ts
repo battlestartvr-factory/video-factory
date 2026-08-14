@@ -23,18 +23,20 @@ describe("canonical generation validation", () => {
 
   it("accepts a capable image model and settings", () => {
     const result = validateImageGenerationRequest({
-      modelId: "nano-banana-2-lite",
+      modelId: "gpt-image-2",
       aspectRatio: "16:9",
+      quality: "medium",
       outputs: 2,
     });
-    expect(result.model.id).toBe("nano-banana-2-lite");
+    expect(result.model.id).toBe("gpt-image-2");
     expect(result.settings.numOutputs).toBe(2);
+    expect(result.settings.effectiveQuality).toBe("2K");
   });
 
   it("rejects end frame on models without the capability", () => {
     expect(() =>
       validateVideoGenerationRequest({
-        modelId: "bytedance-v1-lite-i2v",
+        modelId: "seedance-2-5",
         endFrameAssetId: "11111111-1111-4111-8111-111111111111",
       }),
     ).toThrow(GenerationValidationError);
@@ -47,8 +49,20 @@ describe("canonical generation validation", () => {
       endFrameAssetId: "22222222-2222-4222-8222-222222222222",
       durationSec: 10,
       aspectRatio: "16:9",
+      quality: "medium",
     });
     expect(result.mode).toBe("start-end-frames");
     expect(result.settings.durationSec).toBe(10);
+    expect(result.settings.effectiveQuality).toBe("pro");
+  });
+
+  it("reports capability mismatch without silent model swap", () => {
+    expect(() =>
+      validateVideoGenerationRequest({
+        modelId: "kling-3",
+        mode: "reference-to-video",
+        selectionSource: "ui",
+      }),
+    ).toThrow(GenerationValidationError);
   });
 });

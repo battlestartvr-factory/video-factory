@@ -104,6 +104,7 @@ export async function POST(request: Request, { params }: Params) {
       chat: typedChat,
       userMessage,
       modelId: parsed.data.modelId ?? typedChat.model_id,
+      reasoningLevel: parsed.data.reasoningLevel,
       presetId: parsed.data.presetId ?? typedChat.preset_id,
       attachmentIds,
     });
@@ -155,7 +156,13 @@ export async function POST(request: Request, { params }: Params) {
       .eq("user_id", user.id);
   }
 
-  await service.from("chats").update({ updated_at: new Date().toISOString() }).eq("id", chatId);
+  await service.from("chats").update({
+    updated_at: new Date().toISOString(),
+    ...(parsed.data.modelId ? { model_id: parsed.data.modelId } : {}),
+    ...(parsed.data.reasoningLevel
+      ? { metadata: { ...(typedChat.metadata ?? {}), reasoning_level: parsed.data.reasoningLevel } }
+      : {}),
+  }).eq("id", chatId);
 
   return apiSuccess(
     {

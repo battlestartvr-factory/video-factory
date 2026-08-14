@@ -7,6 +7,7 @@ export const answerUserSchema = z.object({
 export const generateImageSchema = z.object({
   prompt: z.string().min(1).max(10000),
   model: z.string().min(1).max(120).optional(),
+  quality: z.enum(["low", "medium", "high"]).optional(),
   preset_id: z.string().uuid().optional(),
   input_asset_ids: z.array(z.string().uuid()).max(8).optional(),
   aspect_ratio: z.string().max(20).optional(),
@@ -18,6 +19,7 @@ export const generateImageSchema = z.object({
 export const generateVideoSchema = z.object({
   prompt: z.string().min(1).max(10000),
   model: z.string().min(1).max(120).optional(),
+  quality: z.enum(["low", "medium", "high"]).optional(),
   preset_id: z.string().uuid().optional(),
   input_asset_ids: z.array(z.string().uuid()).max(8).optional(),
   start_frame_asset_id: z.string().uuid().optional(),

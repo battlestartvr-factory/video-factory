@@ -127,7 +127,7 @@ export function ChatPageClient({ chatId: chatIdProp, projectId }: ChatPageClient
     }
   };
 
-  const handleSend = async (content: string, options: { modelId?: string; presetId?: string; files: File[] }) => {
+  const handleSend = async (content: string, options: { modelId?: string; reasoningLevel?: string; presetId?: string; files: File[] }) => {
     if (sending) return;
     setSendError(null);
 
@@ -165,7 +165,12 @@ export function ChatPageClient({ chatId: chatIdProp, projectId }: ChatPageClient
         method: "POST",
         cache: "no-store",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content, modelId: options.modelId, presetId: options.presetId }),
+        body: JSON.stringify({
+          content,
+          modelId: options.modelId,
+          reasoningLevel: options.reasoningLevel,
+          presetId: options.presetId,
+        }),
       });
       const data = await res.json();
       if (data.ok) {
@@ -252,10 +257,17 @@ export function ChatPageClient({ chatId: chatIdProp, projectId }: ChatPageClient
       </div>
 
       <ChatComposer
+        key={`${chatId}-${displayedChat?.model_id ?? ""}-${String(displayedChat?.metadata?.reasoning_level ?? "")}`}
         onSend={handleSend}
         disabled={sending}
         presets={presets}
+        chatId={chatId}
         defaultModelId={displayedChat?.model_id ?? undefined}
+        defaultReasoningLevel={
+          typeof displayedChat?.metadata?.reasoning_level === "string"
+            ? displayedChat.metadata.reasoning_level
+            : undefined
+        }
         defaultPresetId={displayedChat?.preset_id ?? undefined}
       />
     </div>

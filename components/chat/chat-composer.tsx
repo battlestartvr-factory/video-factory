@@ -5,7 +5,9 @@ import { Send, Paperclip, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { getAcceptString } from "@/lib/attachments/mime";
+import { DEFAULT_LLM_MODEL, DEFAULT_REASONING_LEVEL } from "@/lib/agent/config";
 import { ModelSelector } from "./model-selector";
+import { ReasoningSelector } from "./reasoning-selector";
 import { PresetSelector } from "./preset-selector";
 import type { Preset } from "@/lib/types/workspace";
 
@@ -16,10 +18,12 @@ interface PendingFile {
 }
 
 interface ChatComposerProps {
-  onSend: (content: string, options: { modelId?: string; presetId?: string; files: File[] }) => void;
+  onSend: (content: string, options: { modelId?: string; reasoningLevel?: string; presetId?: string; files: File[] }) => void;
   disabled?: boolean;
   presets?: Preset[];
+  chatId?: string;
   defaultModelId?: string;
+  defaultReasoningLevel?: string;
   defaultPresetId?: string;
 }
 
@@ -27,16 +31,41 @@ export function ChatComposer({
   onSend,
   disabled,
   presets = [],
-  defaultModelId = "gemini-3-flash",
+  chatId,
+  defaultModelId = DEFAULT_LLM_MODEL,
+  defaultReasoningLevel = DEFAULT_REASONING_LEVEL,
   defaultPresetId,
 }: ChatComposerProps) {
   const [content, setContent] = useState("");
   const [files, setFiles] = useState<PendingFile[]>([]);
   const [modelId, setModelId] = useState(defaultModelId);
+  const [reasoningLevel, setReasoningLevel] = useState(defaultReasoningLevel);
   const [presetId, setPresetId] = useState(defaultPresetId ?? "00000000-0000-4000-8000-000000000001");
   const [dragOver, setDragOver] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const persistChatSettings = useCallback(
+    async (updates: { modelId?: string; reasoningLevel?: string }) => {
+      if (!chatId) return;
+      await fetch(`/api/chats/${chatId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(updates),
+      });
+    },
+    [chatId],
+  );
+
+  const handleModelChange = (id: string) => {
+    setModelId(id);
+    void persistChatSettings({ modelId: id });
+  };
+
+  const handleReasoningChange = (level: string) => {
+    setReasoningLevel(level);
+    void persistChatSettings({ reasoningLevel: level });
+  };
 
   const addFiles = useCallback((newFiles: FileList | File[]) => {
     const arr = Array.from(newFiles);
@@ -53,7 +82,7 @@ export function ChatComposer({
   const handleSend = () => {
     const trimmed = content.trim();
     if (!trimmed && files.length === 0) return;
-    onSend(trimmed, { modelId, presetId, files: files.map((f) => f.file) });
+    onSend(trimmed, { modelId, reasoningLevel, presetId, files: files.map((f) => f.file) });
     setContent("");
     setFiles([]);
     if (textareaRef.current) textareaRef.current.style.height = "auto";
@@ -142,7 +171,12 @@ export function ChatComposer({
                 className="hidden"
                 onChange={(e) => e.target.files && addFiles(e.target.files)}
               />
-              <ModelSelector value={modelId} onChange={setModelId} type="chat" />
+              <ModelSelector value={modelId} onChange={handleModelChange} type="chat" />
+              <ReasoningSelector
+                modelId={modelId}
+                value={reasoningLevel}
+                onChange={handleReasoningChange}
+              />
               <PresetSelector
                 value={presetId}
                 onChange={setPresetId}

@@ -5,7 +5,8 @@ import {
   AGENT_ERROR_CODES,
 } from "./config";
 import { createAgentEvent } from "./events";
-import { createAgentProvider, AgentProviderError, resolveAgentModel } from "./provider";
+import { createAgentProvider, AgentProviderError, resolveAgentModel, resolveAgentReasoning } from "./provider";
+import { getChatReasoningFromMetadata } from "@/lib/models/kie/registry";
 import { loadAgentContext } from "./conversation";
 import { runAgentToolLoop } from "./loop";
 import { getToolDefinitions } from "./tools";
@@ -19,6 +20,7 @@ export interface UniversalAgentInput {
   chat: Chat;
   userMessage: ChatMessage;
   modelId?: string | null;
+  reasoningLevel?: string | null;
   presetId?: string | null;
   attachmentIds?: string[];
   provider?: AgentProvider;
@@ -67,6 +69,12 @@ export async function runUniversalAgent(input: UniversalAgentInput): Promise<Uni
   });
   const service = createSupabaseServiceClient();
   const { model } = resolveAgentModel(input.modelId ?? input.chat.model_id);
+  const reasoningFromInput = input.reasoningLevel;
+  const reasoningFromChat = getChatReasoningFromMetadata(
+    input.chat.metadata ?? {},
+  );
+  const reasoningLevel = reasoningFromInput ?? reasoningFromChat ?? "medium";
+  const reasoningMeta = resolveAgentReasoning(model, reasoningLevel);
   const events: AgentEvent[] = [];
   const generations: GenerationCardData[] = [];
   const sources: SourceCitation[] = [];
@@ -176,6 +184,7 @@ export async function runUniversalAgent(input: UniversalAgentInput): Promise<Uni
       messages,
       tools,
       toolContext: toolCtx,
+      reasoningLevel,
     });
   } catch (error) {
     if (error instanceof AgentProviderError) {
@@ -265,6 +274,8 @@ export async function runUniversalAgent(input: UniversalAgentInput): Promise<Uni
         completion_tokens: loopResult.usage.completionTokens ?? 0,
         total_tokens: loopResult.usage.totalTokens ?? 0,
         iterations: loopResult.executions.length,
+        requested_reasoning: reasoningMeta?.requestedReasoning,
+        effective_reasoning: reasoningMeta?.effectiveReasoning,
       },
     })
     .eq("id", agentRunId);
@@ -282,7 +293,7 @@ export async function runUniversalAgent(input: UniversalAgentInput): Promise<Uni
 
 function providerNotConfiguredMessage(code: string): string {
   if (code === AGENT_ERROR_CODES.PROVIDER_NOT_CONFIGURED) {
-    return "AI-агент сейчас не настроен: не задан AGENT_LLM_BASE_URL / AGENT_LLM_API_KEY. Сообщение сохранено, но ответ модели недоступен.";
+    return "AI-агент сейчас не настроен: не задан KIE_API_KEY (или AGENT_LLM_API_KEY). Сообщение сохранено, но ответ модели недоступен.";
   }
   return "Провайдер агента вернул ошибку.";
 }

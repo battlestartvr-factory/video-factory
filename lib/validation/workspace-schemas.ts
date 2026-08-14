@@ -10,6 +10,7 @@ export const createChatSchema = z.object({
 export const updateChatSchema = z.object({
   title: z.string().min(1).max(200).optional(),
   modelId: z.string().optional().nullable(),
+  reasoningLevel: z.string().optional().nullable(),
   presetId: z.string().uuid().optional().nullable(),
   archived: z.boolean().optional(),
   summary: z.string().optional().nullable(),
@@ -18,6 +19,7 @@ export const updateChatSchema = z.object({
 export const sendMessageSchema = z.object({
   content: z.string().min(1).max(50000),
   modelId: z.string().optional(),
+  reasoningLevel: z.string().optional(),
   presetId: z.string().uuid().optional(),
   attachmentIds: z.array(z.string().uuid()).optional(),
 });

@@ -25,6 +25,8 @@ const serverEnvSchema = z.object({
   B2_ACCESS_KEY_ID: z.string().optional().or(z.literal("")),
   B2_SECRET_ACCESS_KEY: z.string().optional().or(z.literal("")),
   B2_BUCKET: z.string().optional().or(z.literal("")),
+  KIE_API_KEY: z.string().optional().or(z.literal("")),
+  KIE_API_BASE_URL: z.string().optional().or(z.literal("")),
   AGENT_LLM_BASE_URL: z.string().optional().or(z.literal("")),
   AGENT_LLM_API_KEY: z.string().optional().or(z.literal("")),
   AGENT_LLM_DEFAULT_MODEL: z.string().optional().or(z.literal("")),
@@ -58,26 +60,47 @@ export function isGoogleDriveConfigured(): boolean {
   );
 }
 
+const KIE_DEFAULT_BASE_URL = "https://api.kie.ai";
+
+export function getKieConfig() {
+  const apiKey = (serverEnv.KIE_API_KEY ?? serverEnv.AGENT_LLM_API_KEY ?? "").trim();
+  const baseUrl =
+    (serverEnv.KIE_API_BASE_URL ?? serverEnv.AGENT_LLM_BASE_URL ?? KIE_DEFAULT_BASE_URL)
+      .trim()
+      .replace(/\/+$/, "") || KIE_DEFAULT_BASE_URL;
+
+  return {
+    configured: Boolean(apiKey),
+    baseUrl,
+    apiKey,
+  };
+}
+
+export function isKieConfigured(): boolean {
+  return getKieConfig().configured;
+}
+
+/** @deprecated Use getKieConfig() — kept for backward compatibility */
 export function getAgentLlmConfig() {
-  const baseUrl = (serverEnv.AGENT_LLM_BASE_URL ?? "").trim().replace(/\/+$/, "");
-  const apiKey = (serverEnv.AGENT_LLM_API_KEY ?? "").trim();
-  const defaultModel = (serverEnv.AGENT_LLM_DEFAULT_MODEL ?? "").trim() || "gpt-4o-mini";
+  const kie = getKieConfig();
+  const defaultModel =
+    (serverEnv.AGENT_LLM_DEFAULT_MODEL ?? "").trim() || "gemini-3-6-flash";
   const allowedModels = (serverEnv.AGENT_LLM_ALLOWED_MODELS ?? "")
     .split(",")
     .map((item) => item.trim())
     .filter(Boolean);
 
   return {
-    configured: Boolean(baseUrl && apiKey),
-    baseUrl,
-    apiKey,
+    configured: kie.configured,
+    baseUrl: kie.baseUrl,
+    apiKey: kie.apiKey,
     defaultModel,
     allowedModels,
   };
 }
 
 export function isAgentProviderConfigured(): boolean {
-  return getAgentLlmConfig().configured;
+  return isKieConfigured();
 }
 
 export function getWebSearchConfig() {

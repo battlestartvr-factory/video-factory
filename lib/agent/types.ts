@@ -33,6 +33,7 @@ export interface AgentRequest {
   tools: AgentToolDefinition[];
   model: string;
   system: string;
+  reasoningLevel?: string | null;
 }
 
 export interface AgentUsage {

@@ -11,12 +11,16 @@ describe("model registry", () => {
 
   it("modelSupports checks capabilities", () => {
     expect(modelSupports("kling-3", "endFrame")).toBe(true);
-    expect(modelSupports("bytedance-v1-lite-i2v", "endFrame")).toBe(false);
-    expect(modelSupports("gemini-3-flash", "toolCalling")).toBe(true);
+    expect(modelSupports("seedance-2-5", "endFrame")).toBe(false);
+    expect(modelSupports("gemini-3-6-flash", "toolCalling")).toBe(true);
   });
 
   it("getModelById returns model", () => {
-    expect(getModelById("gemini-3-flash")?.name).toBe("Gemini 3 Flash");
+    expect(getModelById("gemini-3-6-flash")?.name).toBe("Gemini 3.6 Flash");
+  });
+
+  it("resolves legacy model ids", () => {
+    expect(getModelById("gemini-3-flash")?.id).toBe("gemini-3-6-flash");
   });
 });
 

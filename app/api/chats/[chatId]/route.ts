@@ -43,6 +43,12 @@ export async function PATCH(request: Request, { params }: Params) {
   if (parsed.data.title !== undefined) updates.title = parsed.data.title;
   if (parsed.data.modelId !== undefined) updates.model_id = parsed.data.modelId;
   if (parsed.data.presetId !== undefined) updates.preset_id = parsed.data.presetId;
+  if (parsed.data.reasoningLevel !== undefined) {
+    updates.metadata = {
+      ...(chat.metadata ?? {}),
+      reasoning_level: parsed.data.reasoningLevel,
+    };
+  }
   if (parsed.data.summary !== undefined) updates.summary = parsed.data.summary;
   if (parsed.data.archived !== undefined) {
     updates.archived_at = parsed.data.archived ? new Date().toISOString() : null;

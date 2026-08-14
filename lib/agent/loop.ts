@@ -20,6 +20,7 @@ export interface AgentLoopInput {
   tools: AgentToolDefinition[];
   toolContext: ToolContext;
   maxIterations?: number;
+  reasoningLevel?: string | null;
 }
 
 export interface AgentLoopOutput {
@@ -45,6 +46,7 @@ export async function runAgentToolLoop(input: AgentLoopInput): Promise<AgentLoop
       system: input.system,
       messages,
       tools: input.tools,
+      reasoningLevel: input.reasoningLevel,
     });
     usage.promptTokens = (usage.promptTokens ?? 0) + (response.usage?.promptTokens ?? 0);
     usage.completionTokens = (usage.completionTokens ?? 0) + (response.usage?.completionTokens ?? 0);

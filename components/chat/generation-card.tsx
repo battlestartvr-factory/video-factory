@@ -8,6 +8,12 @@ interface GenerationCardProps {
   generation: GenerationCardData;
 }
 
+const QUALITY_LABELS: Record<string, string> = {
+  low: "Low",
+  medium: "Medium",
+  high: "High",
+};
+
 export function GenerationCard({ generation }: GenerationCardProps) {
   const isProcessing = ["pending", "queued", "processing"].includes(generation.status);
   const isFailed = generation.status === "failed";
@@ -31,6 +37,12 @@ export function GenerationCard({ generation }: GenerationCardProps) {
           {generation.status}
         </span>
       </div>
+      {(generation.modelName || generation.quality) && (
+        <p className="mt-1 text-xs text-muted-foreground">
+          {generation.modelName}
+          {generation.quality ? ` · ${QUALITY_LABELS[generation.quality] ?? generation.quality}` : ""}
+        </p>
+      )}
       <p className="mt-2 line-clamp-2 text-xs text-muted-foreground">{generation.prompt}</p>
       {generation.outputs && generation.outputs.length > 0 && (
         <div className="mt-3 grid gap-2 sm:grid-cols-2">
