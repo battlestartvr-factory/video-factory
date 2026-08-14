@@ -1,29 +1,61 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback } from "react";
-import { useRouter } from "next/navigation";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { useParams, useRouter } from "next/navigation";
 import { MessageSquare, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { EmptyState, Skeleton } from "@/components/ui/states";
 import { ChatMessageView } from "@/components/chat/chat-message";
 import { ChatComposer } from "@/components/chat/chat-composer";
+import { ErrorCard } from "@/components/chat/error-card";
 import { t } from "@/lib/i18n/dictionary";
-import type { Chat, ChatMessage, Preset } from "@/lib/types/workspace";
+import {
+  applyFetchedMessages,
+  mergeMessagesById,
+  replaceOptimisticUserMessage,
+} from "@/lib/chat/messages-state";
+import type { Chat, ChatMessage, ErrorCardData, Preset } from "@/lib/types/workspace";
 
 interface ChatPageClientProps {
   chatId?: string;
   projectId?: string;
 }
 
-export function ChatPageClient({ chatId: initialChatId, projectId }: ChatPageClientProps) {
+const EMPTY_MESSAGES: ChatMessage[] = [];
+
+function optimisticUserMessage(chatId: string, content: string): ChatMessage {
+  return {
+    id: `optimistic-${crypto.randomUUID()}`,
+    chat_id: chatId,
+    role: "user",
+    content,
+    metadata: {},
+    created_at: new Date().toISOString(),
+  };
+}
+
+export function ChatPageClient({ chatId: chatIdProp, projectId }: ChatPageClientProps) {
   const router = useRouter();
-  const [chatId, setChatId] = useState(initialChatId);
+  const params = useParams();
+  const routeChatId =
+    chatIdProp ??
+    (typeof params.chatId === "string" ? params.chatId : undefined);
+  const [pendingChatId, setPendingChatId] = useState<string | undefined>();
+  const chatId = routeChatId ?? pendingChatId;
   const [chat, setChat] = useState<Chat | null>(null);
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [messagesByChat, setMessagesByChat] = useState<Record<string, ChatMessage[]>>({});
+  const messages = useMemo(
+    () => (chatId ? (messagesByChat[chatId] ?? EMPTY_MESSAGES) : EMPTY_MESSAGES),
+    [chatId, messagesByChat],
+  );
   const [presets, setPresets] = useState<Preset[]>([]);
-  const [loading, setLoading] = useState(!!initialChatId);
   const [sending, setSending] = useState(false);
+  const [sendError, setSendError] = useState<ErrorCardData | null>(null);
+  const [loadedChatIds, setLoadedChatIds] = useState<Record<string, boolean>>({});
+  const loading = !!chatId && !loadedChatIds[chatId] && messages.length === 0;
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const fetchGenerationRef = useRef(0);
+  const displayedChat = chat?.id === chatId ? chat : null;
 
   const scrollToBottom = useCallback(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -37,18 +69,43 @@ export function ChatPageClient({ chatId: initialChatId, projectId }: ChatPageCli
 
   useEffect(() => {
     if (!chatId) return;
+    const requestGeneration = ++fetchGenerationRef.current;
+    const controller = new AbortController();
     let cancelled = false;
+
     void (async () => {
-      const [chatRes, msgRes] = await Promise.all([
-        fetch(`/api/chats/${chatId}`).then((r) => r.json()),
-        fetch(`/api/chats/${chatId}/messages`).then((r) => r.json()),
-      ]);
-      if (cancelled) return;
-      if (chatRes.ok) setChat(chatRes.data);
-      if (msgRes.ok) setMessages(msgRes.data.messages);
-      setLoading(false);
+      try {
+        const [chatRes, msgRes] = await Promise.all([
+          fetch(`/api/chats/${chatId}`, { cache: "no-store", signal: controller.signal }).then((r) => r.json()),
+          fetch(`/api/chats/${chatId}/messages`, { cache: "no-store", signal: controller.signal }).then((r) => r.json()),
+        ]);
+        if (cancelled) return;
+        if (chatRes.ok) setChat(chatRes.data);
+        if (msgRes.ok) {
+          setMessagesByChat((prev) => ({
+            ...prev,
+            [chatId]: applyFetchedMessages({
+              fetched: msgRes.data.messages as ChatMessage[],
+              local: prev[chatId] ?? [],
+              requestGeneration,
+              latestGeneration: fetchGenerationRef.current,
+              chatId,
+            }),
+          }));
+        }
+      } catch {
+        if (controller.signal.aborted) return;
+      } finally {
+        if (!cancelled && requestGeneration === fetchGenerationRef.current) {
+          setLoadedChatIds((prev) => ({ ...prev, [chatId]: true }));
+        }
+      }
     })();
-    return () => { cancelled = true; };
+
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
   }, [chatId]);
 
   useEffect(() => {
@@ -63,12 +120,17 @@ export function ChatPageClient({ chatId: initialChatId, projectId }: ChatPageCli
     });
     const data = await res.json();
     if (data.ok) {
-      setChatId(data.data.id);
+      setPendingChatId(data.data.id);
+      setChat(data.data);
+      setSendError(null);
       router.push(`/chat/${data.data.id}`);
     }
   };
 
   const handleSend = async (content: string, options: { modelId?: string; presetId?: string; files: File[] }) => {
+    if (sending) return;
+    setSendError(null);
+
     let activeChatId = chatId;
     if (!activeChatId) {
       const res = await fetch("/api/chats", {
@@ -77,24 +139,60 @@ export function ChatPageClient({ chatId: initialChatId, projectId }: ChatPageCli
         body: JSON.stringify({ projectId: projectId ?? null, modelId: options.modelId, presetId: options.presetId }),
       });
       const data = await res.json();
-      if (!data.ok) return;
-      activeChatId = data.data.id;
-      setChatId(activeChatId);
+      if (!data.ok) {
+        setSendError({
+          code: data.error?.code,
+          message: data.error?.message ?? t("common.error"),
+        });
+        return;
+      }
+      activeChatId = data.data.id as string;
+      setPendingChatId(activeChatId);
       setChat(data.data);
-      router.push(`/chat/${activeChatId}`);
     }
 
+    if (!activeChatId) return;
+
+    const optimistic = optimisticUserMessage(activeChatId, content);
+    setMessagesByChat((prev) => ({
+      ...prev,
+      [activeChatId]: mergeMessagesById(prev[activeChatId] ?? [], [optimistic]),
+    }));
     setSending(true);
-    const res = await fetch(`/api/chats/${activeChatId}/messages`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ content, modelId: options.modelId, presetId: options.presetId }),
-    });
-    const data = await res.json();
-    if (data.ok) {
-      setMessages((prev) => [...prev, data.data.userMessage, data.data.assistantMessage]);
+
+    try {
+      const res = await fetch(`/api/chats/${activeChatId}/messages`, {
+        method: "POST",
+        cache: "no-store",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content, modelId: options.modelId, presetId: options.presetId }),
+      });
+      const data = await res.json();
+      if (data.ok) {
+        const userMessage = data.data.userMessage as ChatMessage;
+        const assistantMessage = data.data.assistantMessage as ChatMessage;
+        setMessagesByChat((prev) => ({
+          ...prev,
+          [activeChatId]: replaceOptimisticUserMessage(
+            prev[activeChatId] ?? [],
+            optimistic.id,
+            [userMessage, assistantMessage],
+          ),
+        }));
+      } else {
+        setSendError({
+          code: data.error?.code,
+          message: data.error?.message ?? t("common.error"),
+        });
+      }
+    } catch {
+      setSendError({ message: t("common.error") });
+    } finally {
+      setSending(false);
+      if (!chatId && activeChatId) {
+        router.push(`/chat/${activeChatId}`);
+      }
     }
-    setSending(false);
   };
 
   if (!chatId) {
@@ -122,7 +220,7 @@ export function ChatPageClient({ chatId: initialChatId, projectId }: ChatPageCli
     <div className="flex flex-1 flex-col">
       <header className="flex items-center justify-between border-b border-border px-4 py-3">
         <h1 className="truncate text-sm font-medium text-foreground">
-          {chat?.title ?? t("chat.title")}
+          {displayedChat?.title ?? t("chat.title")}
         </h1>
         <Button variant="ghost" size="sm" onClick={createChat}>
           <Plus className="h-4 w-4" />
@@ -131,18 +229,23 @@ export function ChatPageClient({ chatId: initialChatId, projectId }: ChatPageCli
       </header>
 
       <div className="flex-1 overflow-y-auto">
-        {loading ? (
+        {loading && messages.length === 0 ? (
           <div className="space-y-4 p-4">
             <Skeleton className="h-16 w-full" />
             <Skeleton className="h-16 w-full" />
           </div>
-        ) : messages.length === 0 ? (
+        ) : messages.length === 0 && !sendError ? (
           <EmptyState title={t("chat.empty")} description={t("chat.emptyDescription")} />
         ) : (
           <div className="mx-auto max-w-3xl divide-y divide-border-subtle">
             {messages.map((msg) => (
               <ChatMessageView key={msg.id} message={msg} />
             ))}
+            {sendError ? (
+              <div className="px-4 py-4">
+                <ErrorCard error={sendError} />
+              </div>
+            ) : null}
             <div ref={messagesEndRef} />
           </div>
         )}
@@ -152,8 +255,8 @@ export function ChatPageClient({ chatId: initialChatId, projectId }: ChatPageCli
         onSend={handleSend}
         disabled={sending}
         presets={presets}
-        defaultModelId={chat?.model_id ?? undefined}
-        defaultPresetId={chat?.preset_id ?? undefined}
+        defaultModelId={displayedChat?.model_id ?? undefined}
+        defaultPresetId={displayedChat?.preset_id ?? undefined}
       />
     </div>
   );
