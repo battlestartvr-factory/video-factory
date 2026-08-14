@@ -9,6 +9,7 @@ import { DEFAULT_LLM_MODEL, DEFAULT_REASONING_LEVEL } from "@/lib/agent/config";
 import { ModelSelector } from "./model-selector";
 import { ReasoningSelector } from "./reasoning-selector";
 import { PresetSelector } from "./preset-selector";
+import { ContextInspector } from "./context-inspector";
 import type { Preset } from "@/lib/types/workspace";
 
 interface PendingFile {
@@ -182,6 +183,14 @@ export function ChatComposer({
                 onChange={setPresetId}
                 presets={presets.filter((p) => p.type === "chat")}
               />
+              {chatId ? (
+                <ContextInspector
+                  chatId={chatId}
+                  modelId={modelId}
+                  presetId={presetId}
+                  draftContent={content}
+                />
+              ) : null}
             </div>
             <Button
               size="icon"

@@ -21,10 +21,12 @@ export default function PersonalizationSettingsPage() {
   }, []);
 
   const handleSave = async () => {
+    const rest = { ...settings };
+    delete rest.globalInstructions;
     await fetch("/api/preferences", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ personalization: settings }),
+      body: JSON.stringify({ personalization: rest }),
     });
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
@@ -33,7 +35,10 @@ export default function PersonalizationSettingsPage() {
   return (
     <SettingsLayout>
       <div className="mx-auto max-w-2xl space-y-6">
-        <h1 className="text-2xl font-bold">{t("settings.personalization")}</h1>
+        <div>
+          <h1 className="text-2xl font-bold">{t("settings.personalization")}</h1>
+          <p className="mt-1 text-sm text-muted-foreground">{t("settings.personalizationDescription")}</p>
+        </div>
 
         <Card>
           <CardHeader><CardTitle>{t("settings.aboutMe")}</CardTitle></CardHeader>
@@ -43,18 +48,6 @@ export default function PersonalizationSettingsPage() {
               onChange={(e) => setSettings((s) => ({ ...s, aboutMe: e.target.value }))}
               rows={4}
               placeholder="Расскажите о себе, вашей роли и компании…"
-            />
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader><CardTitle>{t("settings.globalInstructions")}</CardTitle></CardHeader>
-          <CardContent>
-            <Textarea
-              value={settings.globalInstructions ?? ""}
-              onChange={(e) => setSettings((s) => ({ ...s, globalInstructions: e.target.value }))}
-              rows={4}
-              placeholder="Глобальные инструкции для AI-агента…"
             />
           </CardContent>
         </Card>
@@ -85,13 +78,13 @@ export default function PersonalizationSettingsPage() {
         </Card>
 
         <Card>
-          <CardHeader><CardTitle>{t("settings.agentBehavior")}</CardTitle></CardHeader>
+          <CardHeader><CardTitle>{t("settings.behaviorPreferences")}</CardTitle></CardHeader>
           <CardContent>
             <Textarea
               value={settings.agentBehavior ?? ""}
               onChange={(e) => setSettings((s) => ({ ...s, agentBehavior: e.target.value }))}
               rows={3}
-              placeholder="Как агент должен себя вести…"
+              placeholder="Ваши предпочтения по поведению агента…"
             />
           </CardContent>
         </Card>

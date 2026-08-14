@@ -177,9 +177,21 @@ export interface UserPreferences {
 export interface PersonalizationSettings {
   aboutMe?: string;
   communicationStyle?: string;
+  /** @deprecated Moved to agent_configs — ignored in context assembly */
   globalInstructions?: string;
   preferredLanguage?: string;
+  /** User behavior preferences (shown as «Предпочтения поведения») */
   agentBehavior?: string;
+}
+
+export interface AgentConfigRecord {
+  id: string;
+  user_id: string;
+  name: string;
+  system_prompt: string;
+  version: number;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface AppearanceSettings {

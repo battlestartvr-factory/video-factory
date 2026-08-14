@@ -1,25 +1,25 @@
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { CONTEXT_BUDGET } from "./config";
-import { assembleContext, type ContextSources } from "./context-builder";
+import { buildAgentContext, type AgentContext, type ContextSources } from "./context-builder";
+import { getOrCreateAgentConfig } from "./agent-config-service";
 import { listMemoryForContext } from "@/lib/memory";
 import { searchKnowledge } from "@/lib/knowledge";
 import { truncateText } from "./redaction";
 import type { Chat, ChatAttachment, ChatMessage, Preset, UserPreferences } from "@/lib/types/workspace";
 import type { Project } from "@/lib/types/database";
-import type { AssembledContext } from "./context-builder";
 
-export async function loadAgentContext(input: {
+export async function loadContextSources(input: {
   userId: string;
   chat: Chat;
   currentMessage: ChatMessage;
   modelId: string;
   presetId?: string | null;
   attachmentIds?: string[];
-}): Promise<AssembledContext> {
+}): Promise<ContextSources> {
   const service = createSupabaseServiceClient();
   const projectId = input.chat.project_id;
 
-  const [preferencesRes, presetRes, projectRes, memory, messagesRes] = await Promise.all([
+  const [preferencesRes, presetRes, projectRes, memory, messagesRes, agentConfig] = await Promise.all([
     service.from("user_preferences").select("*").eq("user_id", input.userId).maybeSingle(),
     input.presetId
       ? service.from("presets").select("*").eq("id", input.presetId).maybeSingle()
@@ -36,12 +36,10 @@ export async function loadAgentContext(input: {
       .eq("chat_id", input.chat.id)
       .order("created_at", { ascending: false })
       .limit(CONTEXT_BUDGET.recentMessages),
+    getOrCreateAgentConfig(input.userId),
   ]);
 
   const preset = presetRes.data as Preset | null;
-  if (preset && !preset.is_system && preset.user_id !== input.userId) {
-    // ignore foreign presets
-  }
 
   let attachments: ChatAttachment[] = [];
   const ids = input.attachmentIds?.length
@@ -75,10 +73,11 @@ export async function loadAgentContext(input: {
     }
   }
 
-  const sources: ContextSources = {
+  return {
     chat: input.chat,
     project: (projectRes.data as Project | null) ?? null,
     preset: preset && (preset.is_system || preset.user_id === input.userId) ? preset : null,
+    agentConfig,
     preferences: (preferencesRes.data as UserPreferences | null) ?? null,
     memory,
     knowledgeNotes,
@@ -87,6 +86,16 @@ export async function loadAgentContext(input: {
     currentMessage: input.currentMessage,
     modelId: input.modelId,
   };
+}
 
-  return assembleContext(sources);
+export async function loadAgentContext(input: {
+  userId: string;
+  chat: Chat;
+  currentMessage: ChatMessage;
+  modelId: string;
+  presetId?: string | null;
+  attachmentIds?: string[];
+}): Promise<AgentContext> {
+  const sources = await loadContextSources(input);
+  return buildAgentContext(sources);
 }

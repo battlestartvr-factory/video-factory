@@ -16,6 +16,7 @@ import {
 } from "@/lib/chat/messages-state";
 import type { Chat, ChatMessage, ErrorCardData, Preset, AgentUiEvent } from "@/lib/types/workspace";
 import { AgentActivityPanel } from "@/components/chat/agent-activity-panel";
+import { ChatActionsMenu } from "@/components/chat/chat-actions-menu";
 import type { StreamEvent } from "@/lib/agent/stream-events.types";
 
 interface ChatPageClientProps {
@@ -308,10 +309,19 @@ export function ChatPageClient({ chatId: chatIdProp, projectId }: ChatPageClient
         <h1 className="truncate text-sm font-medium text-foreground">
           {displayedChat?.title ?? t("chat.title")}
         </h1>
-        <Button variant="ghost" size="sm" onClick={createChat}>
-          <Plus className="h-4 w-4" />
-          {t("chat.newChat")}
-        </Button>
+        <div className="flex items-center gap-1">
+          {chatId && displayedChat ? (
+            <ChatActionsMenu
+              chatId={chatId}
+              title={displayedChat.title}
+              onRenamed={(title) => setChat((c) => (c ? { ...c, title } : c))}
+            />
+          ) : null}
+          <Button variant="ghost" size="sm" onClick={createChat}>
+            <Plus className="h-4 w-4" />
+            {t("chat.newChat")}
+          </Button>
+        </div>
       </header>
 
       <div className="flex-1 overflow-y-auto">

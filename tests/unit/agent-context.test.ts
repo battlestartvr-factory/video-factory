@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { assembleSystemPrompt, historyToAgentMessages, modelSupportsVision } from "@/lib/agent/context-builder";
+import { buildAgentContext, historyToAgentMessages, modelSupportsVision } from "@/lib/agent/context-builder";
+import { DEFAULT_GLOBAL_AGENT_INSTRUCTIONS } from "@/lib/agent/default-agent-instructions";
 import { CONTEXT_BUDGET } from "@/lib/agent/config";
-import { BASE_AGENT_INSTRUCTIONS } from "@/lib/agent/system-prompt";
-import type { Chat, ChatMessage, MemoryItem } from "@/lib/types/workspace";
+import type { AgentConfig } from "@/lib/agent/agent-config-service";
+import type { Chat, ChatMessage } from "@/lib/types/workspace";
 
 const chat: Chat = {
   id: "c1",
@@ -18,12 +19,23 @@ const chat: Chat = {
   updated_at: "",
 };
 
+const agentConfig: AgentConfig = {
+  id: "cfg-1",
+  user_id: "u1",
+  name: "default",
+  system_prompt: DEFAULT_GLOBAL_AGENT_INSTRUCTIONS,
+  version: 1,
+  created_at: "",
+  updated_at: "",
+};
+
 describe("context engine", () => {
-  it("includes base instructions and injection warning", () => {
-    const prompt = assembleSystemPrompt({
+  it("includes runtime policy and agent instructions", () => {
+    const ctx = buildAgentContext({
       chat,
       project: null,
       preset: null,
+      agentConfig,
       preferences: null,
       memory: [],
       knowledgeNotes: [],
@@ -39,17 +51,18 @@ describe("context engine", () => {
       },
       modelId: "gemini-3-flash",
     });
-    expect(prompt).toContain("Universal Agent");
-    expect(prompt).toContain("UNTRUSTED CONTENT");
-    expect(prompt.startsWith(BASE_AGENT_INSTRUCTIONS.slice(0, 40))).toBe(true);
-    expect(prompt.length).toBeLessThanOrEqual(CONTEXT_BUDGET.maxSystemPromptChars);
+    expect(ctx.instructions).toContain("Runtime Policy");
+    expect(ctx.instructions).toContain("Universal Agent");
+    expect(ctx.instructions).toContain("UNTRUSTED CONTENT");
+    expect(ctx.instructions.startsWith("\n\n## Runtime Policy")).toBe(true);
+    expect(ctx.instructions.length).toBeLessThanOrEqual(CONTEXT_BUDGET.maxSystemPromptChars);
   });
 
   it("caps memory and does not treat a global chat as a project", () => {
-    const memory: MemoryItem[] = Array.from({ length: 30 }, (_, i) => ({
+    const memory = Array.from({ length: 30 }, (_, i) => ({
       id: String(i),
       user_id: "u1",
-      scope: "global",
+      scope: "global" as const,
       project_id: null,
       content: `memory-${i} ${"word ".repeat(200)}`,
       category: null,
@@ -60,13 +73,14 @@ describe("context engine", () => {
       created_at: "",
       updated_at: "",
     }));
-    const prompt = assembleSystemPrompt({
+    const ctx = buildAgentContext({
       chat,
       project: null,
       preset: null,
+      agentConfig,
       preferences: {
         user_id: "u1",
-        personalization: { aboutMe: "Designer", globalInstructions: "Be brief" },
+        personalization: { aboutMe: "Designer" },
         appearance: {},
         created_at: "",
         updated_at: "",
@@ -85,9 +99,9 @@ describe("context engine", () => {
       },
       modelId: "gemini-3-flash",
     });
-    expect(prompt).toContain("not inside a project");
-    expect(prompt).toContain("About user");
-    expect(prompt.length).toBeLessThanOrEqual(CONTEXT_BUDGET.maxSystemPromptChars);
+    expect(ctx.instructions).toContain("not inside a project");
+    expect(ctx.instructions).toContain("About user");
+    expect(ctx.instructions.length).toBeLessThanOrEqual(CONTEXT_BUDGET.maxSystemPromptChars);
   });
 
   it("limits recent history", () => {

@@ -20,6 +20,7 @@ import {
 import { cn } from "@/lib/utils";
 import { t } from "@/lib/i18n/dictionary";
 import { useTheme } from "@/components/providers/theme-provider";
+import { ChatActionsMenu } from "@/components/chat/chat-actions-menu";
 import type { Chat } from "@/lib/types/workspace";
 import type { Project } from "@/lib/types/database";
 
@@ -130,14 +131,18 @@ export function Sidebar({ recentProjects = [], recentChats = [] }: SidebarProps)
               {t("nav.recentChats")}
             </p>
             {recentChats.slice(0, 5).map((chat) => (
-              <Link
-                key={chat.id}
-                href={`/chat/${chat.id}`}
-                onClick={closeMobile}
-                className="block truncate rounded-lg px-3 py-1.5 text-xs text-muted-foreground hover:bg-surface-hover hover:text-foreground"
-              >
-                {chat.title}
-              </Link>
+              <div key={chat.id} className="group relative flex items-center">
+                <Link
+                  href={`/chat/${chat.id}`}
+                  onClick={closeMobile}
+                  className="block flex-1 truncate rounded-lg px-3 py-1.5 pr-8 text-xs text-muted-foreground hover:bg-surface-hover hover:text-foreground"
+                >
+                  {chat.title}
+                </Link>
+                <div className="absolute right-1 top-1/2 -translate-y-1/2">
+                  <ChatActionsMenu chatId={chat.id} title={chat.title} variant="sidebar" />
+                </div>
+              </div>
             ))}
           </div>
         )}

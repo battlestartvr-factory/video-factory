@@ -8,6 +8,7 @@ import { CONTEXT_LABELS, createAgentEvent } from "./events";
 import { createAgentProvider, AgentProviderError, resolveAgentModel, resolveAgentReasoning } from "./provider";
 import { getChatReasoningFromMetadata } from "@/lib/models/kie/registry";
 import { loadAgentContext } from "./conversation";
+import { assertCurrentUserMessage, AgentContextError } from "./context-builder";
 import { runAgentToolLoop } from "./loop";
 import { getToolDefinitions } from "./tools";
 import { redactForStorage } from "./redaction";
@@ -178,7 +179,20 @@ export async function runUniversalAgent(input: UniversalAgentInput): Promise<Uni
     return fail(AGENT_ERROR_CODES.INTERNAL_ERROR, "Не удалось собрать контекст");
   }
 
-  const messages: AgentMessage[] = [...context.history, context.currentUserMessage];
+  logger.info("agent_context_built", {
+    agent_run_id: agentRunId,
+    runtime_policy_version: context.manifest.runtime_policy_version,
+    agent_config_version: context.manifest.agent_config_version,
+    personalization_present: context.manifest.personalization_present,
+    global_memory_items: context.manifest.global_memory_items,
+    project_id: context.manifest.project_id,
+    project_memory_items: context.manifest.project_memory_items,
+    retrieved_chunks_count: context.manifest.knowledge_chunks,
+    messages_count: context.manifest.chat_messages,
+    current_user_chars: context.manifest.current_user_message_chars,
+    model_id: context.manifest.model,
+  });
+
   const tools = getToolDefinitions();
   const toolCtx: ToolContext = {
     requestId: input.requestId,
@@ -193,16 +207,21 @@ export async function runUniversalAgent(input: UniversalAgentInput): Promise<Uni
 
   let loopResult;
   try {
+    assertCurrentUserMessage(context.currentTurn);
+    const providerMessages: AgentMessage[] = [...context.messages, context.currentTurn];
     loopResult = await runAgentToolLoop({
       provider,
       model,
-      system: context.systemPrompt,
-      messages,
+      system: context.instructions,
+      messages: providerMessages,
       tools,
       toolContext: toolCtx,
       reasoningLevel,
     });
   } catch (error) {
+    if (error instanceof AgentContextError && error.code === AGENT_ERROR_CODES.CURRENT_USER_MESSAGE_MISSING) {
+      return fail(error.code, "Текущее сообщение пользователя отсутствует");
+    }
     if (error instanceof AgentProviderError) {
       return fail(error.code, providerNotConfiguredMessage(error.code));
     }
@@ -325,6 +344,7 @@ export async function runUniversalAgent(input: UniversalAgentInput): Promise<Uni
     .update({
       status: "completed",
       finished_at: new Date().toISOString(),
+      metadata: context.manifest,
       usage: {
         prompt_tokens: loopResult.usage.promptTokens ?? 0,
         completion_tokens: loopResult.usage.completionTokens ?? 0,

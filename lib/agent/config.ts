@@ -12,6 +12,8 @@ export const CONTEXT_BUDGET = {
   maxKnowledgeChars: 4000,
   maxAttachmentTextChars: 6000,
   maxSystemPromptChars: 12000,
+  maxRuntimePolicyChars: 4000,
+  maxAgentInstructionsChars: 6000,
   maxPersonalizationChars: 2000,
   maxProjectInstructionsChars: 4000,
   maxSummaryChars: 2000,
@@ -60,4 +62,5 @@ export const AGENT_ERROR_CODES = {
   PROVIDER_ERROR: "PROVIDER_ERROR",
   EXTRACT_UNAVAILABLE: "EXTRACT_UNAVAILABLE",
   INTERNAL_ERROR: "INTERNAL_ERROR",
+  CURRENT_USER_MESSAGE_MISSING: "AGENT_CURRENT_USER_MESSAGE_MISSING",
 } as const;
