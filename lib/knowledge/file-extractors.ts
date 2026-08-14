@@ -1,6 +1,6 @@
 import "server-only";
 import mammoth from "mammoth";
-import { PDFParse } from "pdf-parse";
+import { extractText } from "unpdf";
 import { CONTENT_LIMITS } from "@/lib/agent/config";
 import { chunkText, isExtractableMime, normalizeExtractedText } from "./extraction";
 
@@ -56,18 +56,26 @@ export async function extractTextFromBuffer(
   }
 }
 
+function mergePdfPageText(pages: string[]): string {
+  return pages
+    .map((page, index) => {
+      const trimmed = page.trim();
+      if (!trimmed) return "";
+      if (pages.length === 1) return trimmed;
+      return `[Page ${index + 1}]\n${trimmed}`;
+    })
+    .filter(Boolean)
+    .join("\n\n");
+}
+
 async function extractPdf(buffer: Buffer): Promise<ExtractionResult> {
-  const parser = new PDFParse({ data: buffer });
-  try {
-    const result = await parser.getText();
-    const text = normalizeExtractedText(result.text ?? "");
-    if (text.trim().length < MIN_MEANINGFUL_TEXT_CHARS) {
-      return { text: "", needsOcr: true };
-    }
-    return { text, needsOcr: false };
-  } finally {
-    await parser.destroy();
+  const { text: rawText } = await extractText(new Uint8Array(buffer), { mergePages: false });
+  const pages = Array.isArray(rawText) ? rawText : [rawText];
+  const text = normalizeExtractedText(mergePdfPageText(pages));
+  if (text.trim().length < MIN_MEANINGFUL_TEXT_CHARS) {
+    return { text: "", needsOcr: true };
   }
+  return { text, needsOcr: false };
 }
 
 async function extractDocx(buffer: Buffer): Promise<ExtractionResult> {

@@ -68,7 +68,9 @@ export async function PUT(request: Request) {
       driveFileId: body.driveFileId,
     });
     return apiSuccess(doc);
-  } catch {
-    return apiError("PROCESS_FAILED", "Не удалось обработать документ", 500, requestId);
+  } catch (err) {
+    const message =
+      err instanceof Error && err.message ? err.message : "Не удалось обработать документ";
+    return apiError("DOCUMENT_EXTRACTION_FAILED", message, 500, requestId);
   }
 }
