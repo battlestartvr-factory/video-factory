@@ -1,10 +1,5 @@
-export { chunkText, normalizeExtractedText, htmlToText, isExtractableMime } from "./extraction";
-export {
-  getOrCreateKnowledgeBase,
-  listKnowledgeDocuments,
-  addKnowledgeDocument,
-  searchKnowledge,
-  getKnowledgeDocument,
-  deleteKnowledgeDocument,
-} from "./knowledge-service";
-export type { KnowledgeHit, KnowledgeScope } from "./knowledge-service";
+export * from "./knowledge-service";
+export * from "./extraction";
+export * from "./retrieval";
+export * from "./document-processor";
+export * from "./file-extractors";

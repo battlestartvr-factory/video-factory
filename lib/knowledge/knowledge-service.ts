@@ -2,32 +2,62 @@ import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { CONTEXT_BUDGET } from "@/lib/agent/config";
 import { chunkText, normalizeExtractedText } from "./extraction";
 import { assertProjectAccess } from "@/lib/projects/access";
+import {
+  getDriveStorageProvider,
+  isDriveStorageConfigured,
+  resolveKnowledgeFolderSegments,
+} from "@/lib/storage/drive-provider";
+import { processKnowledgeDocument } from "./document-processor";
+import {
+  combineRankScore,
+  extractSearchTerms,
+  normalizeSearchQuery,
+  scoreChunkContent,
+  scoreFilename,
+} from "./retrieval";
 import type { KnowledgeBase, KnowledgeDocument, SourceCitation } from "@/lib/types/workspace";
 
 export type KnowledgeScope = "global" | "project" | "all";
 
 export interface KnowledgeHit {
-  document_id: string;
+  documentId: string;
+  filename: string;
   title: string;
-  chunk: string;
+  chunkId: string;
+  chunkIndex: number;
+  text: string;
   score: number;
+  scope: KnowledgeScope;
   source: "knowledge";
-  chunk_index: number;
 }
 
 function escapeIlike(value: string): string {
   return value.replace(/[%_\\]/g, "\\$&");
 }
 
-function scoreChunk(content: string, query: string): number {
-  const hay = content.toLowerCase();
-  const terms = query.toLowerCase().split(/\s+/).filter((term) => term.length > 1);
-  if (!terms.length) return hay.includes(query.toLowerCase()) ? 1 : 0;
-  let hits = 0;
-  for (const term of terms) {
-    if (hay.includes(term)) hits += 1;
+/** @deprecated use scoreChunkContent from retrieval.ts */
+export function scoreChunk(content: string, query: string): number {
+  return scoreChunkContent(content, query, extractSearchTerms(query));
+}
+
+async function resolveBaseIds(
+  userId: string,
+  scope: KnowledgeScope,
+  projectId: string | null,
+): Promise<string[]> {
+  const ids: string[] = [];
+  const includeGlobal = scope === "global" || scope === "all";
+  const includeProject = (scope === "project" || scope === "all") && Boolean(projectId);
+
+  if (includeGlobal) {
+    const globalBase = await getOrCreateKnowledgeBase(userId, null);
+    ids.push(globalBase.id);
   }
-  return hits / terms.length;
+  if (includeProject && projectId) {
+    const projectBase = await getOrCreateKnowledgeBase(userId, projectId);
+    ids.push(projectBase.id);
+  }
+  return ids;
 }
 
 export async function getOrCreateKnowledgeBase(
@@ -55,26 +85,6 @@ export async function getOrCreateKnowledgeBase(
   return data as KnowledgeBase;
 }
 
-async function resolveBaseIds(
-  userId: string,
-  scope: KnowledgeScope,
-  projectId: string | null,
-): Promise<string[]> {
-  const ids: string[] = [];
-  const includeGlobal = scope === "global" || scope === "all";
-  const includeProject = (scope === "project" || scope === "all") && Boolean(projectId);
-
-  if (includeGlobal) {
-    const globalBase = await getOrCreateKnowledgeBase(userId, null);
-    ids.push(globalBase.id);
-  }
-  if (includeProject && projectId) {
-    const projectBase = await getOrCreateKnowledgeBase(userId, projectId);
-    ids.push(projectBase.id);
-  }
-  return ids;
-}
-
 export async function listKnowledgeDocuments(input: {
   userId: string;
   scope?: KnowledgeScope;
@@ -93,6 +103,87 @@ export async function listKnowledgeDocuments(input: {
   return (data ?? []) as KnowledgeDocument[];
 }
 
+export async function createKnowledgeUploadSession(input: {
+  userId: string;
+  filename: string;
+  mimeType: string;
+  sizeBytes: number;
+  projectId?: string | null;
+  tags?: string[];
+}): Promise<{ document: KnowledgeDocument; uploadUrl: string }> {
+  if (!isDriveStorageConfigured()) {
+    throw new Error("GOOGLE_DRIVE_NOT_CONFIGURED");
+  }
+
+  const base = await getOrCreateKnowledgeBase(input.userId, input.projectId ?? null);
+  const drive = getDriveStorageProvider();
+  const folderId = await drive.ensureFolderPath(resolveKnowledgeFolderSegments(input.projectId));
+  const session = await drive.createResumableUpload({
+    filename: input.filename,
+    mimeType: input.mimeType,
+    sizeBytes: input.sizeBytes,
+    folderId,
+  });
+
+  const service = createSupabaseServiceClient();
+  const { data: doc, error } = await service
+    .from("knowledge_documents")
+    .insert({
+      knowledge_base_id: base.id,
+      user_id: input.userId,
+      filename: input.filename,
+      mime_type: input.mimeType,
+      size_bytes: input.sizeBytes,
+      status: "uploading",
+      tags: input.tags ?? [],
+      source: "upload",
+      storage_provider: "google_drive",
+      metadata: { upload_folder_id: folderId },
+    })
+    .select()
+    .single();
+
+  if (error || !doc) throw new Error("Failed to create knowledge document");
+
+  return {
+    document: doc as KnowledgeDocument,
+    uploadUrl: session.uploadUrl,
+  };
+}
+
+export async function finalizeKnowledgeUpload(input: {
+  userId: string;
+  documentId: string;
+  driveFileId: string;
+}): Promise<KnowledgeDocument> {
+  const service = createSupabaseServiceClient();
+  const { data: doc } = await service
+    .from("knowledge_documents")
+    .select("*")
+    .eq("id", input.documentId)
+    .eq("user_id", input.userId)
+    .single();
+
+  if (!doc) throw new Error("DOCUMENT_NOT_FOUND");
+
+  const drive = getDriveStorageProvider();
+  const meta = await drive.finalizeUpload(input.driveFileId);
+
+  await service
+    .from("knowledge_documents")
+    .update({
+      status: "uploaded",
+      drive_file_id: input.driveFileId,
+      storage_path: input.driveFileId,
+      drive_web_url: meta.webViewUrl,
+      checksum_sha256: meta.checksumSha256,
+      size_bytes: meta.sizeBytes ?? doc.size_bytes,
+    })
+    .eq("id", input.documentId);
+
+  return processKnowledgeDocument(input.documentId);
+}
+
 export async function addKnowledgeDocument(input: {
   userId: string;
   filename: string;
@@ -105,6 +196,15 @@ export async function addKnowledgeDocument(input: {
 }): Promise<KnowledgeDocument> {
   const base = await getOrCreateKnowledgeBase(input.userId, input.projectId ?? null);
   const service = createSupabaseServiceClient();
+
+  if (!input.content && isDriveStorageConfigured()) {
+    throw new Error("BINARY_UPLOAD_REQUIRES_DRIVE_SESSION");
+  }
+
+  if (!input.content) {
+    throw new Error("CONTENT_REQUIRED");
+  }
+
   const { data: doc, error } = await service
     .from("knowledge_documents")
     .insert({
@@ -121,9 +221,7 @@ export async function addKnowledgeDocument(input: {
     .single();
   if (error || !doc) throw new Error("Failed to create knowledge document");
 
-  const textContent =
-    input.content ?? `[Содержимое ${input.filename} будет извлечено при обработке]`;
-  const extracted = normalizeExtractedText(textContent);
+  const extracted = normalizeExtractedText(input.content);
   const chunks = chunkText(extracted);
 
   await service
@@ -131,6 +229,7 @@ export async function addKnowledgeDocument(input: {
     .update({
       status: "ready",
       extracted_text: extracted,
+      processed_at: new Date().toISOString(),
     })
     .eq("id", doc.id);
 
@@ -164,42 +263,117 @@ export async function searchKnowledge(input: {
   const baseIds = await resolveBaseIds(input.userId, scope, input.projectId ?? null);
   if (!baseIds.length) return { hits: [], sources: [] };
 
+  const query = normalizeSearchQuery(input.query);
+  const terms = extractSearchTerms(query);
+  const limit = input.limit ?? CONTEXT_BUDGET.knowledgeChunks;
   const service = createSupabaseServiceClient();
-  const { data: chunks } = await service
-    .from("knowledge_chunks")
-    .select("id, document_id, chunk_index, content, knowledge_documents!inner(filename, knowledge_base_id)")
-    .in("knowledge_documents.knowledge_base_id", baseIds)
-    .ilike("content", `%${escapeIlike(input.query.slice(0, 200))}%`)
-    .limit(80);
 
-  const scored = (chunks ?? [])
+  const { data: rpcRows, error: rpcError } = await service.rpc("search_knowledge_chunks", {
+    p_base_ids: baseIds,
+    p_query: query,
+    p_limit: Math.min(limit * 4, 80),
+  });
+
+  type SearchRow = {
+    chunk_id?: string;
+    id?: string;
+    document_id: string;
+    chunk_index: number;
+    content: string;
+    filename: string;
+    knowledge_base_id?: string;
+    fts_rank?: number;
+    filename_score?: number;
+    _content_score?: number;
+  };
+
+  let rows: SearchRow[] = (rpcRows as SearchRow[] | null) ?? [];
+
+  if (rpcError || !rows?.length) {
+    const { data: fallbackChunks } = await service
+      .from("knowledge_chunks")
+      .select(
+        "id, document_id, chunk_index, content, knowledge_documents!inner(filename, knowledge_base_id, status)",
+      )
+      .in("knowledge_documents.knowledge_base_id", baseIds)
+      .eq("knowledge_documents.status", "ready");
+
+    rows = (fallbackChunks ?? [])
+      .filter((row) => {
+        const doc = Array.isArray(row.knowledge_documents)
+          ? row.knowledge_documents[0]
+          : row.knowledge_documents;
+        const filename =
+          doc && typeof doc === "object" && "filename" in doc
+            ? String((doc as { filename: string }).filename)
+            : "";
+        const content = String(row.content);
+        const contentScore = scoreChunkContent(content, query, terms);
+        const fileScore = scoreFilename(filename, query, terms);
+        return contentScore > 0 || fileScore > 0;
+      })
+      .map((row) => {
+        const doc = Array.isArray(row.knowledge_documents)
+          ? row.knowledge_documents[0]
+          : row.knowledge_documents;
+        const filename =
+          doc && typeof doc === "object" && "filename" in doc
+            ? String((doc as { filename: string }).filename)
+            : "document";
+        const content = String(row.content);
+        return {
+          chunk_id: row.id,
+          document_id: row.document_id,
+          chunk_index: row.chunk_index,
+          content,
+          filename,
+          knowledge_base_id: (doc as { knowledge_base_id?: string })?.knowledge_base_id ?? "",
+          fts_rank: 0,
+          filename_score: scoreFilename(filename, query, terms),
+          _content_score: scoreChunkContent(content, query, terms),
+        };
+      });
+  }
+
+  const scored = (rows ?? [])
     .map((row) => {
-      const doc = Array.isArray(row.knowledge_documents)
-        ? row.knowledge_documents[0]
-        : row.knowledge_documents;
-      const filename =
-        doc && typeof doc === "object" && "filename" in doc
-          ? String((doc as { filename: string }).filename)
-          : "document";
+      const content = String(row.content ?? "");
+      const filename = String(row.filename ?? "document");
+      const contentScore =
+        "_content_score" in row && typeof row._content_score === "number"
+          ? row._content_score
+          : scoreChunkContent(content, query, terms);
+      const ftsRank = Number(row.fts_rank ?? 0);
+      const filenameScore = Number(row.filename_score ?? scoreFilename(filename, query, terms));
+      const score = combineRankScore({
+        ftsRank,
+        filenameScore,
+        contentScore,
+        isProjectScoped: scope === "project",
+      });
+
       return {
-        document_id: String(row.document_id),
+        documentId: String(row.document_id),
+        filename,
         title: filename,
-        chunk: String(row.content),
-        score: scoreChunk(String(row.content), input.query),
+        chunkId: String(row.chunk_id ?? row.id ?? ""),
+        chunkIndex: Number(row.chunk_index),
+        text: content,
+        score,
+        scope,
         source: "knowledge" as const,
-        chunk_index: Number(row.chunk_index),
       };
     })
     .filter((hit) => hit.score > 0)
     .sort((a, b) => b.score - a.score)
-    .slice(0, input.limit ?? CONTEXT_BUDGET.knowledgeChunks);
+    .slice(0, limit);
 
   const sources: SourceCitation[] = scored.map((hit) => ({
-    documentId: hit.document_id,
-    filename: hit.title,
+    documentId: hit.documentId,
+    filename: hit.filename,
     title: hit.title,
-    chunkIndex: hit.chunk_index,
-    excerpt: hit.chunk.slice(0, 300),
+    chunkIndex: hit.chunkIndex,
+    excerpt: hit.text.slice(0, 300),
     source: "knowledge",
   }));
 
@@ -222,6 +396,44 @@ export async function getKnowledgeDocument(
 
 export async function deleteKnowledgeDocument(userId: string, documentId: string): Promise<void> {
   const service = createSupabaseServiceClient();
+  const { data: doc } = await service
+    .from("knowledge_documents")
+    .select("*")
+    .eq("id", documentId)
+    .eq("user_id", userId)
+    .maybeSingle();
+
+  if (!doc) throw new Error("DOCUMENT_NOT_FOUND");
+
+  const typedDoc = doc as KnowledgeDocument & {
+    drive_file_id?: string | null;
+    metadata?: Record<string, unknown>;
+  };
+
+  if (typedDoc.drive_file_id && isDriveStorageConfigured()) {
+    try {
+      const drive = getDriveStorageProvider();
+      await drive.deleteFile(typedDoc.drive_file_id);
+    } catch (driveError) {
+      await service
+        .from("knowledge_documents")
+        .update({
+          status: "failed",
+          metadata: {
+            ...(typedDoc.metadata ?? {}),
+            delete_audit: {
+              drive_delete_failed: true,
+              drive_file_id: typedDoc.drive_file_id,
+              error: driveError instanceof Error ? driveError.message : "unknown",
+              attempted_at: new Date().toISOString(),
+            },
+          },
+        })
+        .eq("id", documentId);
+      throw new Error("DRIVE_DELETE_FAILED");
+    }
+  }
+
   const { error } = await service
     .from("knowledge_documents")
     .delete()
@@ -230,4 +442,4 @@ export async function deleteKnowledgeDocument(userId: string, documentId: string
   if (error) throw new Error("Failed to delete knowledge document");
 }
 
-export { scoreChunk, escapeIlike };
+export { escapeIlike };

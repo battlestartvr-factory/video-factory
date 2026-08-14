@@ -103,9 +103,12 @@ export interface AnyAgentTool {
 
 export type AgentEventType =
   | "run_started"
+  | "context_started"
+  | "context_completed"
   | "tool_started"
   | "tool_finished"
   | "generation_created"
+  | "finalizing"
   | "final"
   | "error";
 

@@ -114,3 +114,11 @@ export const knowledgeQuerySchema = z.object({
   query: z.string().min(1).max(2000),
   knowledgeBaseId: z.string().uuid().optional(),
 });
+
+export const knowledgeUploadSessionSchema = z.object({
+  filename: z.string().min(1),
+  mimeType: z.string().min(1),
+  sizeBytes: z.number().int().positive(),
+  projectId: z.string().uuid().optional().nullable(),
+  tags: z.array(z.string()).optional(),
+});

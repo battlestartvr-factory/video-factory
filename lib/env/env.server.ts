@@ -15,8 +15,12 @@ const serverEnvSchema = z.object({
     .enum(["true", "false"])
     .optional()
     .transform((v) => v === "true"),
+  GOOGLE_DRIVE_AUTH_MODE: z.enum(["service_account", "oauth_user"]).optional(),
   GOOGLE_DRIVE_CLIENT_EMAIL: z.string().optional().or(z.literal("")),
   GOOGLE_DRIVE_PRIVATE_KEY: z.string().optional().or(z.literal("")),
+  GOOGLE_DRIVE_CLIENT_ID: z.string().optional().or(z.literal("")),
+  GOOGLE_DRIVE_CLIENT_SECRET: z.string().optional().or(z.literal("")),
+  GOOGLE_DRIVE_REFRESH_TOKEN: z.string().optional().or(z.literal("")),
   GOOGLE_DRIVE_SHARED_FOLDER_ID: z.string().optional().or(z.literal("")),
   LOG_LEVEL: z.enum(["debug", "info", "warn", "error"]).default("info"),
   INGEST_PROXY_TOKEN: z.string().optional().or(z.literal("")),
@@ -51,12 +55,22 @@ export function isFactoryN8nConfigured(): boolean {
 }
 
 export function isGoogleDriveConfigured(): boolean {
-  return (
-    serverEnv.GOOGLE_DRIVE_INTEGRATION_ENABLED &&
-    Boolean(
-      serverEnv.GOOGLE_DRIVE_CLIENT_EMAIL &&
-        serverEnv.GOOGLE_DRIVE_PRIVATE_KEY,
-    )
+  if (!serverEnv.GOOGLE_DRIVE_INTEGRATION_ENABLED) return false;
+
+  const authMode = (serverEnv.GOOGLE_DRIVE_AUTH_MODE ?? "service_account").trim();
+  if (authMode === "oauth_user") {
+    return Boolean(
+      serverEnv.GOOGLE_DRIVE_CLIENT_ID &&
+        serverEnv.GOOGLE_DRIVE_CLIENT_SECRET &&
+        serverEnv.GOOGLE_DRIVE_REFRESH_TOKEN &&
+        serverEnv.GOOGLE_DRIVE_SHARED_FOLDER_ID,
+    );
+  }
+
+  return Boolean(
+    serverEnv.GOOGLE_DRIVE_CLIENT_EMAIL &&
+      serverEnv.GOOGLE_DRIVE_PRIVATE_KEY &&
+      serverEnv.GOOGLE_DRIVE_SHARED_FOLDER_ID,
   );
 }
 

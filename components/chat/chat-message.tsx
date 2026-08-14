@@ -8,6 +8,7 @@ import { TaskCard } from "./task-card";
 import { GenerationCard } from "./generation-card";
 import { ErrorCard } from "./error-card";
 import { SourcesCard } from "./sources-card";
+import { AgentActivityPanel } from "./agent-activity-panel";
 import { User, Bot } from "lucide-react";
 
 interface ChatMessageProps {
@@ -53,6 +54,9 @@ export function ChatMessageView({ message, onRetry }: ChatMessageProps) {
           ))}
           {meta.sources?.length ? <SourcesCard sources={meta.sources} /> : null}
           {meta.error ? <ErrorCard error={meta.error} onRetry={onRetry} /> : null}
+          {meta.events?.length ? (
+            <AgentActivityPanel events={meta.events} isActive={false} />
+          ) : null}
         </div>
       </div>
     </div>

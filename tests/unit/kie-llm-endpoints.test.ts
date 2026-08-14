@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { joinKieUrl } from "@/lib/models/kie/adapters/base";
+import {
+  joinKieUrl,
+  parseKieResponseBody,
+  toClaudeMessages,
+  toResponsesInput,
+} from "@/lib/models/kie/adapters/base";
 import {
   classifyKieHttpStatus,
   normalizeKieError,
@@ -9,6 +14,9 @@ import { PROVIDER_ERROR_CODES } from "@/lib/models/kie/types";
 import { getKieModelById } from "@/lib/models/kie/registry";
 import { resolveReasoning } from "@/lib/models/kie/reasoning";
 import { normalizeKieBaseUrl } from "@/lib/env/env.server";
+import { runAgentToolLoop } from "@/lib/agent/loop";
+import { getToolDefinitions } from "@/lib/agent/tools";
+import type { AgentProvider, AgentProviderResponse, ToolContext } from "@/lib/agent/types";
 
 const KIE_ROOT = "https://api.kie.ai";
 
@@ -81,6 +89,96 @@ describe("KIE LLM request contracts", () => {
     const resolved = resolveReasoning(model, "high");
     expect(resolved.providerParam).toEqual({ reasoning_effort: "high" });
   });
+
+  it("builds Responses API input with function_call and function_call_output", () => {
+    const input = toResponsesInput("You are helpful.", [
+      { role: "user", content: "Find docs" },
+      {
+        role: "assistant",
+        content: null,
+        toolCalls: [{ id: "call_1", name: "search_knowledge", arguments: { query: "test" } }],
+      },
+      {
+        role: "tool",
+        toolCallId: "call_1",
+        name: "search_knowledge",
+        content: '{"hits":[]}',
+      },
+    ]);
+
+    expect(input[0]).toEqual({
+      role: "system",
+      content: [{ type: "input_text", text: "You are helpful." }],
+    });
+    expect(input[1]).toEqual({
+      role: "user",
+      content: [{ type: "input_text", text: "Find docs" }],
+    });
+    expect(input[2]).toEqual({
+      type: "function_call",
+      call_id: "call_1",
+      name: "search_knowledge",
+      arguments: JSON.stringify({ query: "test" }),
+    });
+    expect(input[3]).toEqual({
+      type: "function_call_output",
+      call_id: "call_1",
+      output: '{"hits":[]}',
+    });
+  });
+
+  it("builds Claude messages with tool_use and tool_result blocks", () => {
+    const messages = toClaudeMessages([
+      { role: "user", content: "Search knowledge" },
+      {
+        role: "assistant",
+        content: null,
+        toolCalls: [{ id: "toolu_1", name: "search_knowledge", arguments: { query: "test" } }],
+      },
+      {
+        role: "tool",
+        toolCallId: "toolu_1",
+        name: "search_knowledge",
+        content: '{"hits":[{"title":"Doc"}]}',
+      },
+    ]);
+
+    expect(messages[0]).toEqual({ role: "user", content: "Search knowledge" });
+    expect(messages[1]).toEqual({
+      role: "assistant",
+      content: [
+        { type: "tool_use", id: "toolu_1", name: "search_knowledge", input: { query: "test" } },
+      ],
+    });
+    expect(messages[2]).toEqual({
+      role: "user",
+      content: [
+        {
+          type: "tool_result",
+          tool_use_id: "toolu_1",
+          content: '{"hits":[{"title":"Doc"}]}',
+        },
+      ],
+    });
+  });
+});
+
+describe("KIE response parsing", () => {
+  it("assembles SSE payloads into a Responses object", async () => {
+    const sseBody = [
+      'data: {"type":"response.created","response":{"id":"resp_1"}}',
+      'data: {"type":"response.completed","response":{"output":[{"type":"message","content":[{"type":"output_text","text":"Done"}]}]}}',
+    ].join("\n");
+
+    const response = new Response(sseBody, {
+      headers: { "content-type": "text/event-stream" },
+    });
+    const { payload, parseStage } = await parseKieResponseBody(response);
+    expect(parseStage).toBe("sse_assembled");
+    expect(payload).toEqual({
+      output: [{ type: "message", content: [{ type: "output_text", text: "Done" }] }],
+    });
+  });
 });
 
 describe("KIE provider error diagnostics", () => {
@@ -113,5 +211,101 @@ describe("KIE provider error diagnostics", () => {
     expect(normalizeKieError(400, '{"error":{"type":"invalid_request_error"}}').code).toBe(
       PROVIDER_ERROR_CODES.PROVIDER_ERROR,
     );
+  });
+});
+
+describe("GPT Responses tool roundtrip", () => {
+  const ctx: ToolContext = {
+    requestId: "req-gpt",
+    userId: "user-1",
+    chatId: "chat-1",
+    projectId: null,
+    userMessageId: "msg-1",
+    agentRunId: "run-1",
+    userMessage: "Search knowledge base",
+    attachments: [],
+  };
+
+  it("executes search_knowledge then returns final answer", async () => {
+    let call = 0;
+    const provider: AgentProvider = {
+      async run() {
+        call += 1;
+        if (call === 1) {
+          return {
+            content: null,
+            toolCalls: [
+              { id: "call_gpt_1", name: "search_knowledge", arguments: { query: "test" } },
+            ],
+          } satisfies AgentProviderResponse;
+        }
+        return {
+          content: "Found relevant documents.",
+          toolCalls: [],
+        } satisfies AgentProviderResponse;
+      },
+    };
+
+    const result = await runAgentToolLoop({
+      provider,
+      model: "gpt-5-6-sol",
+      system: "test",
+      messages: [{ role: "user", content: "Search knowledge base" }],
+      tools: getToolDefinitions(),
+      toolContext: ctx,
+      maxIterations: 4,
+    });
+
+    expect(result.executions[0]?.call.name).toBe("search_knowledge");
+    expect(result.content).toContain("Found relevant");
+    expect(result.stopReason).toBe("final");
+  });
+});
+
+describe("Claude tool roundtrip", () => {
+  const ctx: ToolContext = {
+    requestId: "req-claude",
+    userId: "user-1",
+    chatId: "chat-1",
+    projectId: null,
+    userMessageId: "msg-1",
+    agentRunId: "run-1",
+    userMessage: "Search knowledge base",
+    attachments: [],
+  };
+
+  it("executes search_knowledge then returns final answer", async () => {
+    let call = 0;
+    const provider: AgentProvider = {
+      async run() {
+        call += 1;
+        if (call === 1) {
+          return {
+            content: null,
+            toolCalls: [
+              { id: "toolu_claude_1", name: "search_knowledge", arguments: { query: "test" } },
+            ],
+          } satisfies AgentProviderResponse;
+        }
+        return {
+          content: "Claude found documents.",
+          toolCalls: [],
+        } satisfies AgentProviderResponse;
+      },
+    };
+
+    const result = await runAgentToolLoop({
+      provider,
+      model: "claude-sonnet-5",
+      system: "test",
+      messages: [{ role: "user", content: "Search knowledge base" }],
+      tools: getToolDefinitions(),
+      toolContext: ctx,
+      maxIterations: 4,
+    });
+
+    expect(result.executions[0]?.call.name).toBe("search_knowledge");
+    expect(result.content).toContain("Claude found");
+    expect(result.stopReason).toBe("final");
   });
 });

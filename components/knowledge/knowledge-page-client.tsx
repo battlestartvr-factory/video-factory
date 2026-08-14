@@ -22,9 +22,13 @@ function formatBytes(bytes: number | null) {
 
 const STATUS_LABELS: Record<string, string> = {
   pending: "Ожидание",
+  uploading: "Загрузка",
+  uploaded: "Загружен",
+  extracting: "Извлечение текста",
   processing: "Обработка",
   ready: "Готов",
   failed: "Ошибка",
+  needs_ocr: "Нужен OCR",
 };
 
 export function KnowledgePageClient() {
@@ -49,13 +53,51 @@ export function KnowledgePageClient() {
 
   useEffect(() => { loadDocuments(); }, []);
 
-  const uploadFile = async (file: File) => {
-    setUploading(true);
-    const mimeType = file.type || guessMimeFromExtension(file.name) || "application/octet-stream";
-    let content: string | undefined;
-    if (file.type.startsWith("text/") || file.name.endsWith(".md") || file.name.endsWith(".txt")) {
-      content = await file.text();
-    }
+  const uploadViaDrive = async (file: File, mimeType: string) => {
+    const sessionRes = await fetch("/api/knowledge/upload", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        filename: file.name,
+        mimeType,
+        sizeBytes: file.size,
+      }),
+    });
+    const sessionData = await sessionRes.json();
+    if (!sessionData.ok) throw new Error(sessionData.error?.message ?? "Upload session failed");
+
+    const uploadRes = await fetch(sessionData.data.uploadUrl, {
+      method: "PUT",
+      headers: {
+        "Content-Type": mimeType,
+        "Content-Length": String(file.size),
+      },
+      body: file,
+    });
+
+    if (!uploadRes.ok) throw new Error("Drive upload failed");
+
+    const drivePayload = await uploadRes.json().catch(() => null);
+    const driveFileId =
+      drivePayload && typeof drivePayload === "object" && "id" in drivePayload
+        ? String((drivePayload as { id: string }).id)
+        : null;
+    if (!driveFileId) throw new Error("Drive file id missing from upload response");
+
+    const finalizeRes = await fetch("/api/knowledge/upload", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        documentId: sessionData.data.documentId,
+        driveFileId,
+      }),
+    });
+    const finalizeData = await finalizeRes.json();
+    if (!finalizeData.ok) throw new Error(finalizeData.error?.message ?? "Finalize failed");
+    return finalizeData.data as KnowledgeDocument;
+  };
+
+  const uploadViaTextApi = async (file: File, mimeType: string, content: string) => {
     const res = await fetch("/api/knowledge", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -67,8 +109,35 @@ export function KnowledgePageClient() {
       }),
     });
     const data = await res.json();
-    if (data.ok) setDocuments((prev) => [data.data, ...prev]);
-    setUploading(false);
+    if (!data.ok) throw new Error(data.error?.message ?? "Upload failed");
+    return data.data as KnowledgeDocument;
+  };
+
+  const uploadFile = async (file: File) => {
+    setUploading(true);
+    const mimeType = file.type || guessMimeFromExtension(file.name) || "application/octet-stream";
+    try {
+      const isText =
+        file.type.startsWith("text/") || file.name.endsWith(".md") || file.name.endsWith(".txt");
+      let doc: KnowledgeDocument;
+
+      if (isText) {
+        const content = await file.text();
+        try {
+          doc = await uploadViaDrive(file, mimeType);
+        } catch {
+          doc = await uploadViaTextApi(file, mimeType, content);
+        }
+      } else {
+        doc = await uploadViaDrive(file, mimeType);
+      }
+
+      setDocuments((prev) => [doc, ...prev.filter((d) => d.id !== doc.id)]);
+    } catch {
+      // upload error — user can retry
+    } finally {
+      setUploading(false);
+    }
   };
 
   const handleFiles = (files: FileList) => {
@@ -124,7 +193,7 @@ export function KnowledgePageClient() {
               выберите
             </button>
           </p>
-          <p className="mt-1 text-xs text-muted">PDF, DOCX, TXT, MD</p>
+          <p className="mt-1 text-xs text-muted">PDF, DOCX, TXT, MD — оригиналы сохраняются в Google Drive</p>
           <input
             ref={fileInputRef}
             type="file"

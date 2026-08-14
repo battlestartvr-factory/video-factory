@@ -4,13 +4,18 @@ import { createLogger } from "@/lib/logging/logger";
 import {
   AGENT_ERROR_CODES,
 } from "./config";
-import { createAgentEvent } from "./events";
+import { CONTEXT_LABELS, createAgentEvent } from "./events";
 import { createAgentProvider, AgentProviderError, resolveAgentModel, resolveAgentReasoning } from "./provider";
 import { getChatReasoningFromMetadata } from "@/lib/models/kie/registry";
 import { loadAgentContext } from "./conversation";
 import { runAgentToolLoop } from "./loop";
 import { getToolDefinitions } from "./tools";
 import { redactForStorage } from "./redaction";
+import {
+  streamEvent,
+  toolCompletedSummary,
+  type StreamEventEmitter,
+} from "./stream-events";
 import type { AgentEvent, AgentMessage, AgentProvider, ToolContext } from "./types";
 import type { Chat, ChatMessage, GenerationCardData, MessageMetadata, SourceCitation } from "@/lib/types/workspace";
 
@@ -24,6 +29,7 @@ export interface UniversalAgentInput {
   presetId?: string | null;
   attachmentIds?: string[];
   provider?: AgentProvider;
+  onStreamEvent?: StreamEventEmitter;
 }
 
 export interface UniversalAgentResult {
@@ -62,6 +68,7 @@ async function persistToolRun(input: {
 }
 
 export async function runUniversalAgent(input: UniversalAgentInput): Promise<UniversalAgentResult> {
+  const emit = input.onStreamEvent;
   const logger = createLogger({
     request_id: input.requestId,
     chat_id: input.chat.id,
@@ -79,6 +86,8 @@ export async function runUniversalAgent(input: UniversalAgentInput): Promise<Uni
   const generations: GenerationCardData[] = [];
   const sources: SourceCitation[] = [];
 
+  emit?.(streamEvent("message.accepted"));
+
   const { data: runRow, error: runError } = await service
     .from("agent_runs")
     .insert({
@@ -95,6 +104,7 @@ export async function runUniversalAgent(input: UniversalAgentInput): Promise<Uni
 
   if (runError || !runRow) {
     logger.error("agent_run_create_failed", { error_code: "CREATE_FAILED" });
+    emit?.(streamEvent("agent.run.failed", { errorCode: AGENT_ERROR_CODES.INTERNAL_ERROR }));
     return {
       content: "Не удалось запустить агента.",
       metadata: {
@@ -110,6 +120,7 @@ export async function runUniversalAgent(input: UniversalAgentInput): Promise<Uni
 
   const agentRunId = runRow.id as string;
   events.push(createAgentEvent("run_started", { status: "running" }));
+  emit?.(streamEvent("agent.run.started", { agentRunId, label: CONTEXT_LABELS.thinking }));
   logger.info("agent_run_started", { agent_run_id: agentRunId, model });
 
   const fail = async (code: string, message: string): Promise<UniversalAgentResult> => {
@@ -123,6 +134,7 @@ export async function runUniversalAgent(input: UniversalAgentInput): Promise<Uni
       })
       .eq("id", agentRunId);
     events.push(createAgentEvent("error", { errorCode: code }));
+    emit?.(streamEvent("agent.run.failed", { agentRunId, errorCode: code, label: "✕ Ошибка обращения к модели" }));
     return {
       content: message,
       metadata: {
@@ -146,6 +158,8 @@ export async function runUniversalAgent(input: UniversalAgentInput): Promise<Uni
   const provider = input.provider ?? createAgentProvider();
   let context;
   try {
+    emit?.(streamEvent("context.started", { label: CONTEXT_LABELS.started }));
+    events.push(createAgentEvent("context_started", { label: CONTEXT_LABELS.started }));
     context = await loadAgentContext({
       userId: input.userId,
       chat: input.chat,
@@ -154,6 +168,8 @@ export async function runUniversalAgent(input: UniversalAgentInput): Promise<Uni
       presetId: input.presetId,
       attachmentIds: input.attachmentIds,
     });
+    events.push(createAgentEvent("context_completed", { label: CONTEXT_LABELS.completed, status: "completed" }));
+    emit?.(streamEvent("context.completed", { label: CONTEXT_LABELS.completed }));
   } catch {
     logger.error("context_build_failed", {
       agent_run_id: agentRunId,
@@ -199,7 +215,10 @@ export async function runUniversalAgent(input: UniversalAgentInput): Promise<Uni
 
   for (const item of loopResult.executions) {
     const startedAt = new Date().toISOString();
+    const toolLabel = createAgentEvent("tool_started", { toolName: item.call.name }).label;
     events.push(createAgentEvent("tool_started", { toolName: item.call.name }));
+    emit?.(streamEvent("tool.started", { toolName: item.call.name, label: toolLabel, agentRunId }));
+
     const status = item.result.ok ? "completed" : "failed";
     await persistToolRun({
       agentRunId,
@@ -212,13 +231,40 @@ export async function runUniversalAgent(input: UniversalAgentInput): Promise<Uni
       startedAt,
       durationMs: 0,
     });
+
+    const summary = item.result.ok
+      ? toolCompletedSummary(item.call.name, item.normalized as Record<string, unknown>)
+      : `✕ ${item.result.error ?? "Ошибка инструмента"}`;
+
     events.push(
       createAgentEvent("tool_finished", {
         toolName: item.call.name,
         status,
         errorCode: item.result.code,
+        label: summary,
       }),
     );
+
+    if (status === "completed") {
+      emit?.(
+        streamEvent("tool.completed", {
+          toolName: item.call.name,
+          label: summary,
+          summary,
+          agentRunId,
+        }),
+      );
+    } else {
+      emit?.(
+        streamEvent("tool.failed", {
+          toolName: item.call.name,
+          label: summary,
+          errorCode: item.result.code,
+          agentRunId,
+        }),
+      );
+    }
+
     logger.info("tool_run", {
       agent_run_id: agentRunId,
       tool_name: item.call.name,
@@ -234,9 +280,19 @@ export async function runUniversalAgent(input: UniversalAgentInput): Promise<Uni
           toolName: item.call.name,
         }),
       );
+      emit?.(
+        streamEvent("generation.queued", {
+          toolName: item.call.name,
+          label: "Запускаю генерацию…",
+          agentRunId,
+        }),
+      );
     }
     if (item.result.sources?.length) sources.push(...item.result.sources);
   }
+
+  emit?.(streamEvent("agent.finalizing", { label: CONTEXT_LABELS.finalizing, agentRunId }));
+  events.push(createAgentEvent("finalizing", { label: CONTEXT_LABELS.finalizing }));
 
   let finalContent = loopResult.content;
   if (!finalContent) {
@@ -248,7 +304,7 @@ export async function runUniversalAgent(input: UniversalAgentInput): Promise<Uni
           : "Готово.";
   }
 
-  events.push(createAgentEvent("final", { status: "completed" }));
+  events.push(createAgentEvent("final", { status: "completed", label: "✓ Сформировал ответ" }));
 
   const metadata: MessageMetadata = {
     type: generations.length ? "generation" : sources.length ? "sources" : "text",
@@ -281,6 +337,14 @@ export async function runUniversalAgent(input: UniversalAgentInput): Promise<Uni
     .eq("id", agentRunId);
 
   logger.info("agent_run_completed", { agent_run_id: agentRunId, status: "completed" });
+
+  emit?.(
+    streamEvent("assistant.message", {
+      content: finalContent,
+      agentRunId,
+    }),
+  );
+  emit?.(streamEvent("agent.run.completed", { agentRunId, label: "✓ Сформировал ответ" }));
 
   return {
     content: finalContent,

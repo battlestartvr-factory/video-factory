@@ -5,6 +5,7 @@ import {
   logKieProviderError,
   normalizeKieError,
   parseKieErrorBody,
+  type KieResponseParseStage,
 } from "../errors";
 import { resolveReasoning } from "../reasoning";
 
@@ -13,6 +14,7 @@ export interface KieAdapterContext {
   apiKey: string;
   model: KieModelEntry;
   reasoningLevel?: string | null;
+  agentRunId?: string | null;
 }
 
 export interface KieAdapter {
@@ -32,6 +34,7 @@ export function parseToolCalls(raw: unknown): AgentToolCall[] {
     if (!item || typeof item !== "object") continue;
     const row = item as {
       id?: string;
+      call_id?: string;
       function?: { name?: string; arguments?: string };
       name?: string;
       arguments?: unknown;
@@ -50,7 +53,7 @@ export function parseToolCalls(raw: unknown): AgentToolCall[] {
       args = rawArgs as Record<string, unknown>;
     }
     calls.push({
-      id: row.id ?? crypto.randomUUID(),
+      id: row.id ?? row.call_id ?? crypto.randomUUID(),
       name,
       arguments: args,
     });
@@ -88,6 +91,110 @@ export function toOpenAiMessages(system: string, messages: AgentMessage[]) {
     });
   }
   return out;
+}
+
+/** Converts agent history to OpenAI Responses API input items (not Chat Completions). */
+export function toResponsesInput(system: string, messages: AgentMessage[]): unknown[] {
+  const input: unknown[] = [];
+
+  if (system.trim()) {
+    input.push({
+      role: "system",
+      content: [{ type: "input_text", text: system }],
+    });
+  }
+
+  for (const message of messages) {
+    if (message.role === "tool") {
+      input.push({
+        type: "function_call_output",
+        call_id: message.toolCallId,
+        output:
+          typeof message.content === "string" ? message.content : JSON.stringify(message.content),
+      });
+      continue;
+    }
+
+    if (message.role === "assistant" && message.toolCalls?.length) {
+      if (message.content) {
+        const text =
+          typeof message.content === "string" ? message.content : JSON.stringify(message.content);
+        input.push({
+          role: "assistant",
+          content: [{ type: "output_text", text }],
+        });
+      }
+      for (const call of message.toolCalls) {
+        input.push({
+          type: "function_call",
+          call_id: call.id,
+          name: call.name,
+          arguments: JSON.stringify(call.arguments ?? {}),
+        });
+      }
+      continue;
+    }
+
+    if (message.role === "user" || message.role === "assistant") {
+      const text =
+        typeof message.content === "string"
+          ? message.content
+          : message.content
+            ? JSON.stringify(message.content)
+            : "";
+      if (!text) continue;
+      const contentType = message.role === "assistant" ? "output_text" : "input_text";
+      input.push({
+        role: message.role,
+        content: [{ type: contentType, text }],
+      });
+    }
+  }
+
+  return input;
+}
+
+/** Converts agent history to KIE Claude Messages format. */
+export function toClaudeMessages(messages: AgentMessage[]) {
+  return messages
+    .filter((m) => m.role !== "system")
+    .map((m) => {
+      if (m.role === "tool") {
+        return {
+          role: "user" as const,
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: m.toolCallId,
+              content:
+                typeof m.content === "string" ? m.content : JSON.stringify(m.content),
+            },
+          ],
+        };
+      }
+      if (m.role === "assistant" && m.toolCalls?.length) {
+        const blocks: Array<Record<string, unknown>> = [];
+        if (m.content) {
+          blocks.push({
+            type: "text",
+            text: typeof m.content === "string" ? m.content : JSON.stringify(m.content),
+          });
+        }
+        for (const call of m.toolCalls) {
+          blocks.push({
+            type: "tool_use",
+            id: call.id,
+            name: call.name,
+            input: call.arguments ?? {},
+          });
+        }
+        return { role: "assistant" as const, content: blocks };
+      }
+      return {
+        role: m.role as "user" | "assistant",
+        content: typeof m.content === "string" ? m.content : JSON.stringify(m.content ?? ""),
+      };
+    });
 }
 
 export function parseStructuredFallback(content: string | null): {
@@ -139,6 +246,69 @@ export function buildReasoningBody(ctx: KieAdapterContext): Record<string, unkno
   return resolved.providerParam;
 }
 
+function isEventStream(contentType: string, body: string): boolean {
+  return (
+    contentType.includes("text/event-stream") ||
+    contentType.includes("application/stream+json") ||
+    body.trimStart().startsWith("data:")
+  );
+}
+
+function parseSsePayload(body: string): unknown {
+  const events: unknown[] = [];
+  let lastJson: unknown = null;
+
+  for (const rawLine of body.split("\n")) {
+    const line = rawLine.trim();
+    if (!line.startsWith("data:")) continue;
+    const data = line.slice(5).trim();
+    if (!data || data === "[DONE]") continue;
+    try {
+      const parsed = JSON.parse(data) as Record<string, unknown>;
+      events.push(parsed);
+      lastJson = parsed;
+
+      if (parsed.type === "response.completed" && parsed.response) {
+        return parsed.response;
+      }
+      if (parsed.response && typeof parsed.response === "object") {
+        lastJson = parsed.response;
+      }
+    } catch {
+      // skip malformed SSE lines
+    }
+  }
+
+  if (lastJson && typeof lastJson === "object") {
+    const obj = lastJson as Record<string, unknown>;
+    if (obj.output || obj.choices || obj.content) return lastJson;
+  }
+
+  if (events.length === 1) return events[0];
+  return { output: events };
+}
+
+export async function parseKieResponseBody(
+  response: Response,
+): Promise<{ payload: unknown; contentType: string; parseStage: KieResponseParseStage }> {
+  const contentType = response.headers.get("content-type") ?? "";
+  const body = await response.text().catch(() => "");
+
+  if (isEventStream(contentType, body)) {
+    return { payload: parseSsePayload(body), contentType, parseStage: "sse_assembled" };
+  }
+
+  if (!body.trim()) {
+    return { payload: {}, contentType, parseStage: "empty_body" };
+  }
+
+  try {
+    return { payload: JSON.parse(body), contentType, parseStage: "json" };
+  } catch {
+    return { payload: body, contentType, parseStage: "json_parse_failed" };
+  }
+}
+
 export async function handleKieResponse(
   ctx: KieAdapterContext,
   response: Response,
@@ -149,23 +319,62 @@ export async function handleKieResponse(
     usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
   },
 ): Promise<AgentProviderResponse> {
+  const contentType = response.headers.get("content-type") ?? "";
+
   if (!response.ok) {
     const text = await response.text().catch(() => "");
-    const error = normalizeKieError(response.status, text);
+    const error = normalizeKieError(response.status, text, contentType);
     const parsed = parseKieErrorBody(text);
     logKieProviderError({
       model_id: ctx.model.id,
       adapter: ctx.model.adapter,
       endpoint: ctx.model.endpoint,
       http_status: response.status,
+      content_type: contentType || undefined,
       http_error_category: classifyKieHttpStatus(response.status),
       normalized_error_code: error.code,
+      response_parse_stage: "error_body",
+      agent_run_id: ctx.agentRunId ?? undefined,
       ...parsed,
     });
     throw error;
   }
-  const payload = await response.json();
-  const message = extractMessage(payload);
+
+  const { payload, parseStage } = await parseKieResponseBody(response);
+
+  if (parseStage === "json_parse_failed") {
+    logKieProviderError({
+      model_id: ctx.model.id,
+      adapter: ctx.model.adapter,
+      endpoint: ctx.model.endpoint,
+      http_status: response.status,
+      content_type: contentType || undefined,
+      http_error_category: "provider_failure",
+      normalized_error_code: "RESPONSE_PARSE_ERROR",
+      response_parse_stage: parseStage,
+      agent_run_id: ctx.agentRunId ?? undefined,
+    });
+    throw normalizeKieError(502, "Invalid JSON response", contentType);
+  }
+
+  let message: ReturnType<typeof extractMessage>;
+  try {
+    message = extractMessage(payload);
+  } catch {
+    logKieProviderError({
+      model_id: ctx.model.id,
+      adapter: ctx.model.adapter,
+      endpoint: ctx.model.endpoint,
+      http_status: response.status,
+      content_type: contentType || undefined,
+      http_error_category: "provider_failure",
+      normalized_error_code: "RESPONSE_PARSE_ERROR",
+      response_parse_stage: "extract_message",
+      agent_run_id: ctx.agentRunId ?? undefined,
+    });
+    throw normalizeKieError(502, "Failed to extract provider message", contentType);
+  }
+
   let content = message.content ?? null;
   let toolCalls = parseToolCalls(message.tool_calls);
   if (!toolCalls.length && content) {

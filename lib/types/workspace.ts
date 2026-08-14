@@ -9,7 +9,15 @@ export type GenerationStatus =
   | "completed"
   | "failed"
   | "cancelled";
-export type KnowledgeDocStatus = "pending" | "processing" | "ready" | "failed";
+export type KnowledgeDocStatus =
+  | "pending"
+  | "uploading"
+  | "uploaded"
+  | "extracting"
+  | "processing"
+  | "ready"
+  | "failed"
+  | "needs_ocr";
 
 export interface Chat {
   id: string;
@@ -198,6 +206,12 @@ export interface KnowledgeDocument {
   mime_type: string | null;
   size_bytes: number | null;
   storage_path: string | null;
+  storage_provider?: string | null;
+  drive_file_id?: string | null;
+  drive_web_url?: string | null;
+  checksum_sha256?: string | null;
+  extraction_error?: string | null;
+  processed_at?: string | null;
   source: string | null;
   status: KnowledgeDocStatus;
   extracted_text: string | null;

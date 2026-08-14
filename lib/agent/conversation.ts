@@ -68,7 +68,7 @@ export async function loadAgentContext(input: {
         limit: 3,
       });
       knowledgeNotes = hits.map(
-        (hit) => `${hit.title} (score ${hit.score.toFixed(2)}):\n${truncateText(hit.chunk, 800)}`,
+        (hit) => `${hit.title} (score ${hit.score.toFixed(2)}):\n${truncateText(hit.text, 800)}`,
       );
     } catch {
       knowledgeNotes = [];

@@ -1,7 +1,14 @@
 import { AGENT_PROVIDER_TIMEOUT_MS } from "@/lib/agent/config";
 import type { AgentRequest } from "@/lib/agent/types";
 import type { KieAdapter, KieAdapterContext } from "./base";
-import { buildReasoningBody, handleKieResponse, kieFetch, toOpenAiMessages } from "./base";
+import {
+  buildReasoningBody,
+  handleKieResponse,
+  kieFetch,
+  toClaudeMessages,
+  toOpenAiMessages,
+  toResponsesInput,
+} from "./base";
 
 export class KieOpenAIChatAdapter implements KieAdapter {
   async run(ctx: KieAdapterContext, input: AgentRequest) {
@@ -62,7 +69,7 @@ export class KieResponsesAdapter implements KieAdapter {
       ctx,
       {
         model: ctx.model.providerModel,
-        input: toOpenAiMessages(input.system, input.messages),
+        input: toResponsesInput(input.system, input.messages),
         tools,
         ...(tools.length ? { tool_choice: "auto" } : {}),
         stream: false,
@@ -116,35 +123,7 @@ export class KieResponsesAdapter implements KieAdapter {
 export class KieClaudeMessagesAdapter implements KieAdapter {
   async run(ctx: KieAdapterContext, input: AgentRequest) {
     const reasoningParams = buildReasoningBody(ctx);
-    const messages = input.messages
-      .filter((m) => m.role !== "system")
-      .map((m) => {
-        if (m.role === "tool") {
-          return {
-            role: "user",
-            content: [
-              {
-                type: "tool_result",
-                tool_use_id: m.toolCallId,
-                content:
-                  typeof m.content === "string" ? m.content : JSON.stringify(m.content),
-              },
-            ],
-          };
-        }
-        if (m.role === "assistant" && m.toolCalls?.length) {
-          return {
-            role: "assistant",
-            content: m.toolCalls.map((call) => ({
-              type: "tool_use",
-              id: call.id,
-              name: call.name,
-              input: call.arguments,
-            })),
-          };
-        }
-        return { role: m.role, content: m.content };
-      });
+    const messages = toClaudeMessages(input.messages);
 
     const response = await kieFetch(
       ctx,

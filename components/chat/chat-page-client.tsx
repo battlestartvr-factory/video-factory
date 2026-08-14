@@ -14,7 +14,9 @@ import {
   mergeMessagesById,
   replaceOptimisticUserMessage,
 } from "@/lib/chat/messages-state";
-import type { Chat, ChatMessage, ErrorCardData, Preset } from "@/lib/types/workspace";
+import type { Chat, ChatMessage, ErrorCardData, Preset, AgentUiEvent } from "@/lib/types/workspace";
+import { AgentActivityPanel } from "@/components/chat/agent-activity-panel";
+import type { StreamEvent } from "@/lib/agent/stream-events.types";
 
 interface ChatPageClientProps {
   chatId?: string;
@@ -50,6 +52,7 @@ export function ChatPageClient({ chatId: chatIdProp, projectId }: ChatPageClient
   );
   const [presets, setPresets] = useState<Preset[]>([]);
   const [sending, setSending] = useState(false);
+  const [liveActivity, setLiveActivity] = useState<AgentUiEvent[]>([]);
   const [sendError, setSendError] = useState<ErrorCardData | null>(null);
   const [loadedChatIds, setLoadedChatIds] = useState<Record<string, boolean>>({});
   const loading = !!chatId && !loadedChatIds[chatId] && messages.length === 0;
@@ -130,6 +133,7 @@ export function ChatPageClient({ chatId: chatIdProp, projectId }: ChatPageClient
   const handleSend = async (content: string, options: { modelId?: string; reasoningLevel?: string; presetId?: string; files: File[] }) => {
     if (sending) return;
     setSendError(null);
+    setLiveActivity([]);
 
     let activeChatId = chatId;
     if (!activeChatId) {
@@ -160,8 +164,32 @@ export function ChatPageClient({ chatId: chatIdProp, projectId }: ChatPageClient
     }));
     setSending(true);
 
+    const appendActivity = (event: StreamEvent) => {
+      if (!event.label && event.type !== "agent.run.started") return;
+      setLiveActivity((prev) => {
+        const next: AgentUiEvent = {
+          type: event.type,
+          toolName: event.toolName,
+          label:
+            event.label ??
+            (event.type === "agent.run.started" ? "● Думаю…" : undefined),
+          status: event.type.includes("failed")
+            ? "failed"
+            : event.type.includes("completed") || event.summary?.startsWith("✓")
+              ? "completed"
+              : "running",
+        };
+        const key = `${next.type}-${next.toolName ?? ""}-${next.label ?? ""}`;
+        const filtered = prev.filter(
+          (item) => `${item.type}-${item.toolName ?? ""}-${item.label ?? ""}` !== key,
+        );
+        return [...filtered, next];
+      });
+    };
+
     try {
-      const res = await fetch(`/api/chats/${activeChatId}/messages`, {
+      const useStream = true;
+      const res = await fetch(`/api/chats/${activeChatId}/messages?stream=${useStream ? "1" : "0"}`, {
         method: "POST",
         cache: "no-store",
         headers: { "Content-Type": "application/json" },
@@ -172,28 +200,81 @@ export function ChatPageClient({ chatId: chatIdProp, projectId }: ChatPageClient
           presetId: options.presetId,
         }),
       });
-      const data = await res.json();
-      if (data.ok) {
-        const userMessage = data.data.userMessage as ChatMessage;
-        const assistantMessage = data.data.assistantMessage as ChatMessage;
-        setMessagesByChat((prev) => ({
-          ...prev,
-          [activeChatId]: replaceOptimisticUserMessage(
-            prev[activeChatId] ?? [],
-            optimistic.id,
-            [userMessage, assistantMessage],
-          ),
-        }));
+
+      if (useStream && res.headers.get("content-type")?.includes("text/event-stream") && res.body) {
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        let turnResult: {
+          userMessage: ChatMessage;
+          assistantMessage: ChatMessage;
+        } | null = null;
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const parts = buffer.split("\n\n");
+          buffer = parts.pop() ?? "";
+          for (const part of parts) {
+            const line = part.trim();
+            if (!line.startsWith("data:")) continue;
+            const payload = line.slice(5).trim();
+            if (!payload) continue;
+            try {
+              const event = JSON.parse(payload) as StreamEvent;
+              if (event.type === "turn.completed" && event.content) {
+                const parsed = JSON.parse(event.content) as {
+                  userMessage: ChatMessage;
+                  assistantMessage: ChatMessage;
+                };
+                turnResult = parsed;
+              } else {
+                appendActivity(event);
+              }
+            } catch {
+              // ignore malformed SSE chunks
+            }
+          }
+        }
+
+        if (turnResult) {
+          setMessagesByChat((prev) => ({
+            ...prev,
+            [activeChatId]: replaceOptimisticUserMessage(
+              prev[activeChatId] ?? [],
+              optimistic.id,
+              [turnResult!.userMessage, turnResult!.assistantMessage],
+            ),
+          }));
+        } else {
+          setSendError({ message: t("common.error") });
+        }
       } else {
-        setSendError({
-          code: data.error?.code,
-          message: data.error?.message ?? t("common.error"),
-        });
+        const data = await res.json();
+        if (data.ok) {
+          const userMessage = data.data.userMessage as ChatMessage;
+          const assistantMessage = data.data.assistantMessage as ChatMessage;
+          setMessagesByChat((prev) => ({
+            ...prev,
+            [activeChatId]: replaceOptimisticUserMessage(
+              prev[activeChatId] ?? [],
+              optimistic.id,
+              [userMessage, assistantMessage],
+            ),
+          }));
+        } else {
+          setSendError({
+            code: data.error?.code,
+            message: data.error?.message ?? t("common.error"),
+          });
+        }
       }
     } catch {
       setSendError({ message: t("common.error") });
     } finally {
       setSending(false);
+      setLiveActivity([]);
       if (!chatId && activeChatId) {
         router.push(`/chat/${activeChatId}`);
       }
@@ -246,6 +327,18 @@ export function ChatPageClient({ chatId: chatIdProp, projectId }: ChatPageClient
             {messages.map((msg) => (
               <ChatMessageView key={msg.id} message={msg} />
             ))}
+            {sending && liveActivity.length > 0 ? (
+              <div className="px-4 py-2">
+                <AgentActivityPanel events={liveActivity} isActive />
+              </div>
+            ) : sending ? (
+              <div className="px-4 py-2">
+                <AgentActivityPanel
+                  events={[{ type: "agent.run.started", label: "● Думаю…" }]}
+                  isActive
+                />
+              </div>
+            ) : null}
             {sendError ? (
               <div className="px-4 py-4">
                 <ErrorCard error={sendError} />

@@ -21,6 +21,14 @@ export type KieHttpErrorCategory =
   | "rate_limit"
   | "provider_failure";
 
+export type KieResponseParseStage =
+  | "json"
+  | "sse_assembled"
+  | "empty_body"
+  | "json_parse_failed"
+  | "extract_message"
+  | "error_body";
+
 export function classifyKieHttpStatus(status: number): KieHttpErrorCategory {
   if (status === 401 || status === 403) return "authentication";
   if (status === 404) return "wrong_endpoint";
@@ -74,34 +82,70 @@ export interface KieProviderDiagnostics {
   adapter: string;
   endpoint: string;
   http_status: number;
+  content_type?: string;
   http_error_category: KieHttpErrorCategory;
   normalized_error_code: string;
+  response_parse_stage?: KieResponseParseStage;
+  agent_run_id?: string;
   provider_error_code?: string;
   provider_error_type?: string;
   request_id?: string;
 }
 
 export function logKieProviderError(diagnostics: KieProviderDiagnostics): void {
-  kieLogger.error("kie_provider_request_failed", { ...diagnostics });
+  kieLogger.error("kie_provider_request_failed", {
+    request_id: diagnostics.request_id,
+    agent_run_id: diagnostics.agent_run_id,
+    model_id: diagnostics.model_id,
+    adapter: diagnostics.adapter,
+    endpoint: diagnostics.endpoint,
+    http_status: diagnostics.http_status,
+    content_type: diagnostics.content_type,
+    http_error_category: diagnostics.http_error_category,
+    normalized_error_code: diagnostics.normalized_error_code,
+    provider_error_code: diagnostics.provider_error_code,
+    provider_error_type: diagnostics.provider_error_type,
+    response_parse_stage: diagnostics.response_parse_stage,
+  });
 }
 
-export function normalizeKieError(status: number, body?: string): KieProviderError {
+function classifyErrorCategory(
+  status: number,
+  contentType: string,
+  parsed: ReturnType<typeof parseKieErrorBody>,
+  lower: string,
+): string {
+  if (status === 401 || status === 403 || parsed.providerErrorType === "authentication_error") {
+    return "AUTHENTICATION_ERROR";
+  }
+  if (status === 404 || lower.includes("not found")) return "WRONG_ENDPOINT";
+  if (status === 400 || status === 422 || parsed.providerErrorType === "invalid_request_error") {
+    return "INVALID_PROVIDER_REQUEST";
+  }
+  if (contentType.includes("text/event-stream") && status >= 400) {
+    return "UNSUPPORTED_RESPONSE_FORMAT";
+  }
+  if (status === 429 || parsed.providerErrorType === "rate_limit_error") return "RATE_LIMIT";
+  return "PROVIDER_FAILURE";
+}
+
+export function normalizeKieError(
+  status: number,
+  body?: string,
+  contentType = "",
+): KieProviderError {
   const parsed = parseKieErrorBody(body);
   const lower = (body ?? "").toLowerCase();
+  const category = classifyErrorCategory(status, contentType, parsed, lower);
 
-  if (status === 429 || parsed.providerErrorType === "rate_limit_error") {
+  if (category === "RATE_LIMIT") {
     return new KieProviderError(
       PROVIDER_ERROR_CODES.PROVIDER_RATE_LIMIT,
       "Провайдер временно ограничил запросы. Попробуйте позже.",
       status,
     );
   }
-  if (
-    status === 404 ||
-    lower.includes("model not found") ||
-    lower.includes("unavailable") ||
-    parsed.providerErrorType === "not_found_error"
-  ) {
+  if (category === "WRONG_ENDPOINT" || lower.includes("unavailable")) {
     return new KieProviderError(
       PROVIDER_ERROR_CODES.MODEL_UNAVAILABLE,
       "Модель временно недоступна.",
@@ -112,6 +156,27 @@ export function normalizeKieError(status: number, body?: string): KieProviderErr
     return new KieProviderError(
       PROVIDER_ERROR_CODES.MODEL_NOT_SUPPORTED,
       "Операция не поддерживается выбранной моделью.",
+      status,
+    );
+  }
+  if (category === "AUTHENTICATION_ERROR") {
+    return new KieProviderError(
+      PROVIDER_ERROR_CODES.PROVIDER_ERROR,
+      "Ошибка провайдера. Попробуйте позже.",
+      status,
+    );
+  }
+  if (category === "INVALID_PROVIDER_REQUEST") {
+    return new KieProviderError(
+      PROVIDER_ERROR_CODES.PROVIDER_ERROR,
+      "Ошибка провайдера. Попробуйте позже.",
+      status,
+    );
+  }
+  if (category === "UNSUPPORTED_RESPONSE_FORMAT" || category === "RESPONSE_PARSE_ERROR") {
+    return new KieProviderError(
+      PROVIDER_ERROR_CODES.PROVIDER_ERROR,
+      "Ошибка провайдера. Попробуйте позже.",
       status,
     );
   }

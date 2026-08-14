@@ -36,7 +36,18 @@ export const searchKnowledgeTool: AgentTool<typeof searchKnowledgeSchema._output
     });
     return {
       ok: true,
-      data: { hits },
+      data: {
+        hits: hits.map((hit) => ({
+          documentId: hit.documentId,
+          filename: hit.filename,
+          title: hit.title,
+          chunkId: hit.chunkId,
+          chunkIndex: hit.chunkIndex,
+          text: hit.text,
+          score: hit.score,
+          scope: hit.scope,
+        })),
+      },
       sources,
     };
   },

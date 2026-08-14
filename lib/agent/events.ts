@@ -10,15 +10,23 @@ const TOOL_LABELS: Record<string, string> = {
   save_memory: "Сохраняю в память…",
   update_memory: "Обновляю память…",
   inspect_attachment: "Смотрю вложение…",
-  extract_document: "Анализирую документ…",
+  extract_document: "Читаю документ…",
   generate_image: "Создаю изображение…",
   generate_video: "Создаю видео…",
-  get_project_context: "Собираю контекст проекта…",
+  get_project_context: "Собираю контекст…",
   list_project_files: "Смотрю файлы проекта…",
   create_project: "Создаю проект…",
   update_project_instructions: "Обновляю инструкции проекта…",
   answer_user: "Формирую ответ…",
 };
+
+export const CONTEXT_LABELS = {
+  started: "Собираю контекст…",
+  completed: "✓ Собрал контекст",
+  memory: "✓ Проверил память",
+  finalizing: "Формирую ответ…",
+  thinking: "● Думаю…",
+} as const;
 
 export function toolEventLabel(toolName: string): string {
   return TOOL_LABELS[toolName] ?? `Выполняю ${toolName}…`;
