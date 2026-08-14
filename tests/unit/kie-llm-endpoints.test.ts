@@ -1,11 +1,9 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   joinKieUrl,
   parseKieResponseBody,
-  toClaudeMessages,
   toResponsesInput,
 } from "@/lib/models/kie/adapters/base";
-import { kieClaudeMessagesAdapter } from "@/lib/models/kie/adapters";
 import {
   classifyKieHttpStatus,
   normalizeKieError,
@@ -40,10 +38,6 @@ describe("KIE LLM endpoint URLs", () => {
       modelId: "claude-sonnet-5",
       expected: `${KIE_ROOT}/claude/v1/messages`,
     },
-    {
-      modelId: "claude-opus-5",
-      expected: `${KIE_ROOT}/claude/v1/messages`,
-    },
   ] as const;
 
   it.each(cases)("resolves $modelId to the canonical KIE URL", ({ modelId, expected }) => {
@@ -72,18 +66,6 @@ describe("KIE LLM request contracts", () => {
     const model = getKieModelById("gpt-5-6-sol")!;
     const resolved = resolveReasoning(model, "max");
     expect(resolved.providerParam).toEqual({ reasoning: { effort: "xhigh" } });
-  });
-
-  it("maps Claude Sonnet thinking to thinkingFlag", () => {
-    const model = getKieModelById("claude-sonnet-5")!;
-    expect(resolveReasoning(model, "on").providerParam).toEqual({ thinkingFlag: true });
-    expect(resolveReasoning(model, "off").providerParam).toEqual({ thinkingFlag: false });
-  });
-
-  it("maps Claude Opus thinking to thinkingFlag", () => {
-    const model = getKieModelById("claude-opus-5")!;
-    expect(resolveReasoning(model, "on").providerParam).toEqual({ thinkingFlag: true });
-    expect(resolveReasoning(model, "off").providerParam).toEqual({ thinkingFlag: false });
   });
 
   it("maps Gemini reasoning to reasoning_effort", () => {
@@ -127,67 +109,6 @@ describe("KIE LLM request contracts", () => {
       call_id: "call_1",
       output: '{"hits":[]}',
     });
-  });
-
-  it("builds Claude messages with plain string content", () => {
-    const messages = toClaudeMessages([
-      { role: "user", content: "Search knowledge" },
-      {
-        role: "assistant",
-        content: "Here are results",
-        toolCalls: [{ id: "toolu_1", name: "search_knowledge", arguments: { query: "test" } }],
-      },
-      {
-        role: "tool",
-        toolCallId: "toolu_1",
-        name: "search_knowledge",
-        content: '{"hits":[{"title":"Doc"}]}',
-      },
-    ]);
-
-    expect(messages[0]).toEqual({ role: "user", content: "Search knowledge" });
-    expect(messages[1]).toEqual({ role: "assistant", content: "Here are results" });
-    expect(messages[2]).toEqual({ role: "user", content: '{"hits":[{"title":"Doc"}]}' });
-  });
-
-  it("Claude adapter creates payload with plain string message content", async () => {
-    const model = getKieModelById("claude-sonnet-5")!;
-    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      new Response(
-        JSON.stringify({ content: [{ type: "text", text: "Hello!" }] }),
-        { status: 200, headers: { "content-type": "application/json" } },
-      ),
-    );
-
-    await kieClaudeMessagesAdapter.run(
-      {
-        baseUrl: "https://api.kie.ai",
-        apiKey: "test-key",
-        model,
-      },
-      {
-        model: "claude-sonnet-5",
-        system: "",
-        messages: [{ role: "user", content: "hello" }],
-        tools: [{ name: "search_knowledge", description: "Search", parameters: {} }],
-      },
-    );
-
-    const init = fetchSpy.mock.calls[0]?.[1] as RequestInit;
-    const body = JSON.parse(init.body as string) as {
-      messages: Array<{ role: string; content: unknown }>;
-      tools?: unknown;
-      system?: unknown;
-      thinkingFlag?: unknown;
-    };
-
-    expect(body.messages[0].content).toBe("hello");
-    expect(Array.isArray(body.messages[0].content)).toBe(false);
-    expect(body.tools).toBeUndefined();
-    expect(body.system).toBeUndefined();
-    expect(body.thinkingFlag).toBeUndefined();
-
-    fetchSpy.mockRestore();
   });
 });
 
@@ -240,7 +161,7 @@ describe("KIE provider error diagnostics", () => {
       PROVIDER_ERROR_CODES.PROVIDER_ERROR,
     );
     expect(
-      normalizeKieError(400, '{"error":{"type":"invalid_request_error"}}', "", "claude_messages")
+      normalizeKieError(400, '{"error":{"type":"invalid_request_error"}}', "", "claude_sonnet")
         .code,
     ).toBe(PROVIDER_ERROR_CODES.CLAUDE_REQUEST_INVALID);
     expect(userFacingProviderMessage(PROVIDER_ERROR_CODES.CLAUDE_REQUEST_INVALID)).toContain(
@@ -293,54 +214,6 @@ describe("GPT Responses tool roundtrip", () => {
 
     expect(result.executions[0]?.call.name).toBe("search_knowledge");
     expect(result.content).toContain("Found relevant");
-    expect(result.stopReason).toBe("final");
-  });
-});
-
-describe("Claude tool roundtrip", () => {
-  const ctx: ToolContext = {
-    requestId: "req-claude",
-    userId: "user-1",
-    chatId: "chat-1",
-    projectId: null,
-    userMessageId: "msg-1",
-    agentRunId: "run-1",
-    userMessage: "Search knowledge base",
-    attachments: [],
-  };
-
-  it("executes search_knowledge then returns final answer", async () => {
-    let call = 0;
-    const provider: AgentProvider = {
-      async run() {
-        call += 1;
-        if (call === 1) {
-          return {
-            content: null,
-            toolCalls: [
-              { id: "toolu_claude_1", name: "search_knowledge", arguments: { query: "test" } },
-            ],
-          } satisfies AgentProviderResponse;
-        }
-        return {
-          content: "Claude found documents.",
-          toolCalls: [],
-        } satisfies AgentProviderResponse;
-      },
-    };
-
-    const result = await runAgentToolLoop({
-      provider,
-      model: "claude-sonnet-5",
-      system: "test",
-      messages: [{ role: "user", content: "Search knowledge base" }],
-      tools: getToolDefinitions(),
-      toolContext: ctx,
-      maxIterations: 4,
-    });
-
-    expect(result.executions[0]?.call.name).toBe("search_knowledge");
-    expect(result.content).toContain("Claude found");
     expect(result.stopReason).toBe("final");
   });
 });

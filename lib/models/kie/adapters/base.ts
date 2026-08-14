@@ -155,26 +155,6 @@ export function toResponsesInput(system: string, messages: AgentMessage[]): unkn
   return input;
 }
 
-export function extractText(content: AgentMessage["content"]): string {
-  if (content == null) return "";
-  if (typeof content === "string") return content;
-  return content
-    .filter((part) => part.type === "text" && part.text)
-    .map((part) => part.text!)
-    .join("");
-}
-
-/** Converts agent history to KIE Claude Messages format (plain string content). */
-export function toClaudeMessages(messages: AgentMessage[]) {
-  return messages
-    .filter((m) => m.role !== "system")
-    .map((m) => ({
-      role: (m.role === "tool" ? "user" : m.role) as "user" | "assistant",
-      content: extractText(m.content),
-    }))
-    .filter((m) => m.content.length > 0);
-}
-
 export function parseStructuredFallback(content: string | null): {
   content: string | null;
   toolCalls: AgentToolCall[];

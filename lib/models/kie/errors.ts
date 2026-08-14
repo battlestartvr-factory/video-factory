@@ -249,7 +249,7 @@ export function normalizeKieError(
     );
   }
   if (category === "INVALID_PROVIDER_REQUEST") {
-    if (adapter === "claude_messages") {
+    if (adapter === "claude_sonnet") {
       return new KieProviderError(
         PROVIDER_ERROR_CODES.CLAUDE_REQUEST_INVALID,
         "Некорректный запрос к Claude API.",
@@ -292,6 +292,8 @@ export function userFacingProviderMessage(code: string): string {
       return "Провайдер временно ограничил запросы.";
     case PROVIDER_ERROR_CODES.CLAUDE_REQUEST_INVALID:
       return "Некорректный запрос к Claude. Проверьте формат сообщений и инструментов.";
+    case PROVIDER_ERROR_CODES.CLAUDE_EMPTY_MESSAGES:
+      return "Не удалось отправить сообщение в Claude: отсутствует текст пользователя.";
     default:
       return "Ошибка провайдера.";
   }

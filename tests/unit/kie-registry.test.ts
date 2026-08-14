@@ -15,7 +15,7 @@ import { selectImageModel, selectVideoModel } from "@/lib/models/kie/selection";
 
 describe("KIE Model Registry", () => {
   it("contains llm, image, and video models", () => {
-    expect(KIE_MODEL_REGISTRY.filter((m) => m.category === "llm").length).toBeGreaterThanOrEqual(5);
+    expect(KIE_MODEL_REGISTRY.filter((m) => m.category === "llm").length).toBeGreaterThanOrEqual(4);
     expect(KIE_MODEL_REGISTRY.filter((m) => m.category === "image").length).toBeGreaterThanOrEqual(5);
     expect(KIE_MODEL_REGISTRY.filter((m) => m.category === "video").length).toBeGreaterThanOrEqual(4);
   });
@@ -59,9 +59,10 @@ describe("reasoning mapping", () => {
 
   it("uses binary control for Claude Sonnet", () => {
     const model = getKieModelById("claude-sonnet-5")!;
-    const resolved = resolveReasoning(model, "off");
-    expect(resolved.requestedReasoning).toBe("off");
+    const resolved = resolveReasoning(model, "standard");
+    expect(resolved.requestedReasoning).toBe("standard");
     expect(resolved.effectiveReasoning).toBe("disabled");
+    expect(resolved.providerParam).toEqual({});
   });
 });
 

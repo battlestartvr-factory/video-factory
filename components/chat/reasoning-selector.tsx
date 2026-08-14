@@ -14,8 +14,10 @@ const LEVEL_LABELS: Record<string, string> = {
   medium: "Medium",
   high: "High",
   max: "Max",
-  off: "Off",
-  on: "On",
+  standard: "Standard",
+  thinking: "Thinking",
+  off: "Standard",
+  on: "Thinking",
 };
 
 export function ReasoningSelector({ modelId, value, onChange }: ReasoningSelectorProps) {

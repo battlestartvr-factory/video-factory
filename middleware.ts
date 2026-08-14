@@ -7,7 +7,6 @@ const publicPaths = [
   "/api/health",
   "/api/webhooks",
   "/api/internal",
-  "/api/debug",
 ];
 
 export async function middleware(request: NextRequest) {

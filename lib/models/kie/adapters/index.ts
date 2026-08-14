@@ -5,10 +5,10 @@ import {
   buildReasoningBody,
   handleKieResponse,
   kieFetch,
-  toClaudeMessages,
   toOpenAiMessages,
   toResponsesInput,
 } from "./base";
+import { kieClaudeSonnetAdapter } from "./claude-sonnet";
 
 export class KieOpenAIChatAdapter implements KieAdapter {
   async run(ctx: KieAdapterContext, input: AgentRequest) {
@@ -120,85 +120,6 @@ export class KieResponsesAdapter implements KieAdapter {
   }
 }
 
-export class KieClaudeMessagesAdapter implements KieAdapter {
-  async run(ctx: KieAdapterContext, input: AgentRequest) {
-    const reasoningParams = buildReasoningBody(ctx);
-    const claudeReasoning =
-      reasoningParams.thinkingFlag === true ? { thinkingFlag: true } : {};
-    const messages = toClaudeMessages(input.messages);
-
-    const requestBody: Record<string, unknown> = {
-      model: ctx.model.providerModel,
-      messages,
-      max_tokens: 8192,
-      stream: false,
-      ...claudeReasoning,
-    };
-
-    if (input.system.trim()) {
-      requestBody.system = input.system;
-    }
-
-    console.log(
-      "CLAUDE_REQUEST_DEBUG",
-      JSON.stringify(
-        {
-          model: requestBody.model,
-          system: requestBody.system,
-          messages: requestBody.messages,
-          max_tokens: requestBody.max_tokens,
-          stream: requestBody.stream,
-          thinkingFlag: requestBody.thinkingFlag,
-          tools: requestBody.tools,
-        },
-        null,
-        2,
-      ),
-    );
-
-    const response = await kieFetch(ctx, requestBody, AGENT_PROVIDER_TIMEOUT_MS);
-
-    return handleKieResponse(
-      ctx,
-      response,
-      (payload) => {
-      const p = payload as {
-        content?: Array<{
-          type?: string;
-          text?: string;
-          id?: string;
-          name?: string;
-          input?: Record<string, unknown>;
-        }>;
-        usage?: { input_tokens?: number; output_tokens?: number };
-        stop_reason?: string;
-      };
-      const text = (p.content ?? [])
-        .filter((c) => c.type === "text")
-        .map((c) => c.text ?? "")
-        .join("");
-      const toolCalls = (p.content ?? [])
-        .filter((c) => c.type === "tool_use")
-        .map((c) => ({
-          id: c.id ?? crypto.randomUUID(),
-          function: { name: c.name ?? "", arguments: JSON.stringify(c.input ?? {}) },
-        }));
-      return {
-        content: text || null,
-        tool_calls: toolCalls,
-        finish_reason: p.stop_reason === "tool_use" || toolCalls.length ? "tool_calls" : "stop",
-        usage: {
-          prompt_tokens: p.usage?.input_tokens,
-          completion_tokens: p.usage?.output_tokens,
-          total_tokens: (p.usage?.input_tokens ?? 0) + (p.usage?.output_tokens ?? 0),
-        },
-      };
-      },
-      { requestBody },
-    );
-  }
-}
-
 /** Market task adapter — used for image/video generation dispatch (not LLM chat) */
 export class KieMarketTaskAdapter {
   buildTaskPayload(
@@ -245,7 +166,6 @@ export class KieVeoAdapter {
 
 export const kieOpenAIChatAdapter = new KieOpenAIChatAdapter();
 export const kieResponsesAdapter = new KieResponsesAdapter();
-export const kieClaudeMessagesAdapter = new KieClaudeMessagesAdapter();
 export const kieMarketTaskAdapter = new KieMarketTaskAdapter();
 export const kieVeoAdapter = new KieVeoAdapter();
 
@@ -255,8 +175,8 @@ export function getKieLlmAdapter(kind: KieAdapterContext["model"]["adapter"]): K
       return kieOpenAIChatAdapter;
     case "responses":
       return kieResponsesAdapter;
-    case "claude_messages":
-      return kieClaudeMessagesAdapter;
+    case "claude_sonnet":
+      return kieClaudeSonnetAdapter;
     default:
       return kieOpenAIChatAdapter;
   }

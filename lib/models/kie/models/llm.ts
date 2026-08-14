@@ -102,7 +102,7 @@ export const LLM_MODELS: KieModelEntry[] = [
     displayName: "Claude Sonnet 5",
     provider: "kie",
     category: "llm",
-    adapter: "claude_messages",
+    adapter: "claude_sonnet",
     endpoint: "/claude/v1/messages",
     providerModel: "claude-sonnet-5",
     capabilities: {
@@ -112,9 +112,9 @@ export const LLM_MODELS: KieModelEntry[] = [
     },
     reasoning: {
       control: "binary",
-      levels: ["off", "on"],
-      default: "off",
-      mapping: { off: "disabled", on: "enabled" },
+      levels: ["standard", "thinking"],
+      default: "standard",
+      mapping: { standard: "disabled", thinking: "enabled" },
     },
     enabled: true,
     useCases: [
@@ -124,33 +124,6 @@ export const LLM_MODELS: KieModelEntry[] = [
       "структурирование",
       "длинные тексты",
       "agentic work",
-    ],
-  },
-  {
-    id: "claude-opus-5",
-    displayName: "Claude Opus 5",
-    provider: "kie",
-    category: "llm",
-    adapter: "claude_messages",
-    endpoint: "/claude/v1/messages",
-    providerModel: "claude-opus-5",
-    capabilities: {
-      chat: true,
-      vision: true,
-      toolCalling: true,
-    },
-    reasoning: {
-      control: "adaptive",
-      levels: ["off", "on"],
-      default: "off",
-      mapping: { off: "disabled", on: "adaptive" },
-    },
-    enabled: true,
-    useCases: [
-      "максимально сложные задачи",
-      "long-horizon reasoning",
-      "большие исследования",
-      "сложная структура",
     ],
   },
 ];

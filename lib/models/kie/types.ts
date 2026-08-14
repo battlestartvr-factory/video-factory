@@ -18,7 +18,7 @@ export type FutureModelCategory =
 export type KieAdapterKind =
   | "openai_chat"
   | "responses"
-  | "claude_messages"
+  | "claude_sonnet"
   | "market_task"
   | "veo";
 
@@ -29,8 +29,8 @@ export type SelectionSource = "user" | "ui" | "preset" | "agent" | "default";
 export interface ReasoningConfig {
   control: ReasoningControl;
   /** Application-level levels exposed in UI */
-  levels: Array<ReasoningLevel | "off" | "on">;
-  default: ReasoningLevel | "off" | "on";
+  levels: Array<ReasoningLevel | "off" | "on" | "standard" | "thinking">;
+  default: ReasoningLevel | "off" | "on" | "standard" | "thinking";
   /** Maps application level → provider-native value */
   mapping: Record<string, string>;
 }
@@ -112,7 +112,7 @@ export interface PublicModelMetadata {
 }
 
 export interface ResolvedReasoning {
-  requestedReasoning: ReasoningLevel | "off" | "on";
+  requestedReasoning: ReasoningLevel | "off" | "on" | "standard" | "thinking";
   effectiveReasoning: string;
   providerParam: Record<string, unknown>;
 }
@@ -147,5 +147,6 @@ export const PROVIDER_ERROR_CODES = {
   INVALID_QUALITY_LEVEL: "INVALID_QUALITY_LEVEL",
   PROVIDER_RATE_LIMIT: "PROVIDER_RATE_LIMIT",
   CLAUDE_REQUEST_INVALID: "CLAUDE_REQUEST_INVALID",
+  CLAUDE_EMPTY_MESSAGES: "CLAUDE_EMPTY_MESSAGES",
   PROVIDER_ERROR: "PROVIDER_ERROR",
 } as const;

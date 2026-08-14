@@ -6,7 +6,7 @@ const DEFAULT_REASONING: ReasoningLevel = "medium";
 
 export function resolveReasoning(
   model: KieModelEntry,
-  requested?: ReasoningLevel | "off" | "on" | null,
+  requested?: ReasoningLevel | "off" | "on" | "standard" | "thinking" | null,
 ): ResolvedReasoning {
   const config = model.reasoning;
   if (!config || config.control === "none") {
@@ -20,16 +20,21 @@ export function resolveReasoning(
   const level = requested ?? (config.default as ReasoningLevel | "off" | "on") ?? DEFAULT_REASONING;
 
   if (config.control === "binary") {
-    const binaryLevel = level === "off" || level === "low" ? "off" : "on";
-    if (!config.levels.includes(binaryLevel as ReasoningLevel | "off" | "on")) {
+    const binaryLevel =
+      level === "on" || level === "thinking" || level === "high" || level === "max"
+        ? "thinking"
+        : "standard";
+    const normalizedLevel =
+      level === "off" ? "standard" : level === "on" ? "thinking" : binaryLevel;
+    if (!config.levels.includes(normalizedLevel as ReasoningLevel | "off" | "on")) {
       throw new KieProviderError(
         PROVIDER_ERROR_CODES.INVALID_REASONING_LEVEL,
         `Reasoning level "${level}" not supported by ${model.displayName}`,
       );
     }
-    const effective = config.mapping[binaryLevel] ?? binaryLevel;
+    const effective = config.mapping[normalizedLevel] ?? normalizedLevel;
     return {
-      requestedReasoning: binaryLevel,
+      requestedReasoning: normalizedLevel as ReasoningLevel | "off" | "on",
       effectiveReasoning: effective,
       providerParam: buildReasoningParam(model, effective),
     };
@@ -52,7 +57,7 @@ export function resolveReasoning(
 }
 
 function normalizeToAppLevel(
-  level: ReasoningLevel | "off" | "on",
+  level: ReasoningLevel | "off" | "on" | "standard" | "thinking",
   supported: ReasoningLevel[],
 ): ReasoningLevel {
   if (supported.includes(level as ReasoningLevel)) return level as ReasoningLevel;
@@ -72,9 +77,11 @@ function buildReasoningParam(model: KieModelEntry, effective: string): Record<st
     return { reasoning: { effort: effective } };
   }
 
-  if (model.adapter === "claude_messages") {
-    const enabled = effective !== "disabled" && effective !== "off";
-    return { thinkingFlag: enabled };
+  if (model.adapter === "claude_sonnet") {
+    if (effective === "enabled" || effective === "thinking" || effective === "on") {
+      return { thinkingFlag: true };
+    }
+    return {};
   }
 
   const control = model.reasoning?.control;
@@ -92,6 +99,8 @@ function buildReasoningParam(model: KieModelEntry, effective: string): Record<st
   }
 }
 
-export function getDefaultReasoningLevel(model: KieModelEntry): ReasoningLevel | "off" | "on" {
-  return (model.reasoning?.default as ReasoningLevel | "off" | "on") ?? DEFAULT_REASONING;
+export function getDefaultReasoningLevel(
+  model: KieModelEntry,
+): ReasoningLevel | "off" | "on" | "standard" | "thinking" {
+  return (model.reasoning?.default as ReasoningLevel | "off" | "on" | "standard" | "thinking") ?? DEFAULT_REASONING;
 }
