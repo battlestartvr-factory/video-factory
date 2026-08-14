@@ -6,7 +6,8 @@ export type DriveErrorCode =
   | "DRIVE_FOLDER_ACCESS_DENIED"
   | "DRIVE_FOLDER_NOT_FOUND"
   | "DRIVE_FOLDER_CREATE_FAILED"
-  | "DRIVE_UPLOAD_SESSION_FAILED";
+  | "DRIVE_UPLOAD_SESSION_FAILED"
+  | "DRIVE_UPLOAD_FAILED";
 
 export interface DriveErrorDetails {
   stage: string;
@@ -125,5 +126,7 @@ export function driveErrorUserMessage(code: DriveErrorCode): string {
       return "Не удалось создать папку в Google Drive";
     case "DRIVE_UPLOAD_SESSION_FAILED":
       return "Не удалось создать сессию загрузки в Google Drive";
+    case "DRIVE_UPLOAD_FAILED":
+      return "Не удалось загрузить файл в Google Drive";
   }
 }

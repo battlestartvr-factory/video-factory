@@ -53,6 +53,27 @@ export function KnowledgePageClient() {
 
   useEffect(() => { loadDocuments(); }, []);
 
+  const uploadViaServer = async (file: File, documentId: string) => {
+    const form = new FormData();
+    form.append("documentId", documentId);
+    form.append("file", file);
+    const res = await fetch("/api/knowledge/upload", { method: "PATCH", body: form });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error?.message ?? "Server upload failed");
+    return data.data as KnowledgeDocument;
+  };
+
+  const finalizeUpload = async (documentId: string, driveFileId: string) => {
+    const finalizeRes = await fetch("/api/knowledge/upload", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ documentId, driveFileId }),
+    });
+    const finalizeData = await finalizeRes.json();
+    if (!finalizeData.ok) throw new Error(finalizeData.error?.message ?? "Finalize failed");
+    return finalizeData.data as KnowledgeDocument;
+  };
+
   const uploadViaDrive = async (file: File, mimeType: string) => {
     const sessionRes = await fetch("/api/knowledge/upload", {
       method: "POST",
@@ -66,35 +87,35 @@ export function KnowledgePageClient() {
     const sessionData = await sessionRes.json();
     if (!sessionData.ok) throw new Error(sessionData.error?.message ?? "Upload session failed");
 
-    const uploadRes = await fetch(sessionData.data.uploadUrl, {
-      method: "PUT",
-      headers: {
-        "Content-Type": mimeType,
-        "Content-Length": String(file.size),
-      },
-      body: file,
-    });
+    const documentId = sessionData.data.documentId as string;
+    const uploadUrl = sessionData.data.uploadUrl as string;
 
-    if (!uploadRes.ok) throw new Error("Drive upload failed");
+    let driveFileId: string | null = null;
+    try {
+      const uploadRes = await fetch(uploadUrl, {
+        method: "PUT",
+        headers: {
+          "Content-Type": mimeType,
+          "Content-Length": String(file.size),
+        },
+        body: file,
+      });
 
-    const drivePayload = await uploadRes.json().catch(() => null);
-    const driveFileId =
-      drivePayload && typeof drivePayload === "object" && "id" in drivePayload
-        ? String((drivePayload as { id: string }).id)
-        : null;
-    if (!driveFileId) throw new Error("Drive file id missing from upload response");
+      if (uploadRes.ok) {
+        const drivePayload = await uploadRes.json().catch(() => null);
+        if (drivePayload && typeof drivePayload === "object" && "id" in drivePayload) {
+          driveFileId = String((drivePayload as { id: string }).id);
+        }
+      }
+    } catch {
+      // Browser upload blocked (often CORS) — fall back to server-side upload.
+    }
 
-    const finalizeRes = await fetch("/api/knowledge/upload", {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        documentId: sessionData.data.documentId,
-        driveFileId,
-      }),
-    });
-    const finalizeData = await finalizeRes.json();
-    if (!finalizeData.ok) throw new Error(finalizeData.error?.message ?? "Finalize failed");
-    return finalizeData.data as KnowledgeDocument;
+    if (driveFileId) {
+      return finalizeUpload(documentId, driveFileId);
+    }
+
+    return uploadViaServer(file, documentId);
   };
 
   const uploadViaTextApi = async (file: File, mimeType: string, content: string) => {

@@ -1,5 +1,6 @@
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { CONTEXT_BUDGET } from "@/lib/agent/config";
+import { createLogger } from "@/lib/logging/logger";
 import { chunkText, normalizeExtractedText } from "./extraction";
 import { assertProjectAccess } from "@/lib/projects/access";
 import {
@@ -138,7 +139,7 @@ export async function createKnowledgeUploadSession(input: {
       tags: input.tags ?? [],
       source: "upload",
       storage_provider: "google_drive",
-      metadata: { upload_folder_id: folderId },
+      metadata: { upload_folder_id: folderId, upload_url: session.uploadUrl },
     })
     .select()
     .single();
@@ -156,6 +157,11 @@ export async function finalizeKnowledgeUpload(input: {
   documentId: string;
   driveFileId: string;
 }): Promise<KnowledgeDocument> {
+  const logger = createLogger({
+    event: "knowledge.upload",
+    document_id: input.documentId,
+    user_id: input.userId,
+  });
   const service = createSupabaseServiceClient();
   const { data: doc } = await service
     .from("knowledge_documents")
@@ -181,7 +187,67 @@ export async function finalizeKnowledgeUpload(input: {
     })
     .eq("id", input.documentId);
 
+  logger.info("knowledge.upload.completed", {
+    document_id: input.documentId,
+    drive_file_id: input.driveFileId,
+    size_bytes: meta.sizeBytes ?? doc.size_bytes,
+  });
+
   return processKnowledgeDocument(input.documentId);
+}
+
+export async function uploadKnowledgeFileViaServer(input: {
+  userId: string;
+  documentId: string;
+  buffer: Buffer;
+}): Promise<KnowledgeDocument> {
+  const service = createSupabaseServiceClient();
+  const { data: doc } = await service
+    .from("knowledge_documents")
+    .select("*")
+    .eq("id", input.documentId)
+    .eq("user_id", input.userId)
+    .single();
+
+  if (!doc) throw new Error("DOCUMENT_NOT_FOUND");
+  if (doc.status !== "uploading") throw new Error("DOCUMENT_NOT_UPLOADING");
+
+  const meta = (doc.metadata ?? {}) as Record<string, unknown>;
+  let uploadUrl = typeof meta.upload_url === "string" ? meta.upload_url : null;
+  const mimeType = doc.mime_type ?? "application/octet-stream";
+
+  if (!uploadUrl) {
+    const folderId = typeof meta.upload_folder_id === "string" ? meta.upload_folder_id : null;
+    if (!folderId) throw new Error("UPLOAD_SESSION_MISSING");
+
+    const drive = getDriveStorageProvider();
+    const session = await drive.createResumableUpload({
+      filename: doc.filename,
+      mimeType,
+      sizeBytes: input.buffer.length,
+      folderId,
+    });
+    uploadUrl = session.uploadUrl;
+    await service
+      .from("knowledge_documents")
+      .update({
+        metadata: { ...meta, upload_url: uploadUrl },
+      })
+      .eq("id", input.documentId);
+  }
+
+  const drive = getDriveStorageProvider();
+  const driveFileId = await drive.completeResumableUpload({
+    uploadUrl,
+    mimeType,
+    buffer: input.buffer,
+  });
+
+  return finalizeKnowledgeUpload({
+    userId: input.userId,
+    documentId: input.documentId,
+    driveFileId,
+  });
 }
 
 export async function addKnowledgeDocument(input: {

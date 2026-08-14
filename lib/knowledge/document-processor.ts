@@ -1,5 +1,6 @@
 import "server-only";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
+import { createLogger } from "@/lib/logging/logger";
 import { getDriveStorageProvider, isDriveStorageConfigured, resolveKnowledgeFolderSegments } from "@/lib/storage/drive-provider";
 import {
   buildChunks,
@@ -10,6 +11,7 @@ import { normalizeExtractedText } from "./extraction";
 import type { KnowledgeDocument } from "@/lib/types/workspace";
 
 export async function processKnowledgeDocument(documentId: string): Promise<KnowledgeDocument> {
+  const logger = createLogger({ event: "knowledge.extract", document_id: documentId });
   const service = createSupabaseServiceClient();
   const { data: doc, error } = await service
     .from("knowledge_documents")
@@ -44,6 +46,8 @@ export async function processKnowledgeDocument(documentId: string): Promise<Know
     .from("knowledge_documents")
     .update({ status: "extracting", extraction_error: null })
     .eq("id", documentId);
+
+  logger.info("knowledge.extract.started", { document_id: documentId });
 
   try {
     const drive = getDriveStorageProvider();
@@ -96,6 +100,11 @@ export async function processKnowledgeDocument(documentId: string): Promise<Know
       );
     }
 
+    logger.info("knowledge.extract.completed", {
+      document_id: documentId,
+      chunk_count: chunks.length,
+    });
+
     await service
       .from("knowledge_documents")
       .update({
@@ -106,10 +115,13 @@ export async function processKnowledgeDocument(documentId: string): Promise<Know
       })
       .eq("id", documentId);
 
+    logger.info("knowledge.ready", { document_id: documentId });
+
     const { data: updated } = await service.from("knowledge_documents").select("*").eq("id", documentId).single();
     return (updated ?? typedDoc) as KnowledgeDocument;
   } catch (err) {
     const message = err instanceof Error ? err.message : "EXTRACTION_FAILED";
+    logger.error("knowledge.extract.failed", { document_id: documentId, error: message });
     await service
       .from("knowledge_documents")
       .update({ status: "failed", extraction_error: message })

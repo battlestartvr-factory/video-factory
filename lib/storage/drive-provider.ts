@@ -55,6 +55,11 @@ export interface DriveStorageProvider {
     sizeBytes: number;
     folderId: string;
   }): Promise<ResumableUploadSession>;
+  completeResumableUpload(input: {
+    uploadUrl: string;
+    mimeType: string;
+    buffer: Buffer;
+  }): Promise<string>;
   finalizeUpload(driveFileId: string): Promise<DriveFileMetadata>;
   downloadFile(driveFileId: string): Promise<Buffer>;
   deleteFile(driveFileId: string): Promise<void>;
@@ -294,6 +299,45 @@ class GoogleDriveStorageProviderImpl implements DriveStorageProvider {
     }
 
     return { uploadUrl };
+  }
+
+  async completeResumableUpload(input: {
+    uploadUrl: string;
+    mimeType: string;
+    buffer: Buffer;
+  }): Promise<string> {
+    const response = await fetch(input.uploadUrl, {
+      method: "PUT",
+      headers: {
+        "Content-Type": input.mimeType,
+        "Content-Length": String(input.buffer.length),
+      },
+      body: new Uint8Array(input.buffer),
+    });
+
+    if (!response.ok) {
+      throw new DriveStorageError(
+        "DRIVE_UPLOAD_FAILED",
+        "Failed to upload file to Google Drive",
+        {
+          stage: "upload_complete",
+          googleHttpStatus: response.status,
+        },
+      );
+    }
+
+    try {
+      const body = (await response.json()) as { id?: string };
+      if (body.id) return body.id;
+    } catch {
+      // Response may be empty when the session was already completed.
+    }
+
+    throw new DriveStorageError(
+      "DRIVE_UPLOAD_FAILED",
+      "Google Drive upload completed but file id was not returned",
+      { stage: "upload_complete" },
+    );
   }
 
   async finalizeUpload(driveFileId: string): Promise<DriveFileMetadata> {

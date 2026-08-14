@@ -21,6 +21,9 @@ const securityHeaders = [
 
 const nextConfig: NextConfig = {
   serverExternalPackages: ["file-type"],
+  experimental: {
+    middlewareClientMaxBodySize: "16mb",
+  },
   async headers() {
     return [{ source: "/(.*)", headers: securityHeaders }];
   },

@@ -129,6 +129,27 @@ describe("GoogleDriveStorageProvider shared folder support", () => {
     );
   });
 
+  it("completes resumable upload and returns drive file id", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ id: "uploaded-file-id" }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const provider = await loadProvider();
+    const driveFileId = await provider.completeResumableUpload({
+      uploadUrl: "https://upload.example/resumable",
+      mimeType: "application/pdf",
+      buffer: Buffer.from("test"),
+    });
+
+    expect(driveFileId).toBe("uploaded-file-id");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://upload.example/resumable",
+      expect.objectContaining({ method: "PUT" }),
+    );
+  });
+
   it("maps 403 folder access errors to permission denied", async () => {
     mockFilesGet.mockRejectedValue({
       code: 403,
