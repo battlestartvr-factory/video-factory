@@ -1,8 +1,35 @@
 import "server-only";
-import { google } from "googleapis";
-import { serverEnv } from "@/lib/env/env.server";
+import {
+  createDriveApiClient,
+  createDriveAuthClient,
+  getDriveAccessToken,
+  getDriveAuthMode,
+} from "@/lib/storage/drive-auth";
+import {
+  DriveStorageError,
+  normalizeDriveError,
+  type DriveAuthMode,
+} from "@/lib/storage/drive-errors";
 
-export type DriveAuthMode = "service_account" | "oauth_user";
+export type {
+  DriveAuthMode,
+  DriveErrorCode,
+  DriveErrorDetails,
+} from "@/lib/storage/drive-errors";
+export {
+  DriveStorageError,
+  driveErrorHttpStatus,
+  driveErrorUserMessage,
+  mapGoogleHttpStatusToDriveError,
+  normalizeDriveError,
+} from "@/lib/storage/drive-errors";
+export {
+  createDriveAuthClient,
+  createDriveApiClient,
+  getDriveAccessToken,
+  getDriveAuthMode,
+  type DriveAuthClient,
+} from "@/lib/storage/drive-auth";
 
 export interface DriveFileMetadata {
   driveFileId: string;
@@ -34,60 +61,126 @@ export interface DriveStorageProvider {
   getFileMetadata(driveFileId: string): Promise<DriveFileMetadata>;
 }
 
-function normalizePrivateKey(key: string): string {
-  return key.replace(/\\n/g, "\n").replace(/^"|"$/g, "");
+interface RootFolderContext {
+  rootId: string;
+  supportsAllDrives: boolean;
 }
 
-function getAuthMode(): DriveAuthMode {
-  const mode = (process.env.GOOGLE_DRIVE_AUTH_MODE ?? "service_account").trim();
-  return mode === "oauth_user" ? "oauth_user" : "service_account";
+function sharedDriveListOptions(supportsAllDrives: boolean) {
+  return supportsAllDrives
+    ? { supportsAllDrives: true as const, includeItemsFromAllDrives: true as const }
+    : {};
 }
 
-function createDriveClient(): ReturnType<typeof google.drive> | null {
-  const authMode = getAuthMode();
+function sharedDriveMutationOptions(supportsAllDrives: boolean) {
+  return supportsAllDrives ? { supportsAllDrives: true as const } : {};
+}
 
-  if (authMode === "oauth_user") {
-    const clientId = (process.env.GOOGLE_DRIVE_CLIENT_ID ?? "").trim();
-    const clientSecret = (process.env.GOOGLE_DRIVE_CLIENT_SECRET ?? "").trim();
-    const refreshToken = (process.env.GOOGLE_DRIVE_REFRESH_TOKEN ?? "").trim();
-    if (!clientId || !clientSecret || !refreshToken) return null;
-
-    const oauth2 = new google.auth.OAuth2(clientId, clientSecret);
-    oauth2.setCredentials({ refresh_token: refreshToken });
-    return google.drive({ version: "v3", auth: oauth2 });
-  }
-
-  const email = (serverEnv.GOOGLE_DRIVE_CLIENT_EMAIL ?? "").trim();
-  const privateKey = normalizePrivateKey(serverEnv.GOOGLE_DRIVE_PRIVATE_KEY ?? "");
-  if (!email || !privateKey) return null;
-
-  const auth = new google.auth.JWT({
-    email,
-    key: privateKey,
-    scopes: ["https://www.googleapis.com/auth/drive"],
-  });
-  return google.drive({ version: "v3", auth });
+function isNotFoundError(err: unknown): boolean {
+  if (!err || typeof err !== "object") return false;
+  const candidate = err as { code?: number; response?: { status?: number } };
+  return candidate.code === 404 || candidate.response?.status === 404;
 }
 
 class GoogleDriveStorageProviderImpl implements DriveStorageProvider {
-  readonly authMode = getAuthMode();
+  readonly authMode = getDriveAuthMode();
   private readonly folderCache = new Map<string, string>();
+  private rootFolderContext: RootFolderContext | null = null;
 
   isConfigured(): boolean {
-    return Boolean(createDriveClient());
+    return Boolean(createDriveAuthClient());
   }
 
-  private getClient() {
-    const client = createDriveClient();
-    if (!client) throw new Error("GOOGLE_DRIVE_NOT_CONFIGURED");
-    return client;
+  private getAuthAndDrive() {
+    const auth = createDriveAuthClient();
+    if (!auth) {
+      throw new DriveStorageError(
+        "DRIVE_NOT_CONFIGURED",
+        "Google Drive credentials are not configured",
+        { stage: "auth_config" },
+      );
+    }
+    return { auth, drive: createDriveApiClient(auth) };
+  }
+
+  private async ensureRootFolderReady(): Promise<RootFolderContext> {
+    if (this.rootFolderContext) return this.rootFolderContext;
+
+    const rootId = (process.env.GOOGLE_DRIVE_SHARED_FOLDER_ID ?? "").trim();
+    if (!rootId) {
+      throw new DriveStorageError(
+        "DRIVE_NOT_CONFIGURED",
+        "GOOGLE_DRIVE_SHARED_FOLDER_ID is not configured",
+        { stage: "root_folder_config" },
+      );
+    }
+
+    const { drive } = this.getAuthAndDrive();
+    let supportsAllDrives = false;
+
+    try {
+      let fileResponse;
+      try {
+        fileResponse = await drive.files.get({
+          fileId: rootId,
+          fields: "id,name,mimeType,driveId,capabilities",
+        });
+      } catch (err) {
+        if (!isNotFoundError(err)) throw err;
+        fileResponse = await drive.files.get({
+          fileId: rootId,
+          fields: "id,name,mimeType,driveId,capabilities",
+          supportsAllDrives: true,
+        });
+        supportsAllDrives = true;
+      }
+
+      const file = fileResponse.data;
+      if (!file.id) {
+        throw new DriveStorageError(
+          "DRIVE_FOLDER_ACCESS_DENIED",
+          "Root Google Drive folder was not found",
+          { stage: "root_folder_access", googleHttpStatus: 404 },
+        );
+      }
+
+      if (file.mimeType && file.mimeType !== "application/vnd.google-apps.folder") {
+        throw new DriveStorageError(
+          "DRIVE_FOLDER_ACCESS_DENIED",
+          "GOOGLE_DRIVE_SHARED_FOLDER_ID must reference a folder",
+          { stage: "root_folder_access" },
+        );
+      }
+
+      if (!supportsAllDrives) {
+        supportsAllDrives = Boolean(file.driveId);
+      }
+
+      if (file.capabilities?.canAddChildren === false) {
+        throw new DriveStorageError(
+          "DRIVE_FOLDER_ACCESS_DENIED",
+          "Google Drive identity cannot create folders in the root folder",
+          { stage: "root_folder_access", googleHttpStatus: 403 },
+        );
+      }
+
+      await drive.files.list({
+        q: `'${rootId}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`,
+        fields: "files(id)",
+        pageSize: 1,
+        ...sharedDriveListOptions(supportsAllDrives),
+      });
+
+      this.rootFolderContext = { rootId, supportsAllDrives };
+      return this.rootFolderContext;
+    } catch (err) {
+      throw normalizeDriveError(err, "root_folder_access", "DRIVE_FOLDER_ACCESS_DENIED");
+    }
   }
 
   async ensureFolderPath(segments: string[]): Promise<string> {
-    const rootId = (serverEnv.GOOGLE_DRIVE_SHARED_FOLDER_ID ?? "").trim();
-    if (!rootId) throw new Error("GOOGLE_DRIVE_SHARED_FOLDER_ID_MISSING");
-
-    const drive = this.getClient();
+    const { rootId, supportsAllDrives } = await this.ensureRootFolderReady();
+    const { drive } = this.getAuthAndDrive();
     let parentId = rootId;
 
     for (const segment of segments) {
@@ -105,34 +198,44 @@ class GoogleDriveStorageProviderImpl implements DriveStorageProvider {
         `name='${segment.replace(/'/g, "\\'")}'`,
       ].join(" and ");
 
-      const existing = await drive.files.list({
-        q: query,
-        fields: "files(id,name)",
-        pageSize: 1,
-        supportsAllDrives: true,
-        includeItemsFromAllDrives: true,
-      });
+      try {
+        const existing = await drive.files.list({
+          q: query,
+          fields: "files(id,name)",
+          pageSize: 1,
+          ...sharedDriveListOptions(supportsAllDrives),
+        });
 
-      const found = existing.data.files?.[0]?.id;
-      if (found) {
-        this.folderCache.set(cacheKey, found);
-        parentId = found;
-        continue;
+        const found = existing.data.files?.[0]?.id;
+        if (found) {
+          this.folderCache.set(cacheKey, found);
+          parentId = found;
+          continue;
+        }
+
+        const created = await drive.files.create({
+          requestBody: {
+            name: segment,
+            mimeType: "application/vnd.google-apps.folder",
+            parents: [parentId],
+          },
+          fields: "id",
+          ...sharedDriveMutationOptions(supportsAllDrives),
+        });
+        const newId = created.data.id;
+        if (!newId) {
+          throw new DriveStorageError(
+            "DRIVE_FOLDER_CREATE_FAILED",
+            "Google Drive did not return a folder id",
+            { stage: "folder_create" },
+          );
+        }
+        this.folderCache.set(cacheKey, newId);
+        parentId = newId;
+      } catch (err) {
+        if (err instanceof DriveStorageError) throw err;
+        throw normalizeDriveError(err, "folder_create", "DRIVE_FOLDER_CREATE_FAILED");
       }
-
-      const created = await drive.files.create({
-        requestBody: {
-          name: segment,
-          mimeType: "application/vnd.google-apps.folder",
-          parents: [parentId],
-        },
-        fields: "id",
-        supportsAllDrives: true,
-      });
-      const newId = created.data.id;
-      if (!newId) throw new Error("DRIVE_FOLDER_CREATE_FAILED");
-      this.folderCache.set(cacheKey, newId);
-      parentId = newId;
     }
 
     return parentId;
@@ -144,16 +247,21 @@ class GoogleDriveStorageProviderImpl implements DriveStorageProvider {
     sizeBytes: number;
     folderId: string;
   }): Promise<ResumableUploadSession> {
-    const drive = this.getClient();
-    const auth = drive.context._options.auth;
-    const authClient = auth as { getClient?: () => Promise<{ getAccessToken: () => Promise<{ token?: string } | string> }> };
-    const client = authClient.getClient ? await authClient.getClient() : null;
-    const tokenResponse = client ? await client.getAccessToken() : null;
-    const token = typeof tokenResponse === "string" ? tokenResponse : tokenResponse?.token;
-    if (!token) throw new Error("DRIVE_AUTH_TOKEN_FAILED");
+    const { supportsAllDrives } = await this.ensureRootFolderReady();
+    const { auth } = this.getAuthAndDrive();
+
+    let token: string;
+    try {
+      token = await getDriveAccessToken(auth);
+    } catch (err) {
+      throw normalizeDriveError(err, "auth_token", "DRIVE_AUTH_FAILED");
+    }
+
+    const uploadParams = new URLSearchParams({ uploadType: "resumable" });
+    if (supportsAllDrives) uploadParams.set("supportsAllDrives", "true");
 
     const initResponse = await fetch(
-      "https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&supportsAllDrives=true",
+      `https://www.googleapis.com/upload/drive/v3/files?${uploadParams.toString()}`,
       {
         method: "POST",
         headers: {
@@ -170,9 +278,39 @@ class GoogleDriveStorageProviderImpl implements DriveStorageProvider {
       },
     );
 
-    if (!initResponse.ok) throw new Error("DRIVE_UPLOAD_SESSION_FAILED");
+    if (!initResponse.ok) {
+      let googleErrorReason: string | undefined;
+      try {
+        const body = (await initResponse.json()) as {
+          error?: { errors?: Array<{ reason?: string }> };
+        };
+        googleErrorReason = body.error?.errors?.[0]?.reason;
+      } catch {
+        // Ignore malformed error bodies.
+      }
+
+      const code =
+        initResponse.status === 401
+          ? "DRIVE_AUTH_FAILED"
+          : initResponse.status === 403 || initResponse.status === 404
+            ? "DRIVE_FOLDER_ACCESS_DENIED"
+            : "DRIVE_UPLOAD_SESSION_FAILED";
+
+      throw new DriveStorageError(code, "Failed to create Google Drive upload session", {
+        stage: "upload_session",
+        googleHttpStatus: initResponse.status,
+        ...(googleErrorReason ? { googleErrorReason } : {}),
+      });
+    }
+
     const uploadUrl = initResponse.headers.get("Location");
-    if (!uploadUrl) throw new Error("DRIVE_UPLOAD_SESSION_FAILED");
+    if (!uploadUrl) {
+      throw new DriveStorageError(
+        "DRIVE_UPLOAD_SESSION_FAILED",
+        "Google Drive upload session did not return a Location header",
+        { stage: "upload_session" },
+      );
+    }
 
     return { uploadUrl };
   }
@@ -182,25 +320,35 @@ class GoogleDriveStorageProviderImpl implements DriveStorageProvider {
   }
 
   async downloadFile(driveFileId: string): Promise<Buffer> {
-    const drive = this.getClient();
+    const { supportsAllDrives } = await this.ensureRootFolderReady();
+    const { drive } = this.getAuthAndDrive();
     const response = await drive.files.get(
-      { fileId: driveFileId, alt: "media", supportsAllDrives: true },
+      {
+        fileId: driveFileId,
+        alt: "media",
+        ...sharedDriveMutationOptions(supportsAllDrives),
+      },
       { responseType: "arraybuffer" },
     );
     return Buffer.from(response.data as ArrayBuffer);
   }
 
   async deleteFile(driveFileId: string): Promise<void> {
-    const drive = this.getClient();
-    await drive.files.delete({ fileId: driveFileId, supportsAllDrives: true });
+    const { supportsAllDrives } = await this.ensureRootFolderReady();
+    const { drive } = this.getAuthAndDrive();
+    await drive.files.delete({
+      fileId: driveFileId,
+      ...sharedDriveMutationOptions(supportsAllDrives),
+    });
   }
 
   async getFileMetadata(driveFileId: string): Promise<DriveFileMetadata> {
-    const drive = this.getClient();
+    const { supportsAllDrives } = await this.ensureRootFolderReady();
+    const { drive } = this.getAuthAndDrive();
     const response = await drive.files.get({
       fileId: driveFileId,
       fields: "id,name,mimeType,size,webViewLink,md5Checksum",
-      supportsAllDrives: true,
+      ...sharedDriveMutationOptions(supportsAllDrives),
     });
     const file = response.data;
     return {
@@ -222,7 +370,8 @@ export function getDriveStorageProvider(): DriveStorageProvider {
 }
 
 export function isDriveStorageConfigured(): boolean {
-  if (!serverEnv.GOOGLE_DRIVE_INTEGRATION_ENABLED) return false;
+  const enabled = (process.env.GOOGLE_DRIVE_INTEGRATION_ENABLED ?? "").trim() === "true";
+  if (!enabled) return false;
   return getDriveStorageProvider().isConfigured();
 }
 

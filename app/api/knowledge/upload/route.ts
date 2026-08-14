@@ -1,13 +1,42 @@
 import { getSessionUser } from "@/lib/auth/session";
 import { apiSuccess, apiError, readJsonBody } from "@/lib/api/response";
-import { generateRequestId } from "@/lib/logging/logger";
+import { generateRequestId, createLogger } from "@/lib/logging/logger";
 import { knowledgeUploadSessionSchema } from "@/lib/validation/workspace-schemas";
 import { isAllowedMime } from "@/lib/attachments/mime";
 import { createKnowledgeUploadSession, finalizeKnowledgeUpload } from "@/lib/knowledge";
-import { isDriveStorageConfigured } from "@/lib/storage/drive-provider";
+import {
+  DriveStorageError,
+  driveErrorHttpStatus,
+  driveErrorUserMessage,
+  getDriveAuthMode,
+  isDriveStorageConfigured,
+  normalizeDriveError,
+} from "@/lib/storage/drive-provider";
+
+function resolveUploadError(err: unknown): DriveStorageError {
+  if (err instanceof DriveStorageError) return err;
+  if (err instanceof Error) {
+    if (err.message === "GOOGLE_DRIVE_NOT_CONFIGURED") {
+      return new DriveStorageError(
+        "DRIVE_NOT_CONFIGURED",
+        driveErrorUserMessage("DRIVE_NOT_CONFIGURED"),
+        { stage: "drive_config" },
+      );
+    }
+    if (err.message === "GOOGLE_DRIVE_SHARED_FOLDER_ID_MISSING") {
+      return new DriveStorageError(
+        "DRIVE_NOT_CONFIGURED",
+        driveErrorUserMessage("DRIVE_NOT_CONFIGURED"),
+        { stage: "root_folder_config" },
+      );
+    }
+  }
+  return normalizeDriveError(err, "upload_session", "DRIVE_UPLOAD_SESSION_FAILED");
+}
 
 export async function POST(request: Request) {
   const requestId = generateRequestId();
+  const logger = createLogger({ request_id: requestId, event: "knowledge.upload" });
   const user = await getSessionUser();
   if (!user) return apiError("UNAUTHORIZED", "Требуется авторизация", 401, requestId);
 
@@ -46,8 +75,25 @@ export async function POST(request: Request) {
       },
       201,
     );
-  } catch {
-    return apiError("CREATE_FAILED", "Не удалось создать сессию загрузки", 500, requestId);
+  } catch (err) {
+    const normalized = resolveUploadError(err);
+    logger.error("knowledge.upload.session_failed", {
+      request_id: requestId,
+      auth_mode: getDriveAuthMode(),
+      stage: normalized.stage,
+      normalized_drive_error: normalized.code,
+      ...(normalized.googleHttpStatus !== undefined
+        ? { google_http_status: normalized.googleHttpStatus }
+        : {}),
+      ...(normalized.googleErrorReason ? { google_error_reason: normalized.googleErrorReason } : {}),
+    });
+
+    return apiError(
+      normalized.code,
+      driveErrorUserMessage(normalized.code),
+      driveErrorHttpStatus(normalized.code),
+      requestId,
+    );
   }
 }
 
