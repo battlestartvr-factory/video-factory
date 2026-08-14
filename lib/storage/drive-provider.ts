@@ -63,24 +63,16 @@ export interface DriveStorageProvider {
 
 interface RootFolderContext {
   rootId: string;
-  supportsAllDrives: boolean;
 }
 
-function sharedDriveListOptions(supportsAllDrives: boolean) {
-  return supportsAllDrives
-    ? { supportsAllDrives: true as const, includeItemsFromAllDrives: true as const }
-    : {};
-}
+const SHARED_DRIVE_LIST_OPTIONS = {
+  supportsAllDrives: true as const,
+  includeItemsFromAllDrives: true as const,
+};
 
-function sharedDriveMutationOptions(supportsAllDrives: boolean) {
-  return supportsAllDrives ? { supportsAllDrives: true as const } : {};
-}
-
-function isNotFoundError(err: unknown): boolean {
-  if (!err || typeof err !== "object") return false;
-  const candidate = err as { code?: number; response?: { status?: number } };
-  return candidate.code === 404 || candidate.response?.status === 404;
-}
+const SHARED_DRIVE_MUTATION_OPTIONS = {
+  supportsAllDrives: true as const,
+};
 
 class GoogleDriveStorageProviderImpl implements DriveStorageProvider {
   readonly authMode = getDriveAuthMode();
@@ -116,29 +108,18 @@ class GoogleDriveStorageProviderImpl implements DriveStorageProvider {
     }
 
     const { drive } = this.getAuthAndDrive();
-    let supportsAllDrives = false;
 
     try {
-      let fileResponse;
-      try {
-        fileResponse = await drive.files.get({
-          fileId: rootId,
-          fields: "id,name,mimeType,driveId,capabilities",
-        });
-      } catch (err) {
-        if (!isNotFoundError(err)) throw err;
-        fileResponse = await drive.files.get({
-          fileId: rootId,
-          fields: "id,name,mimeType,driveId,capabilities",
-          supportsAllDrives: true,
-        });
-        supportsAllDrives = true;
-      }
+      const fileResponse = await drive.files.get({
+        fileId: rootId,
+        fields: "id,name,mimeType",
+        ...SHARED_DRIVE_MUTATION_OPTIONS,
+      });
 
       const file = fileResponse.data;
       if (!file.id) {
         throw new DriveStorageError(
-          "DRIVE_FOLDER_ACCESS_DENIED",
+          "DRIVE_FOLDER_NOT_FOUND",
           "Root Google Drive folder was not found",
           { stage: "root_folder_access", googleHttpStatus: 404 },
         );
@@ -152,34 +133,23 @@ class GoogleDriveStorageProviderImpl implements DriveStorageProvider {
         );
       }
 
-      if (!supportsAllDrives) {
-        supportsAllDrives = Boolean(file.driveId);
-      }
-
-      if (file.capabilities?.canAddChildren === false) {
-        throw new DriveStorageError(
-          "DRIVE_FOLDER_ACCESS_DENIED",
-          "Google Drive identity cannot create folders in the root folder",
-          { stage: "root_folder_access", googleHttpStatus: 403 },
-        );
-      }
-
       await drive.files.list({
-        q: `'${rootId}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`,
+        q: `'${rootId}' in parents and trashed=false`,
         fields: "files(id)",
         pageSize: 1,
-        ...sharedDriveListOptions(supportsAllDrives),
+        ...SHARED_DRIVE_LIST_OPTIONS,
       });
 
-      this.rootFolderContext = { rootId, supportsAllDrives };
+      this.rootFolderContext = { rootId };
       return this.rootFolderContext;
     } catch (err) {
+      if (err instanceof DriveStorageError) throw err;
       throw normalizeDriveError(err, "root_folder_access", "DRIVE_FOLDER_ACCESS_DENIED");
     }
   }
 
   async ensureFolderPath(segments: string[]): Promise<string> {
-    const { rootId, supportsAllDrives } = await this.ensureRootFolderReady();
+    const { rootId } = await this.ensureRootFolderReady();
     const { drive } = this.getAuthAndDrive();
     let parentId = rootId;
 
@@ -203,7 +173,7 @@ class GoogleDriveStorageProviderImpl implements DriveStorageProvider {
           q: query,
           fields: "files(id,name)",
           pageSize: 1,
-          ...sharedDriveListOptions(supportsAllDrives),
+          ...SHARED_DRIVE_LIST_OPTIONS,
         });
 
         const found = existing.data.files?.[0]?.id;
@@ -220,7 +190,7 @@ class GoogleDriveStorageProviderImpl implements DriveStorageProvider {
             parents: [parentId],
           },
           fields: "id",
-          ...sharedDriveMutationOptions(supportsAllDrives),
+          ...SHARED_DRIVE_MUTATION_OPTIONS,
         });
         const newId = created.data.id;
         if (!newId) {
@@ -247,7 +217,7 @@ class GoogleDriveStorageProviderImpl implements DriveStorageProvider {
     sizeBytes: number;
     folderId: string;
   }): Promise<ResumableUploadSession> {
-    const { supportsAllDrives } = await this.ensureRootFolderReady();
+    await this.ensureRootFolderReady();
     const { auth } = this.getAuthAndDrive();
 
     let token: string;
@@ -257,8 +227,10 @@ class GoogleDriveStorageProviderImpl implements DriveStorageProvider {
       throw normalizeDriveError(err, "auth_token", "DRIVE_AUTH_FAILED");
     }
 
-    const uploadParams = new URLSearchParams({ uploadType: "resumable" });
-    if (supportsAllDrives) uploadParams.set("supportsAllDrives", "true");
+    const uploadParams = new URLSearchParams({
+      uploadType: "resumable",
+      supportsAllDrives: "true",
+    });
 
     const initResponse = await fetch(
       `https://www.googleapis.com/upload/drive/v3/files?${uploadParams.toString()}`,
@@ -292,11 +264,20 @@ class GoogleDriveStorageProviderImpl implements DriveStorageProvider {
       const code =
         initResponse.status === 401
           ? "DRIVE_AUTH_FAILED"
-          : initResponse.status === 403 || initResponse.status === 404
+          : initResponse.status === 403
             ? "DRIVE_FOLDER_ACCESS_DENIED"
-            : "DRIVE_UPLOAD_SESSION_FAILED";
+            : initResponse.status === 404
+              ? "DRIVE_FOLDER_NOT_FOUND"
+              : "DRIVE_UPLOAD_SESSION_FAILED";
 
-      throw new DriveStorageError(code, "Failed to create Google Drive upload session", {
+      const message =
+        initResponse.status === 403
+          ? "Permission denied: cannot create upload session in Google Drive folder"
+          : initResponse.status === 404
+            ? "Folder not found: Google Drive folder for upload does not exist"
+            : "Failed to create Google Drive upload session";
+
+      throw new DriveStorageError(code, message, {
         stage: "upload_session",
         googleHttpStatus: initResponse.status,
         ...(googleErrorReason ? { googleErrorReason } : {}),
@@ -320,13 +301,13 @@ class GoogleDriveStorageProviderImpl implements DriveStorageProvider {
   }
 
   async downloadFile(driveFileId: string): Promise<Buffer> {
-    const { supportsAllDrives } = await this.ensureRootFolderReady();
+    await this.ensureRootFolderReady();
     const { drive } = this.getAuthAndDrive();
     const response = await drive.files.get(
       {
         fileId: driveFileId,
         alt: "media",
-        ...sharedDriveMutationOptions(supportsAllDrives),
+        ...SHARED_DRIVE_MUTATION_OPTIONS,
       },
       { responseType: "arraybuffer" },
     );
@@ -334,21 +315,21 @@ class GoogleDriveStorageProviderImpl implements DriveStorageProvider {
   }
 
   async deleteFile(driveFileId: string): Promise<void> {
-    const { supportsAllDrives } = await this.ensureRootFolderReady();
+    await this.ensureRootFolderReady();
     const { drive } = this.getAuthAndDrive();
     await drive.files.delete({
       fileId: driveFileId,
-      ...sharedDriveMutationOptions(supportsAllDrives),
+      ...SHARED_DRIVE_MUTATION_OPTIONS,
     });
   }
 
   async getFileMetadata(driveFileId: string): Promise<DriveFileMetadata> {
-    const { supportsAllDrives } = await this.ensureRootFolderReady();
+    await this.ensureRootFolderReady();
     const { drive } = this.getAuthAndDrive();
     const response = await drive.files.get({
       fileId: driveFileId,
       fields: "id,name,mimeType,size,webViewLink,md5Checksum",
-      ...sharedDriveMutationOptions(supportsAllDrives),
+      ...SHARED_DRIVE_MUTATION_OPTIONS,
     });
     const file = response.data;
     return {

@@ -16,9 +16,9 @@ describe("mapGoogleHttpStatusToDriveError", () => {
     );
   });
 
-  it("maps 404 to DRIVE_FOLDER_ACCESS_DENIED", () => {
+  it("maps 404 to DRIVE_FOLDER_NOT_FOUND", () => {
     expect(mapGoogleHttpStatusToDriveError(404, "root_folder_access")).toBe(
-      "DRIVE_FOLDER_ACCESS_DENIED",
+      "DRIVE_FOLDER_NOT_FOUND",
     );
   });
 
@@ -74,7 +74,7 @@ describe("normalizeDriveError", () => {
     expect(err.googleErrorReason).toBe("insufficientPermissions");
   });
 
-  it("maps Gaxios-style 404 errors to DRIVE_FOLDER_ACCESS_DENIED", () => {
+  it("maps Gaxios-style 404 errors to DRIVE_FOLDER_NOT_FOUND", () => {
     const err = normalizeDriveError(
       {
         code: 404,
@@ -86,7 +86,7 @@ describe("normalizeDriveError", () => {
       "root_folder_access",
     );
 
-    expect(err.code).toBe("DRIVE_FOLDER_ACCESS_DENIED");
+    expect(err.code).toBe("DRIVE_FOLDER_NOT_FOUND");
     expect(err.googleHttpStatus).toBe(404);
     expect(err.googleErrorReason).toBe("notFound");
   });

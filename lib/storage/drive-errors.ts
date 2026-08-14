@@ -4,6 +4,7 @@ export type DriveErrorCode =
   | "DRIVE_NOT_CONFIGURED"
   | "DRIVE_AUTH_FAILED"
   | "DRIVE_FOLDER_ACCESS_DENIED"
+  | "DRIVE_FOLDER_NOT_FOUND"
   | "DRIVE_FOLDER_CREATE_FAILED"
   | "DRIVE_UPLOAD_SESSION_FAILED";
 
@@ -61,11 +62,12 @@ function extractGoogleApiError(err: unknown): { httpStatus?: number; reason?: st
 
 export function mapGoogleHttpStatusToDriveError(
   httpStatus: number,
-  stage: string,
+  _stage: string,
   fallbackCode: DriveErrorCode = "DRIVE_FOLDER_ACCESS_DENIED",
 ): DriveErrorCode {
   if (httpStatus === 401) return "DRIVE_AUTH_FAILED";
-  if (httpStatus === 403 || httpStatus === 404) return "DRIVE_FOLDER_ACCESS_DENIED";
+  if (httpStatus === 403) return "DRIVE_FOLDER_ACCESS_DENIED";
+  if (httpStatus === 404) return "DRIVE_FOLDER_NOT_FOUND";
   return fallbackCode;
 }
 
@@ -100,6 +102,8 @@ export function driveErrorHttpStatus(code: DriveErrorCode): number {
       return 503;
     case "DRIVE_FOLDER_ACCESS_DENIED":
       return 403;
+    case "DRIVE_FOLDER_NOT_FOUND":
+      return 404;
     case "DRIVE_AUTH_FAILED":
       return 502;
     default:
@@ -114,7 +118,9 @@ export function driveErrorUserMessage(code: DriveErrorCode): string {
     case "DRIVE_AUTH_FAILED":
       return "Не удалось авторизоваться в Google Drive";
     case "DRIVE_FOLDER_ACCESS_DENIED":
-      return "Нет доступа к папке Google Drive";
+      return "Permission denied: нет доступа к папке Google Drive";
+    case "DRIVE_FOLDER_NOT_FOUND":
+      return "Folder not found: папка Google Drive не найдена";
     case "DRIVE_FOLDER_CREATE_FAILED":
       return "Не удалось создать папку в Google Drive";
     case "DRIVE_UPLOAD_SESSION_FAILED":
