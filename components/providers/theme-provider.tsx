@@ -2,36 +2,17 @@
 
 import { createContext, useContext, useEffect, useState, useCallback, useSyncExternalStore, useMemo } from "react";
 import type { AppearanceSettings } from "@/lib/types/workspace";
-
-const DEFAULT_APPEARANCE: AppearanceSettings = {
-  theme: "dark",
-  accentColor: "amber",
-  font: "geist",
-  density: "comfortable",
-};
-
-function subscribeStorage(callback: () => void) {
-  window.addEventListener("storage", callback);
-  return () => window.removeEventListener("storage", callback);
-}
-
-function readJsonStorage<T>(key: string, fallback: T): T {
-  try {
-    const raw = localStorage.getItem(key);
-    if (!raw) return fallback;
-    return { ...fallback, ...JSON.parse(raw) as T };
-  } catch {
-    return fallback;
-  }
-}
-
-function getAppearanceSnapshot(): AppearanceSettings {
-  return readJsonStorage("acf-appearance", DEFAULT_APPEARANCE);
-}
-
-function getSidebarCollapsedSnapshot(): boolean {
-  return localStorage.getItem("acf-sidebar-collapsed") === "true";
-}
+import {
+  DEFAULT_APPEARANCE,
+  getAppearanceSnapshot,
+  writeAppearanceSnapshot,
+  subscribeAppearanceStorage,
+} from "@/lib/theme/appearance-storage";
+import {
+  getSidebarCollapsedSnapshot,
+  writeSidebarCollapsedSnapshot,
+  subscribeSidebarStorage,
+} from "@/lib/theme/sidebar-storage";
 
 interface ThemeContextValue {
   appearance: AppearanceSettings;
@@ -65,6 +46,15 @@ function applyAppearance(settings: AppearanceSettings) {
   }
 }
 
+function subscribeStorage(callback: () => void) {
+  const unsubAppearance = subscribeAppearanceStorage(callback);
+  const unsubSidebar = subscribeSidebarStorage(callback);
+  return () => {
+    unsubAppearance();
+    unsubSidebar();
+  };
+}
+
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const storedAppearance = useSyncExternalStore(
     subscribeStorage,
@@ -81,19 +71,19 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const [sidebarCollapsedOverride, setSidebarCollapsedOverride] = useState<boolean | null>(null);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
 
-  const appearance = useMemo(
-    () => ({ ...storedAppearance, ...appearanceOverrides }),
-    [storedAppearance, appearanceOverrides],
-  );
+  const appearance = useMemo(() => {
+    if (Object.keys(appearanceOverrides).length === 0) return storedAppearance;
+    return { ...storedAppearance, ...appearanceOverrides };
+  }, [storedAppearance, appearanceOverrides]);
   const sidebarCollapsed = sidebarCollapsedOverride ?? storedCollapsed;
 
   useEffect(() => {
     applyAppearance(appearance);
-    localStorage.setItem("acf-appearance", JSON.stringify(appearance));
+    writeAppearanceSnapshot(appearance);
   }, [appearance]);
 
   useEffect(() => {
-    localStorage.setItem("acf-sidebar-collapsed", String(sidebarCollapsed));
+    writeSidebarCollapsedSnapshot(sidebarCollapsed);
   }, [sidebarCollapsed]);
 
   useEffect(() => {
@@ -107,27 +97,31 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const setAppearance = useCallback((partial: Partial<AppearanceSettings>) => {
     setAppearanceOverrides((prev) => {
       const next = { ...prev, ...partial };
-      localStorage.setItem("acf-appearance", JSON.stringify({ ...storedAppearance, ...next }));
+      const merged = { ...storedAppearance, ...next };
+      writeAppearanceSnapshot(merged);
       return next;
     });
   }, [storedAppearance]);
 
   const setSidebarCollapsed = useCallback((v: boolean) => {
     setSidebarCollapsedOverride(v);
-    localStorage.setItem("acf-sidebar-collapsed", String(v));
+    writeSidebarCollapsedSnapshot(v);
   }, []);
 
+  const contextValue = useMemo(
+    () => ({
+      appearance,
+      setAppearance,
+      sidebarCollapsed,
+      setSidebarCollapsed,
+      mobileSidebarOpen,
+      setMobileSidebarOpen,
+    }),
+    [appearance, setAppearance, sidebarCollapsed, setSidebarCollapsed, mobileSidebarOpen],
+  );
+
   return (
-    <ThemeContext.Provider
-      value={{
-        appearance,
-        setAppearance,
-        sidebarCollapsed,
-        setSidebarCollapsed,
-        mobileSidebarOpen,
-        setMobileSidebarOpen,
-      }}
-    >
+    <ThemeContext.Provider value={contextValue}>
       {children}
     </ThemeContext.Provider>
   );
