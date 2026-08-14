@@ -73,42 +73,54 @@ AS $$
   ),
   query_ts AS (
     SELECT plainto_tsquery('simple', coalesce(p_query, '')) AS q
+  ),
+  scored AS (
+    SELECT
+      kc.id AS chunk_id,
+      kd.id AS document_id,
+      kc.chunk_index,
+      kc.content,
+      kd.filename,
+      kd.knowledge_base_id,
+      ts_rank(kc.search_vector, qt.q)::real AS fts_rank,
+      (
+        CASE WHEN lower(kd.filename) = lower(trim(p_query)) THEN 1.0
+             WHEN lower(kd.filename) LIKE '%' || lower(trim(p_query)) || '%' THEN 0.8
+             ELSE 0.0
+        END
+        +
+        COALESCE((
+          SELECT COUNT(*)::real / GREATEST((SELECT COUNT(*) FROM filtered_terms), 1)
+          FROM filtered_terms ft
+          WHERE lower(kd.filename) LIKE '%' || ft.term || '%'
+             OR lower(kc.content) LIKE '%' || ft.term || '%'
+        ), 0) * 0.3
+      )::real AS filename_score
+    FROM public.knowledge_chunks kc
+    JOIN public.knowledge_documents kd ON kd.id = kc.document_id
+    CROSS JOIN query_ts qt
+    WHERE kd.knowledge_base_id = ANY(p_base_ids)
+      AND kd.status = 'ready'
+      AND (
+        kc.search_vector @@ qt.q
+        OR lower(kd.filename) LIKE '%' || lower(trim(p_query)) || '%'
+        OR EXISTS (
+          SELECT 1 FROM filtered_terms ft
+          WHERE lower(kc.content) LIKE '%' || ft.term || '%'
+             OR lower(kd.filename) LIKE '%' || ft.term || '%'
+        )
+      )
   )
   SELECT
-    kc.id AS chunk_id,
-    kd.id AS document_id,
-    kc.chunk_index,
-    kc.content,
-    kd.filename,
-    kd.knowledge_base_id,
-    ts_rank(kc.search_vector, qt.q)::real AS fts_rank,
-    (
-      CASE WHEN lower(kd.filename) = lower(trim(p_query)) THEN 1.0
-           WHEN lower(kd.filename) LIKE '%' || lower(trim(p_query)) || '%' THEN 0.8
-           ELSE 0.0
-      END
-      +
-      COALESCE((
-        SELECT COUNT(*)::real / GREATEST((SELECT COUNT(*) FROM filtered_terms), 1)
-        FROM filtered_terms ft
-        WHERE lower(kd.filename) LIKE '%' || ft.term || '%'
-           OR lower(kc.content) LIKE '%' || ft.term || '%'
-      ), 0) * 0.3
-    )::real AS filename_score
-  FROM public.knowledge_chunks kc
-  JOIN public.knowledge_documents kd ON kd.id = kc.document_id
-  CROSS JOIN query_ts qt
-  WHERE kd.knowledge_base_id = ANY(p_base_ids)
-    AND kd.status = 'ready'
-    AND (
-      kc.search_vector @@ qt.q
-      OR lower(kd.filename) LIKE '%' || lower(trim(p_query)) || '%'
-      OR EXISTS (
-        SELECT 1 FROM filtered_terms ft
-        WHERE lower(kc.content) LIKE '%' || ft.term || '%'
-           OR lower(kd.filename) LIKE '%' || ft.term || '%'
-      )
-    )
+    chunk_id,
+    document_id,
+    chunk_index,
+    content,
+    filename,
+    knowledge_base_id,
+    fts_rank,
+    filename_score
+  FROM scored
   ORDER BY (filename_score + fts_rank) DESC
   LIMIT GREATEST(p_limit, 1);
 $$;
