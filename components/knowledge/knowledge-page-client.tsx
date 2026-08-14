@@ -53,106 +53,32 @@ export function KnowledgePageClient() {
 
   useEffect(() => { loadDocuments(); }, []);
 
-  const uploadViaServer = async (file: File, documentId: string) => {
-    const form = new FormData();
-    form.append("documentId", documentId);
-    form.append("file", file);
-    const res = await fetch("/api/knowledge/upload", { method: "PATCH", body: form });
-    const data = await res.json();
-    if (!data.ok) throw new Error(data.error?.message ?? "Server upload failed");
-    return data.data as KnowledgeDocument;
-  };
-
-  const finalizeUpload = async (documentId: string, driveFileId: string) => {
-    const finalizeRes = await fetch("/api/knowledge/upload", {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ documentId, driveFileId }),
-    });
-    const finalizeData = await finalizeRes.json();
-    if (!finalizeData.ok) throw new Error(finalizeData.error?.message ?? "Finalize failed");
-    return finalizeData.data as KnowledgeDocument;
-  };
-
-  const uploadViaDrive = async (file: File, mimeType: string) => {
-    const sessionRes = await fetch("/api/knowledge/upload", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        filename: file.name,
-        mimeType,
-        sizeBytes: file.size,
-      }),
-    });
-    const sessionData = await sessionRes.json();
-    if (!sessionData.ok) throw new Error(sessionData.error?.message ?? "Upload session failed");
-
-    const documentId = sessionData.data.documentId as string;
-    const uploadUrl = sessionData.data.uploadUrl as string;
-
-    let driveFileId: string | null = null;
-    try {
-      const uploadRes = await fetch(uploadUrl, {
-        method: "PUT",
-        headers: {
-          "Content-Type": mimeType,
-          "Content-Length": String(file.size),
-        },
-        body: file,
-      });
-
-      if (uploadRes.ok) {
-        const drivePayload = await uploadRes.json().catch(() => null);
-        if (drivePayload && typeof drivePayload === "object" && "id" in drivePayload) {
-          driveFileId = String((drivePayload as { id: string }).id);
-        }
-      }
-    } catch {
-      // Browser upload blocked (often CORS) — fall back to server-side upload.
-    }
-
-    if (driveFileId) {
-      return finalizeUpload(documentId, driveFileId);
-    }
-
-    return uploadViaServer(file, documentId);
-  };
-
-  const uploadViaTextApi = async (file: File, mimeType: string, content: string) => {
-    const res = await fetch("/api/knowledge", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        filename: file.name,
-        mimeType,
-        sizeBytes: file.size,
-        content,
-      }),
-    });
-    const data = await res.json();
-    if (!data.ok) throw new Error(data.error?.message ?? "Upload failed");
-    return data.data as KnowledgeDocument;
-  };
-
   const uploadFile = async (file: File) => {
     setUploading(true);
     const mimeType = file.type || guessMimeFromExtension(file.name) || "application/octet-stream";
     try {
-      const isText =
-        file.type.startsWith("text/") || file.name.endsWith(".md") || file.name.endsWith(".txt");
-      let doc: KnowledgeDocument;
+      const sessionRes = await fetch("/api/knowledge/upload", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          filename: file.name,
+          mimeType,
+          sizeBytes: file.size,
+        }),
+      });
+      const sessionData = await sessionRes.json();
+      if (!sessionData.ok) throw new Error(sessionData.error?.message ?? "Upload session failed");
 
-      if (isText) {
-        const content = await file.text();
-        try {
-          doc = await uploadViaDrive(file, mimeType);
-        } catch {
-          doc = await uploadViaTextApi(file, mimeType, content);
-        }
-      } else {
-        doc = await uploadViaDrive(file, mimeType);
-      }
+      const documentId = sessionData.data.documentId as string;
 
+      const form = new FormData();
+      form.append("documentId", documentId);
+      form.append("file", file);
+      const uploadRes = await fetch("/api/knowledge/upload", { method: "PATCH", body: form });
+      const uploadData = await uploadRes.json();
+      if (!uploadData.ok) throw new Error(uploadData.error?.message ?? "Upload failed");
+
+      const doc = uploadData.data as KnowledgeDocument;
       setDocuments((prev) => [doc, ...prev.filter((d) => d.id !== doc.id)]);
     } catch {
       // upload error — user can retry

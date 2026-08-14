@@ -3,11 +3,7 @@ import { apiSuccess, apiError, readJsonBody } from "@/lib/api/response";
 import { generateRequestId, createLogger } from "@/lib/logging/logger";
 import { knowledgeUploadSessionSchema } from "@/lib/validation/workspace-schemas";
 import { isAllowedMime } from "@/lib/attachments/mime";
-import {
-  createKnowledgeUploadSession,
-  finalizeKnowledgeUpload,
-  uploadKnowledgeFileViaServer,
-} from "@/lib/knowledge";
+import { createKnowledgeUploadSession, uploadKnowledgeFileViaServer } from "@/lib/knowledge";
 import {
   DriveStorageError,
   driveErrorHttpStatus,
@@ -42,7 +38,11 @@ function resolveUploadError(err: unknown): DriveStorageError {
   return normalizeDriveError(err, "upload_session", "DRIVE_UPLOAD_SESSION_FAILED");
 }
 
-function resolveFinalizeError(err: unknown): { code: string; message: string; status: number } {
+function resolveUploadCompletionError(err: unknown): {
+  code: string;
+  message: string;
+  status: number;
+} {
   if (err instanceof Error) {
     if (err.message === "DOCUMENT_NOT_FOUND") {
       return { code: "NOT_FOUND", message: "Документ не найден", status: 404 };
@@ -94,7 +94,6 @@ export async function POST(request: Request) {
     return apiSuccess(
       {
         documentId: session.document.id,
-        uploadUrl: session.uploadUrl,
         status: session.document.status,
       },
       201,
@@ -121,37 +120,7 @@ export async function POST(request: Request) {
   }
 }
 
-export async function PUT(request: Request) {
-  const requestId = generateRequestId();
-  const logger = createLogger({ request_id: requestId, event: "knowledge.upload" });
-  const user = await getSessionUser();
-  if (!user) return apiError("UNAUTHORIZED", "Требуется авторизация", 401, requestId);
-
-  const body = await readJsonBody<{ documentId?: string; driveFileId?: string }>(request);
-  if (!body.documentId || !body.driveFileId) {
-    return apiError("VALIDATION_ERROR", "documentId и driveFileId обязательны", 400, requestId);
-  }
-
-  try {
-    const doc = await finalizeKnowledgeUpload({
-      userId: user.id,
-      documentId: body.documentId,
-      driveFileId: body.driveFileId,
-    });
-    return apiSuccess(doc);
-  } catch (err) {
-    const resolved = resolveFinalizeError(err);
-    logger.error("knowledge.upload.finalize_failed", {
-      request_id: requestId,
-      document_id: body.documentId,
-      drive_file_id: body.driveFileId,
-      error: resolved.message,
-    });
-    return apiError(resolved.code, resolved.message, resolved.status, requestId);
-  }
-}
-
-/** Server-side upload fallback when browser cannot complete Drive resumable upload (CORS). */
+/** Server-side upload: browser sends file, server completes Drive resumable upload. */
 export async function PATCH(request: Request) {
   const requestId = generateRequestId();
   const logger = createLogger({ request_id: requestId, event: "knowledge.upload" });
@@ -198,7 +167,7 @@ export async function PATCH(request: Request) {
   }
 
   try {
-    logger.info("knowledge.upload.server_fallback_started", {
+    logger.info("knowledge.upload.server_started", {
       document_id: documentId,
       size_bytes: file.size,
       mime_type: mimeType,
@@ -213,9 +182,9 @@ export async function PATCH(request: Request) {
 
     return apiSuccess(doc);
   } catch (err) {
-    const resolved = resolveFinalizeError(err);
+    const resolved = resolveUploadCompletionError(err);
     const normalized = err instanceof DriveStorageError ? err : resolveUploadError(err);
-    logger.error("knowledge.upload.server_fallback_failed", {
+    logger.error("knowledge.upload.server_failed", {
       request_id: requestId,
       document_id: documentId,
       error: resolved.message,

@@ -111,7 +111,7 @@ export async function createKnowledgeUploadSession(input: {
   sizeBytes: number;
   projectId?: string | null;
   tags?: string[];
-}): Promise<{ document: KnowledgeDocument; uploadUrl: string }> {
+}): Promise<{ document: KnowledgeDocument }> {
   if (!isDriveStorageConfigured()) {
     throw new Error("GOOGLE_DRIVE_NOT_CONFIGURED");
   }
@@ -146,10 +146,7 @@ export async function createKnowledgeUploadSession(input: {
 
   if (error || !doc) throw new Error("Failed to create knowledge document");
 
-  return {
-    document: doc as KnowledgeDocument,
-    uploadUrl: session.uploadUrl,
-  };
+  return { document: doc as KnowledgeDocument };
 }
 
 export async function finalizeKnowledgeUpload(input: {
