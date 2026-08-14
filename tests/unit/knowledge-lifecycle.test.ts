@@ -255,6 +255,114 @@ describe("processKnowledgeDocument lifecycle", () => {
   });
 });
 
+describe("deleteKnowledgeDocument", () => {
+  const mockDeleteFile = vi.fn();
+
+  beforeEach(() => {
+    vi.resetModules();
+    mockFrom.mockReset();
+    mockDeleteFile.mockReset();
+
+    vi.doMock("@/lib/supabase/server", () => ({
+      createSupabaseServiceClient: () => mockServiceClient,
+    }));
+
+    vi.doMock("@/lib/storage/drive-provider", () => ({
+      getDriveStorageProvider: () => ({
+        ...mockDriveProvider,
+        deleteFile: (...args: unknown[]) => mockDeleteFile(...args),
+      }),
+      isDriveStorageConfigured: () => true,
+    }));
+  });
+
+  afterEach(() => {
+    vi.doUnmock("@/lib/supabase/server");
+    vi.doUnmock("@/lib/storage/drive-provider");
+  });
+
+  it("deletes Drive file then removes document from database", async () => {
+    const doc = {
+      id: "doc-del-1",
+      user_id: "user-1",
+      filename: "report.pdf",
+      drive_file_id: "drive-abc",
+      status: "ready",
+    };
+
+    mockDeleteFile.mockResolvedValue(undefined);
+
+    mockFrom.mockImplementation((table: string) => {
+      if (table === "knowledge_documents") {
+        const chain = chainable({ data: doc, error: null });
+        chain.delete.mockReturnValue(chain);
+        chain.eq.mockReturnValue(chain);
+        return chain;
+      }
+      return chainable();
+    });
+
+    const { deleteKnowledgeDocument } = await import("@/lib/knowledge/knowledge-service");
+    await deleteKnowledgeDocument("user-1", "doc-del-1");
+
+    expect(mockDeleteFile).toHaveBeenCalledWith("drive-abc");
+  });
+
+  it("continues when Drive file is already deleted (404)", async () => {
+    const doc = {
+      id: "doc-del-2",
+      user_id: "user-1",
+      filename: "gone.pdf",
+      drive_file_id: "drive-gone",
+      status: "ready",
+    };
+
+    mockDeleteFile.mockRejectedValue({ code: 404, message: "File not found" });
+
+    mockFrom.mockImplementation((table: string) => {
+      if (table === "knowledge_documents") {
+        const chain = chainable({ data: doc, error: null });
+        chain.delete.mockReturnValue(chain);
+        chain.eq.mockReturnValue(chain);
+        return chain;
+      }
+      return chainable();
+    });
+
+    const { deleteKnowledgeDocument } = await import("@/lib/knowledge/knowledge-service");
+    await expect(deleteKnowledgeDocument("user-1", "doc-del-2")).resolves.toBeUndefined();
+  });
+
+  it("throws DRIVE_DELETE_FAILED for non-404 Drive errors", async () => {
+    const doc = {
+      id: "doc-del-3",
+      user_id: "user-1",
+      filename: "locked.pdf",
+      drive_file_id: "drive-locked",
+      status: "ready",
+      metadata: {},
+    };
+
+    mockDeleteFile.mockRejectedValue(new Error("Permission denied"));
+
+    mockFrom.mockImplementation((table: string) => {
+      if (table === "knowledge_documents") {
+        const chain = chainable({ data: doc, error: null });
+        chain.update.mockReturnValue(chain);
+        chain.delete.mockReturnValue(chain);
+        chain.eq.mockReturnValue(chain);
+        return chain;
+      }
+      return chainable();
+    });
+
+    const { deleteKnowledgeDocument } = await import("@/lib/knowledge/knowledge-service");
+    await expect(deleteKnowledgeDocument("user-1", "doc-del-3")).rejects.toThrow(
+      "DRIVE_DELETE_FAILED",
+    );
+  });
+});
+
 describe("knowledge retrieval status filter", () => {
   it("searchKnowledge fallback query filters only ready documents", async () => {
     const source = await import("fs/promises").then((fs) =>

@@ -90,6 +90,83 @@ export interface KieProviderDiagnostics {
   provider_error_code?: string;
   provider_error_type?: string;
   request_id?: string;
+  response_body?: string;
+  request_payload_shape?: Record<string, unknown>;
+}
+
+const MAX_LOG_BODY_CHARS = 4096;
+
+function truncateForLog(value: string, max = MAX_LOG_BODY_CHARS): string {
+  if (value.length <= max) return value;
+  return `${value.slice(0, max)}…[truncated ${value.length - max} chars]`;
+}
+
+function describeMessageContentShape(content: unknown): unknown {
+  if (typeof content === "string") {
+    return { kind: "string", length: content.length };
+  }
+  if (!Array.isArray(content)) return { kind: typeof content };
+  return content.map((block) => {
+    if (!block || typeof block !== "object") return { kind: typeof block };
+    const row = block as Record<string, unknown>;
+    return {
+      type: row.type,
+      ...(typeof row.text === "string" ? { text_length: row.text.length } : {}),
+      ...(typeof row.tool_use_id === "string" ? { tool_use_id: row.tool_use_id } : {}),
+      ...(typeof row.id === "string" ? { id: row.id } : {}),
+      ...(typeof row.name === "string" ? { name: row.name } : {}),
+      ...(row.input && typeof row.input === "object" ? { has_input: true } : {}),
+    };
+  });
+}
+
+/** Describes request payload structure without secrets or full message text. */
+export function describeRequestPayloadShape(body: Record<string, unknown>): Record<string, unknown> {
+  const shape: Record<string, unknown> = {
+    model: body.model,
+    stream: body.stream,
+    max_tokens: body.max_tokens,
+    temperature: body.temperature,
+    thinkingFlag: body.thinkingFlag,
+    has_system: typeof body.system === "string",
+    system_length: typeof body.system === "string" ? body.system.length : undefined,
+    messages_count: Array.isArray(body.messages) ? body.messages.length : undefined,
+    tools_count: Array.isArray(body.tools) ? body.tools.length : undefined,
+    has_tool_choice: body.tool_choice !== undefined,
+    reasoning: body.reasoning,
+    reasoning_effort: body.reasoning_effort,
+  };
+
+  if (Array.isArray(body.messages)) {
+    shape.messages_shape = body.messages.map((message) => {
+      if (!message || typeof message !== "object") return { kind: typeof message };
+      const row = message as Record<string, unknown>;
+      return {
+        role: row.role,
+        content: describeMessageContentShape(row.content),
+      };
+    });
+  }
+
+  if (Array.isArray(body.tools)) {
+    shape.tools_shape = body.tools.map((tool) => {
+      if (!tool || typeof tool !== "object") return { kind: typeof tool };
+      const row = tool as Record<string, unknown>;
+      return {
+        type: row.type,
+        name: row.name ?? (row.function as Record<string, unknown> | undefined)?.name,
+        has_description: typeof row.description === "string",
+        has_input_schema: row.input_schema !== undefined,
+        has_parameters: (row.function as Record<string, unknown> | undefined)?.parameters !== undefined,
+      };
+    });
+  }
+
+  if (Array.isArray(body.input)) {
+    shape.input_count = body.input.length;
+  }
+
+  return shape;
 }
 
 export function logKieProviderError(diagnostics: KieProviderDiagnostics): void {
@@ -106,6 +183,10 @@ export function logKieProviderError(diagnostics: KieProviderDiagnostics): void {
     provider_error_code: diagnostics.provider_error_code,
     provider_error_type: diagnostics.provider_error_type,
     response_parse_stage: diagnostics.response_parse_stage,
+    response_body: diagnostics.response_body
+      ? truncateForLog(diagnostics.response_body)
+      : undefined,
+    request_payload_shape: diagnostics.request_payload_shape,
   });
 }
 
@@ -133,6 +214,7 @@ export function normalizeKieError(
   status: number,
   body?: string,
   contentType = "",
+  adapter?: string,
 ): KieProviderError {
   const parsed = parseKieErrorBody(body);
   const lower = (body ?? "").toLowerCase();
@@ -167,6 +249,13 @@ export function normalizeKieError(
     );
   }
   if (category === "INVALID_PROVIDER_REQUEST") {
+    if (adapter === "claude_messages") {
+      return new KieProviderError(
+        PROVIDER_ERROR_CODES.CLAUDE_REQUEST_INVALID,
+        "Некорректный запрос к Claude API.",
+        status,
+      );
+    }
     return new KieProviderError(
       PROVIDER_ERROR_CODES.PROVIDER_ERROR,
       "Ошибка провайдера. Попробуйте позже.",
@@ -201,6 +290,8 @@ export function userFacingProviderMessage(code: string): string {
       return "Некорректный уровень качества для этой модели.";
     case PROVIDER_ERROR_CODES.PROVIDER_RATE_LIMIT:
       return "Провайдер временно ограничил запросы.";
+    case PROVIDER_ERROR_CODES.CLAUDE_REQUEST_INVALID:
+      return "Некорректный запрос к Claude. Проверьте формат сообщений и инструментов.";
     default:
       return "Ошибка провайдера.";
   }

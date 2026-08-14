@@ -95,6 +95,8 @@ export const ru = {
     upload: "Загрузить",
     ask: "Спросить базу знаний…",
     documents: "Документы",
+    deleteConfirm: "Удаление документа и оригинала из Google Drive.",
+    deleteConfirmLocal: "Удалить документ?",
   },
   jobs: {
     new: "Новая задача",

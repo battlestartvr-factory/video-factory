@@ -9,6 +9,7 @@ import {
   classifyKieHttpStatus,
   normalizeKieError,
   parseKieErrorBody,
+  userFacingProviderMessage,
 } from "@/lib/models/kie/errors";
 import { PROVIDER_ERROR_CODES } from "@/lib/models/kie/types";
 import { getKieModelById } from "@/lib/models/kie/registry";
@@ -143,7 +144,10 @@ describe("KIE LLM request contracts", () => {
       },
     ]);
 
-    expect(messages[0]).toEqual({ role: "user", content: "Search knowledge" });
+    expect(messages[0]).toEqual({
+      role: "user",
+      content: [{ type: "text", text: "Search knowledge" }],
+    });
     expect(messages[1]).toEqual({
       role: "assistant",
       content: [
@@ -210,6 +214,13 @@ describe("KIE provider error diagnostics", () => {
     expect(normalizeKieError(404, "").code).toBe(PROVIDER_ERROR_CODES.MODEL_UNAVAILABLE);
     expect(normalizeKieError(400, '{"error":{"type":"invalid_request_error"}}').code).toBe(
       PROVIDER_ERROR_CODES.PROVIDER_ERROR,
+    );
+    expect(
+      normalizeKieError(400, '{"error":{"type":"invalid_request_error"}}', "", "claude_messages")
+        .code,
+    ).toBe(PROVIDER_ERROR_CODES.CLAUDE_REQUEST_INVALID);
+    expect(userFacingProviderMessage(PROVIDER_ERROR_CODES.CLAUDE_REQUEST_INVALID)).toContain(
+      "Claude",
     );
   });
 });

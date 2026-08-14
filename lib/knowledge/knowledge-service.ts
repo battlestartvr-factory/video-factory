@@ -458,6 +458,11 @@ export async function getKnowledgeDocument(
 }
 
 export async function deleteKnowledgeDocument(userId: string, documentId: string): Promise<void> {
+  const logger = createLogger({
+    event: "knowledge.document",
+    document_id: documentId,
+    user_id: userId,
+  });
   const service = createSupabaseServiceClient();
   const { data: doc } = await service
     .from("knowledge_documents")
@@ -473,27 +478,38 @@ export async function deleteKnowledgeDocument(userId: string, documentId: string
     metadata?: Record<string, unknown>;
   };
 
+  let driveDeleted = false;
+  let driveAlreadyGone = false;
+
   if (typedDoc.drive_file_id && isDriveStorageConfigured()) {
     try {
       const drive = getDriveStorageProvider();
       await drive.deleteFile(typedDoc.drive_file_id);
+      driveDeleted = true;
     } catch (driveError) {
-      await service
-        .from("knowledge_documents")
-        .update({
-          status: "failed",
-          metadata: {
-            ...(typedDoc.metadata ?? {}),
-            delete_audit: {
-              drive_delete_failed: true,
-              drive_file_id: typedDoc.drive_file_id,
-              error: driveError instanceof Error ? driveError.message : "unknown",
-              attempted_at: new Date().toISOString(),
+      if (isDriveFileNotFoundError(driveError)) {
+        driveAlreadyGone = true;
+        logger.info("drive_file_already_deleted", {
+          drive_file_id: typedDoc.drive_file_id,
+        });
+      } else {
+        await service
+          .from("knowledge_documents")
+          .update({
+            status: "failed",
+            metadata: {
+              ...(typedDoc.metadata ?? {}),
+              delete_audit: {
+                drive_delete_failed: true,
+                drive_file_id: typedDoc.drive_file_id,
+                error: driveError instanceof Error ? driveError.message : "unknown",
+                attempted_at: new Date().toISOString(),
+              },
             },
-          },
-        })
-        .eq("id", documentId);
-      throw new Error("DRIVE_DELETE_FAILED");
+          })
+          .eq("id", documentId);
+        throw new Error("DRIVE_DELETE_FAILED");
+      }
     }
   }
 
@@ -503,6 +519,19 @@ export async function deleteKnowledgeDocument(userId: string, documentId: string
     .eq("id", documentId)
     .eq("user_id", userId);
   if (error) throw new Error("Failed to delete knowledge document");
+
+  logger.info("deleted", {
+    filename: typedDoc.filename,
+    drive_file_id: typedDoc.drive_file_id ?? null,
+    drive_deleted: driveDeleted,
+    drive_already_gone: driveAlreadyGone,
+  });
+}
+
+function isDriveFileNotFoundError(err: unknown): boolean {
+  if (!err || typeof err !== "object") return false;
+  const candidate = err as { code?: number; response?: { status?: number } };
+  return candidate.code === 404 || candidate.response?.status === 404;
 }
 
 export { escapeIlike };

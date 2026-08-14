@@ -124,26 +124,28 @@ export class KieClaudeMessagesAdapter implements KieAdapter {
   async run(ctx: KieAdapterContext, input: AgentRequest) {
     const reasoningParams = buildReasoningBody(ctx);
     const messages = toClaudeMessages(input.messages);
+    const tools = input.tools.map((tool) => ({
+      name: tool.name,
+      description: tool.description,
+      input_schema: tool.parameters,
+    }));
 
-    const response = await kieFetch(
+    const requestBody: Record<string, unknown> = {
+      model: ctx.model.providerModel,
+      system: input.system,
+      messages,
+      max_tokens: 8192,
+      stream: false,
+      ...reasoningParams,
+      ...(tools.length ? { tools } : {}),
+    };
+
+    const response = await kieFetch(ctx, requestBody, AGENT_PROVIDER_TIMEOUT_MS);
+
+    return handleKieResponse(
       ctx,
-      {
-        model: ctx.model.providerModel,
-        system: input.system,
-        messages,
-        tools: input.tools.map((tool) => ({
-          name: tool.name,
-          description: tool.description,
-          input_schema: tool.parameters,
-        })),
-        max_tokens: 8192,
-        stream: false,
-        ...reasoningParams,
-      },
-      AGENT_PROVIDER_TIMEOUT_MS,
-    );
-
-    return handleKieResponse(ctx, response, (payload) => {
+      response,
+      (payload) => {
       const p = payload as {
         content?: Array<{
           type?: string;
@@ -175,7 +177,9 @@ export class KieClaudeMessagesAdapter implements KieAdapter {
           total_tokens: (p.usage?.input_tokens ?? 0) + (p.usage?.output_tokens ?? 0),
         },
       };
-    });
+      },
+      { requestBody },
+    );
   }
 }
 

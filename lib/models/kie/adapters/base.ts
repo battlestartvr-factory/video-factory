@@ -2,6 +2,7 @@ import type { AgentMessage, AgentProviderResponse, AgentRequest, AgentToolCall }
 import type { KieModelEntry } from "../types";
 import {
   classifyKieHttpStatus,
+  describeRequestPayloadShape,
   logKieProviderError,
   normalizeKieError,
   parseKieErrorBody,
@@ -192,7 +193,13 @@ export function toClaudeMessages(messages: AgentMessage[]) {
       }
       return {
         role: m.role as "user" | "assistant",
-        content: typeof m.content === "string" ? m.content : JSON.stringify(m.content ?? ""),
+        content: [
+          {
+            type: "text",
+            text:
+              typeof m.content === "string" ? m.content : JSON.stringify(m.content ?? ""),
+          },
+        ],
       };
     });
 }
@@ -318,12 +325,16 @@ export async function handleKieResponse(
     finish_reason?: string;
     usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
   },
+  options?: { requestBody?: Record<string, unknown> },
 ): Promise<AgentProviderResponse> {
   const contentType = response.headers.get("content-type") ?? "";
+  const requestPayloadShape = options?.requestBody
+    ? describeRequestPayloadShape(options.requestBody)
+    : undefined;
 
   if (!response.ok) {
     const text = await response.text().catch(() => "");
-    const error = normalizeKieError(response.status, text, contentType);
+    const error = normalizeKieError(response.status, text, contentType, ctx.model.adapter);
     const parsed = parseKieErrorBody(text);
     logKieProviderError({
       model_id: ctx.model.id,
@@ -335,6 +346,8 @@ export async function handleKieResponse(
       normalized_error_code: error.code,
       response_parse_stage: "error_body",
       agent_run_id: ctx.agentRunId ?? undefined,
+      response_body: text || undefined,
+      request_payload_shape: requestPayloadShape,
       ...parsed,
     });
     throw error;

@@ -92,8 +92,17 @@ export function KnowledgePageClient() {
   };
 
   const handleDelete = async (id: string) => {
-    await fetch(`/api/knowledge?id=${id}`, { method: "DELETE" });
-    setDocuments((prev) => prev.filter((d) => d.id !== id));
+    const doc = documents.find((d) => d.id === id);
+    const confirmMessage =
+      doc?.drive_file_id != null && doc.drive_file_id !== ""
+        ? t("knowledge.deleteConfirm")
+        : t("knowledge.deleteConfirmLocal");
+    if (!window.confirm(confirmMessage)) return;
+
+    const res = await fetch(`/api/knowledge?id=${id}`, { method: "DELETE" });
+    if (res.ok) {
+      setDocuments((prev) => prev.filter((d) => d.id !== id));
+    }
   };
 
   const handleAsk = async () => {
