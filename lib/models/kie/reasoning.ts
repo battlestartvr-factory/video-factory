@@ -68,6 +68,15 @@ function normalizeToAppLevel(
 }
 
 function buildReasoningParam(model: KieModelEntry, effective: string): Record<string, unknown> {
+  if (model.adapter === "responses") {
+    return { reasoning: { effort: effective } };
+  }
+
+  if (model.adapter === "claude_messages") {
+    const enabled = effective !== "disabled" && effective !== "off";
+    return { thinkingFlag: enabled };
+  }
+
   const control = model.reasoning?.control;
   switch (control) {
     case "effort":

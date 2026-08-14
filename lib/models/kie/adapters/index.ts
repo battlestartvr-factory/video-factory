@@ -26,7 +26,7 @@ export class KieOpenAIChatAdapter implements KieAdapter {
       AGENT_PROVIDER_TIMEOUT_MS,
     );
 
-    return handleKieResponse(response, (payload) => {
+    return handleKieResponse(ctx, response, (payload) => {
       const p = payload as {
         choices?: Array<{
           message?: { content?: string | null; tool_calls?: unknown };
@@ -52,23 +52,26 @@ export class KieOpenAIChatAdapter implements KieAdapter {
 export class KieResponsesAdapter implements KieAdapter {
   async run(ctx: KieAdapterContext, input: AgentRequest) {
     const reasoningParams = buildReasoningBody(ctx);
+    const tools = input.tools.map((tool) => ({
+      type: "function",
+      name: tool.name,
+      description: tool.description,
+      parameters: tool.parameters,
+    }));
     const response = await kieFetch(
       ctx,
       {
         model: ctx.model.providerModel,
         input: toOpenAiMessages(input.system, input.messages),
-        tools: input.tools.map((tool) => ({
-          type: "function",
-          name: tool.name,
-          description: tool.description,
-          parameters: tool.parameters,
-        })),
+        tools,
+        ...(tools.length ? { tool_choice: "auto" } : {}),
+        stream: false,
         ...reasoningParams,
       },
       AGENT_PROVIDER_TIMEOUT_MS,
     );
 
-    return handleKieResponse(response, (payload) => {
+    return handleKieResponse(ctx, response, (payload) => {
       const p = payload as {
         output?: Array<{
           type?: string;
@@ -155,12 +158,13 @@ export class KieClaudeMessagesAdapter implements KieAdapter {
           input_schema: tool.parameters,
         })),
         max_tokens: 8192,
+        stream: false,
         ...reasoningParams,
       },
       AGENT_PROVIDER_TIMEOUT_MS,
     );
 
-    return handleKieResponse(response, (payload) => {
+    return handleKieResponse(ctx, response, (payload) => {
       const p = payload as {
         content?: Array<{
           type?: string;

@@ -48,7 +48,7 @@ describe("reasoning mapping", () => {
     const resolved = resolveReasoning(model, "max");
     expect(resolved.requestedReasoning).toBe("max");
     expect(resolved.effectiveReasoning).toBe("xhigh");
-    expect(resolved.providerParam).toEqual({ reasoning_effort: "xhigh" });
+    expect(resolved.providerParam).toEqual({ reasoning: { effort: "xhigh" } });
   });
 
   it("maps Gemini max to highest supported level", () => {

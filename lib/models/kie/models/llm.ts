@@ -19,7 +19,7 @@ export const LLM_MODELS: KieModelEntry[] = [
     provider: "kie",
     category: "llm",
     adapter: "openai_chat",
-    endpoint: "/gemini-3-6-flash/v1/chat/completions",
+    endpoint: "/gemini-3-6-flash-openai/v1/chat/completions",
     providerModel: "gemini-3-6-flash",
     capabilities: {
       chat: true,
@@ -76,7 +76,7 @@ export const LLM_MODELS: KieModelEntry[] = [
     provider: "kie",
     category: "llm",
     adapter: "responses",
-    endpoint: "/v1/responses",
+    endpoint: "/codex/v1/responses",
     providerModel: "gpt-5-6-sol",
     capabilities: {
       chat: true,
@@ -103,7 +103,7 @@ export const LLM_MODELS: KieModelEntry[] = [
     provider: "kie",
     category: "llm",
     adapter: "claude_messages",
-    endpoint: "/v1/messages",
+    endpoint: "/claude/v1/messages",
     providerModel: "claude-sonnet-5",
     capabilities: {
       chat: true,
@@ -132,7 +132,7 @@ export const LLM_MODELS: KieModelEntry[] = [
     provider: "kie",
     category: "llm",
     adapter: "claude_messages",
-    endpoint: "/v1/messages",
+    endpoint: "/claude/v1/messages",
     providerModel: "claude-opus-5",
     capabilities: {
       chat: true,

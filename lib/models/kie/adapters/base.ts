@@ -1,6 +1,11 @@
 import type { AgentMessage, AgentProviderResponse, AgentRequest, AgentToolCall } from "@/lib/agent/types";
 import type { KieModelEntry } from "../types";
-import { normalizeKieError } from "../errors";
+import {
+  classifyKieHttpStatus,
+  logKieProviderError,
+  normalizeKieError,
+  parseKieErrorBody,
+} from "../errors";
 import { resolveReasoning } from "../reasoning";
 
 export interface KieAdapterContext {
@@ -135,6 +140,7 @@ export function buildReasoningBody(ctx: KieAdapterContext): Record<string, unkno
 }
 
 export async function handleKieResponse(
+  ctx: KieAdapterContext,
   response: Response,
   extractMessage: (payload: unknown) => {
     content?: string | null;
@@ -145,7 +151,18 @@ export async function handleKieResponse(
 ): Promise<AgentProviderResponse> {
   if (!response.ok) {
     const text = await response.text().catch(() => "");
-    throw normalizeKieError(response.status, text);
+    const error = normalizeKieError(response.status, text);
+    const parsed = parseKieErrorBody(text);
+    logKieProviderError({
+      model_id: ctx.model.id,
+      adapter: ctx.model.adapter,
+      endpoint: ctx.model.endpoint,
+      http_status: response.status,
+      http_error_category: classifyKieHttpStatus(response.status),
+      normalized_error_code: error.code,
+      ...parsed,
+    });
+    throw error;
   }
   const payload = await response.json();
   const message = extractMessage(payload);

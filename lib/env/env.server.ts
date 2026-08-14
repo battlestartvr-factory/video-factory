@@ -62,12 +62,29 @@ export function isGoogleDriveConfigured(): boolean {
 
 const KIE_DEFAULT_BASE_URL = "https://api.kie.ai";
 
+/** Normalize a base URL to the KIE provider root (never a model-specific endpoint). */
+export function normalizeKieBaseUrl(rawUrl: string): string {
+  const trimmed = rawUrl.trim().replace(/\/+$/, "");
+  if (!trimmed) return "";
+
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.hostname === "api.kie.ai" || parsed.hostname.endsWith(".kie.ai")) {
+      return `${parsed.protocol}//${parsed.host}`;
+    }
+    return trimmed;
+  } catch {
+    return trimmed;
+  }
+}
+
 export function getKieConfig() {
   const apiKey = (serverEnv.KIE_API_KEY ?? serverEnv.AGENT_LLM_API_KEY ?? "").trim();
+  const canonicalBaseUrl = (serverEnv.KIE_API_BASE_URL ?? "").trim();
+  const legacyBaseUrl = normalizeKieBaseUrl(serverEnv.AGENT_LLM_BASE_URL ?? "");
   const baseUrl =
-    (serverEnv.KIE_API_BASE_URL ?? serverEnv.AGENT_LLM_BASE_URL ?? KIE_DEFAULT_BASE_URL)
-      .trim()
-      .replace(/\/+$/, "") || KIE_DEFAULT_BASE_URL;
+    (canonicalBaseUrl || legacyBaseUrl || KIE_DEFAULT_BASE_URL).replace(/\/+$/, "") ||
+    KIE_DEFAULT_BASE_URL;
 
   return {
     configured: Boolean(apiKey),
