@@ -38,9 +38,10 @@ export async function POST() {
   }
 
   try {
-    console.log("CLAUDE_SMOKE_START", {
-      model: "claude-sonnet-5",
-      hasKey: Boolean(process.env.KIE_API_KEY),
+    console.log("CLAUDE_KIE_REQUEST", {
+      model: KIE_REQUEST_BODY.model,
+      messages: KIE_REQUEST_BODY.messages,
+      max_tokens: KIE_REQUEST_BODY.max_tokens,
     });
 
     const response = await kieFetch(
@@ -49,22 +50,17 @@ export async function POST() {
       AGENT_PROVIDER_TIMEOUT_MS,
     );
 
-    console.log("CLAUDE_SMOKE_RESPONSE", {
-      status: response.status,
-    });
+    const text = await response.text();
 
-    const rawBody = await response.text();
-    let responseBody: unknown = rawBody;
-    try {
-      responseBody = JSON.parse(rawBody) as unknown;
-    } catch {
-      // keep raw text when KIE returns non-JSON
-    }
+    console.log("CLAUDE_KIE_RAW_RESPONSE", {
+      status: response.status,
+      body: text.slice(0, 4000),
+    });
 
     return NextResponse.json(
       {
         httpStatus: response.status,
-        responseBody,
+        rawBody: text,
       },
       {
         status: 200,
