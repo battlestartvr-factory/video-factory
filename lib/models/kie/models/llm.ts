@@ -113,7 +113,7 @@ export const LLM_MODELS: KieModelEntry[] = [
     reasoning: {
       control: "binary",
       levels: ["off", "on"],
-      default: "on",
+      default: "off",
       mapping: { off: "disabled", on: "enabled" },
     },
     enabled: true,
@@ -142,7 +142,7 @@ export const LLM_MODELS: KieModelEntry[] = [
     reasoning: {
       control: "adaptive",
       levels: ["off", "on"],
-      default: "on",
+      default: "off",
       mapping: { off: "disabled", on: "adaptive" },
     },
     enabled: true,

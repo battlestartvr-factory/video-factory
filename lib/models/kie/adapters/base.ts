@@ -155,53 +155,24 @@ export function toResponsesInput(system: string, messages: AgentMessage[]): unkn
   return input;
 }
 
-/** Converts agent history to KIE Claude Messages format. */
+export function extractText(content: AgentMessage["content"]): string {
+  if (content == null) return "";
+  if (typeof content === "string") return content;
+  return content
+    .filter((part) => part.type === "text" && part.text)
+    .map((part) => part.text!)
+    .join("");
+}
+
+/** Converts agent history to KIE Claude Messages format (plain string content). */
 export function toClaudeMessages(messages: AgentMessage[]) {
   return messages
     .filter((m) => m.role !== "system")
-    .map((m) => {
-      if (m.role === "tool") {
-        return {
-          role: "user" as const,
-          content: [
-            {
-              type: "tool_result",
-              tool_use_id: m.toolCallId,
-              content:
-                typeof m.content === "string" ? m.content : JSON.stringify(m.content),
-            },
-          ],
-        };
-      }
-      if (m.role === "assistant" && m.toolCalls?.length) {
-        const blocks: Array<Record<string, unknown>> = [];
-        if (m.content) {
-          blocks.push({
-            type: "text",
-            text: typeof m.content === "string" ? m.content : JSON.stringify(m.content),
-          });
-        }
-        for (const call of m.toolCalls) {
-          blocks.push({
-            type: "tool_use",
-            id: call.id,
-            name: call.name,
-            input: call.arguments ?? {},
-          });
-        }
-        return { role: "assistant" as const, content: blocks };
-      }
-      return {
-        role: m.role as "user" | "assistant",
-        content: [
-          {
-            type: "text",
-            text:
-              typeof m.content === "string" ? m.content : JSON.stringify(m.content ?? ""),
-          },
-        ],
-      };
-    });
+    .map((m) => ({
+      role: (m.role === "tool" ? "user" : m.role) as "user" | "assistant",
+      content: extractText(m.content),
+    }))
+    .filter((m) => m.content.length > 0);
 }
 
 export function parseStructuredFallback(content: string | null): {

@@ -1,10 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   joinKieUrl,
   parseKieResponseBody,
   toClaudeMessages,
   toResponsesInput,
 } from "@/lib/models/kie/adapters/base";
+import { kieClaudeMessagesAdapter } from "@/lib/models/kie/adapters";
 import {
   classifyKieHttpStatus,
   normalizeKieError,
@@ -128,12 +129,12 @@ describe("KIE LLM request contracts", () => {
     });
   });
 
-  it("builds Claude messages with tool_use and tool_result blocks", () => {
+  it("builds Claude messages with plain string content", () => {
     const messages = toClaudeMessages([
       { role: "user", content: "Search knowledge" },
       {
         role: "assistant",
-        content: null,
+        content: "Here are results",
         toolCalls: [{ id: "toolu_1", name: "search_knowledge", arguments: { query: "test" } }],
       },
       {
@@ -144,26 +145,49 @@ describe("KIE LLM request contracts", () => {
       },
     ]);
 
-    expect(messages[0]).toEqual({
-      role: "user",
-      content: [{ type: "text", text: "Search knowledge" }],
-    });
-    expect(messages[1]).toEqual({
-      role: "assistant",
-      content: [
-        { type: "tool_use", id: "toolu_1", name: "search_knowledge", input: { query: "test" } },
-      ],
-    });
-    expect(messages[2]).toEqual({
-      role: "user",
-      content: [
-        {
-          type: "tool_result",
-          tool_use_id: "toolu_1",
-          content: '{"hits":[{"title":"Doc"}]}',
-        },
-      ],
-    });
+    expect(messages[0]).toEqual({ role: "user", content: "Search knowledge" });
+    expect(messages[1]).toEqual({ role: "assistant", content: "Here are results" });
+    expect(messages[2]).toEqual({ role: "user", content: '{"hits":[{"title":"Doc"}]}' });
+  });
+
+  it("Claude adapter creates payload with plain string message content", async () => {
+    const model = getKieModelById("claude-sonnet-5")!;
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({ content: [{ type: "text", text: "Hello!" }] }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      ),
+    );
+
+    await kieClaudeMessagesAdapter.run(
+      {
+        baseUrl: "https://api.kie.ai",
+        apiKey: "test-key",
+        model,
+      },
+      {
+        model: "claude-sonnet-5",
+        system: "",
+        messages: [{ role: "user", content: "hello" }],
+        tools: [{ name: "search_knowledge", description: "Search", parameters: {} }],
+      },
+    );
+
+    const init = fetchSpy.mock.calls[0]?.[1] as RequestInit;
+    const body = JSON.parse(init.body as string) as {
+      messages: Array<{ role: string; content: unknown }>;
+      tools?: unknown;
+      system?: unknown;
+      thinkingFlag?: unknown;
+    };
+
+    expect(body.messages[0].content).toBe("hello");
+    expect(Array.isArray(body.messages[0].content)).toBe(false);
+    expect(body.tools).toBeUndefined();
+    expect(body.system).toBeUndefined();
+    expect(body.thinkingFlag).toBeUndefined();
+
+    fetchSpy.mockRestore();
   });
 });
 

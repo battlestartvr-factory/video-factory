@@ -123,22 +123,21 @@ export class KieResponsesAdapter implements KieAdapter {
 export class KieClaudeMessagesAdapter implements KieAdapter {
   async run(ctx: KieAdapterContext, input: AgentRequest) {
     const reasoningParams = buildReasoningBody(ctx);
+    const claudeReasoning =
+      reasoningParams.thinkingFlag === true ? { thinkingFlag: true } : {};
     const messages = toClaudeMessages(input.messages);
-    const tools = input.tools.map((tool) => ({
-      name: tool.name,
-      description: tool.description,
-      input_schema: tool.parameters,
-    }));
 
     const requestBody: Record<string, unknown> = {
       model: ctx.model.providerModel,
-      system: input.system,
       messages,
       max_tokens: 8192,
       stream: false,
-      ...reasoningParams,
-      ...(tools.length ? { tools } : {}),
+      ...claudeReasoning,
     };
+
+    if (input.system.trim()) {
+      requestBody.system = input.system;
+    }
 
     const response = await kieFetch(ctx, requestBody, AGENT_PROVIDER_TIMEOUT_MS);
 
