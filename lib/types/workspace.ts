@@ -35,12 +35,23 @@ export interface ChatMessage {
 }
 
 export interface MessageMetadata {
-  type?: "text" | "task" | "generation" | "error" | "sources";
+  type?: "text" | "task" | "generation" | "error" | "sources" | "agent";
   task?: TaskCardData;
+  tasks?: TaskCardData[];
   generation?: GenerationCardData;
+  generations?: GenerationCardData[];
   error?: ErrorCardData;
   sources?: SourceCitation[];
   attachments?: string[];
+  agentRunId?: string;
+  events?: AgentUiEvent[];
+}
+
+export interface AgentUiEvent {
+  type: string;
+  toolName?: string;
+  label?: string;
+  status?: string;
 }
 
 export interface TaskCardData {
@@ -72,10 +83,16 @@ export interface ErrorCardData {
 }
 
 export interface SourceCitation {
-  documentId: string;
-  filename: string;
-  chunkIndex?: number;
+  title?: string;
+  filename?: string;
+  documentId?: string;
+  url?: string;
+  domain?: string;
+  publishedAt?: string;
+  snippet?: string;
   excerpt?: string;
+  chunkIndex?: number;
+  source?: "knowledge" | "web";
 }
 
 export interface ChatAttachment {
@@ -206,7 +223,13 @@ export interface Generation {
   model_id: string;
   preset_id: string | null;
   settings: Record<string, unknown>;
-  reference_assets: Array<{ url?: string; mimeType?: string; filename?: string }>;
+  reference_assets: Array<{
+    id?: string;
+    url?: string;
+    mimeType?: string;
+    filename?: string;
+    role?: string;
+  }>;
   project_id: string | null;
   chat_id: string | null;
   message_id: string | null;
@@ -218,9 +241,74 @@ export interface Generation {
   completed_at: string | null;
 }
 
+export type AgentRunStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
+export type AgentToolRunStatus = "running" | "completed" | "failed" | "skipped";
+export type AgentActionStatus =
+  | "pending_dispatch"
+  | "dispatched"
+  | "processing"
+  | "completed"
+  | "failed"
+  | "cancelled";
+
+export interface AgentRun {
+  id: string;
+  request_id: string;
+  user_id: string;
+  chat_id: string;
+  project_id: string | null;
+  user_message_id: string | null;
+  assistant_message_id: string | null;
+  model: string | null;
+  status: AgentRunStatus;
+  started_at: string;
+  finished_at: string | null;
+  usage: Record<string, unknown>;
+  error_code: string | null;
+  error_message: string | null;
+  metadata: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface AgentToolRun {
+  id: string;
+  agent_run_id: string;
+  tool_name: string;
+  input: Record<string, unknown>;
+  output: Record<string, unknown>;
+  status: AgentToolRunStatus;
+  error_code: string | null;
+  error_message: string | null;
+  started_at: string;
+  finished_at: string | null;
+  duration_ms: number | null;
+  created_at: string;
+}
+
+export interface AgentAction {
+  id: string;
+  agent_run_id: string | null;
+  user_id: string;
+  chat_id: string | null;
+  project_id: string | null;
+  generation_id: string | null;
+  source_message_id: string | null;
+  action_type: string;
+  status: AgentActionStatus;
+  input: Record<string, unknown>;
+  output: Record<string, unknown>;
+  error_code: string | null;
+  error_message: string | null;
+  started_at: string;
+  finished_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface ModelCapabilities {
   chat?: boolean;
   vision?: boolean;
+  toolCalling?: boolean;
   imageGeneration?: boolean;
   videoGeneration?: boolean;
   startFrame?: boolean;

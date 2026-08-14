@@ -1,0 +1,297 @@
+import "server-only";
+import { createSupabaseServiceClient } from "@/lib/supabase/server";
+import { createLogger } from "@/lib/logging/logger";
+import {
+  AGENT_ERROR_CODES,
+} from "./config";
+import { createAgentEvent } from "./events";
+import { createAgentProvider, AgentProviderError, resolveAgentModel } from "./provider";
+import { loadAgentContext } from "./conversation";
+import { runAgentToolLoop } from "./loop";
+import { getToolDefinitions } from "./tools";
+import { redactForStorage } from "./redaction";
+import type { AgentEvent, AgentMessage, AgentProvider, ToolContext } from "./types";
+import type { Chat, ChatMessage, GenerationCardData, MessageMetadata, SourceCitation } from "@/lib/types/workspace";
+
+export interface UniversalAgentInput {
+  requestId: string;
+  userId: string;
+  chat: Chat;
+  userMessage: ChatMessage;
+  modelId?: string | null;
+  presetId?: string | null;
+  attachmentIds?: string[];
+  provider?: AgentProvider;
+}
+
+export interface UniversalAgentResult {
+  content: string;
+  metadata: MessageMetadata;
+  agentRunId: string;
+  events: AgentEvent[];
+  status: "completed" | "failed";
+  errorCode?: string;
+}
+
+async function persistToolRun(input: {
+  agentRunId: string;
+  toolName: string;
+  args: Record<string, unknown>;
+  output: Record<string, unknown>;
+  status: "completed" | "failed";
+  errorCode?: string;
+  errorMessage?: string;
+  startedAt: string;
+  durationMs: number;
+}) {
+  const service = createSupabaseServiceClient();
+  await service.from("agent_tool_runs").insert({
+    agent_run_id: input.agentRunId,
+    tool_name: input.toolName,
+    input: redactForStorage(input.args),
+    output: redactForStorage(input.output),
+    status: input.status,
+    error_code: input.errorCode ?? null,
+    error_message: input.errorMessage ?? null,
+    started_at: input.startedAt,
+    finished_at: new Date().toISOString(),
+    duration_ms: input.durationMs,
+  });
+}
+
+export async function runUniversalAgent(input: UniversalAgentInput): Promise<UniversalAgentResult> {
+  const logger = createLogger({
+    request_id: input.requestId,
+    chat_id: input.chat.id,
+    project_id: input.chat.project_id,
+  });
+  const service = createSupabaseServiceClient();
+  const { model } = resolveAgentModel(input.modelId ?? input.chat.model_id);
+  const events: AgentEvent[] = [];
+  const generations: GenerationCardData[] = [];
+  const sources: SourceCitation[] = [];
+
+  const { data: runRow, error: runError } = await service
+    .from("agent_runs")
+    .insert({
+      request_id: input.requestId,
+      user_id: input.userId,
+      chat_id: input.chat.id,
+      project_id: input.chat.project_id,
+      user_message_id: input.userMessage.id,
+      model,
+      status: "running",
+    })
+    .select("id")
+    .single();
+
+  if (runError || !runRow) {
+    logger.error("agent_run_create_failed", { error_code: "CREATE_FAILED" });
+    return {
+      content: "Не удалось запустить агента.",
+      metadata: {
+        type: "error",
+        error: { code: AGENT_ERROR_CODES.INTERNAL_ERROR, message: "Не удалось запустить агента", retryable: true },
+      },
+      agentRunId: "",
+      events,
+      status: "failed",
+      errorCode: AGENT_ERROR_CODES.INTERNAL_ERROR,
+    };
+  }
+
+  const agentRunId = runRow.id as string;
+  events.push(createAgentEvent("run_started", { status: "running" }));
+  logger.info("agent_run_started", { agent_run_id: agentRunId, model });
+
+  const fail = async (code: string, message: string): Promise<UniversalAgentResult> => {
+    await service
+      .from("agent_runs")
+      .update({
+        status: "failed",
+        finished_at: new Date().toISOString(),
+        error_code: code,
+        error_message: message,
+      })
+      .eq("id", agentRunId);
+    events.push(createAgentEvent("error", { errorCode: code }));
+    return {
+      content: message,
+      metadata: {
+        type: "error",
+        error: { code, message, retryable: code === AGENT_ERROR_CODES.PROVIDER_NOT_CONFIGURED },
+        agentRunId,
+        events: events.map((event) => ({
+          type: event.type,
+          toolName: event.toolName,
+          label: event.label,
+          status: event.status,
+        })),
+      },
+      agentRunId,
+      events,
+      status: "failed",
+      errorCode: code,
+    };
+  };
+
+  const provider = input.provider ?? createAgentProvider();
+  let context;
+  try {
+    context = await loadAgentContext({
+      userId: input.userId,
+      chat: input.chat,
+      currentMessage: input.userMessage,
+      modelId: model,
+      presetId: input.presetId,
+      attachmentIds: input.attachmentIds,
+    });
+  } catch {
+    logger.error("context_build_failed", {
+      agent_run_id: agentRunId,
+      error_code: AGENT_ERROR_CODES.INTERNAL_ERROR,
+    });
+    return fail(AGENT_ERROR_CODES.INTERNAL_ERROR, "Не удалось собрать контекст");
+  }
+
+  const messages: AgentMessage[] = [...context.history, context.currentUserMessage];
+  const tools = getToolDefinitions();
+  const toolCtx: ToolContext = {
+    requestId: input.requestId,
+    userId: input.userId,
+    chatId: input.chat.id,
+    projectId: input.chat.project_id,
+    userMessageId: input.userMessage.id,
+    agentRunId,
+    userMessage: input.userMessage.content,
+    attachments: [],
+  };
+
+  let loopResult;
+  try {
+    loopResult = await runAgentToolLoop({
+      provider,
+      model,
+      system: context.systemPrompt,
+      messages,
+      tools,
+      toolContext: toolCtx,
+    });
+  } catch (error) {
+    if (error instanceof AgentProviderError) {
+      return fail(error.code, providerNotConfiguredMessage(error.code));
+    }
+    logger.error("agent_loop_failed", {
+      agent_run_id: agentRunId,
+      error_code: AGENT_ERROR_CODES.INTERNAL_ERROR,
+    });
+    return fail(AGENT_ERROR_CODES.INTERNAL_ERROR, "Агент не смог завершить ответ");
+  }
+
+  for (const item of loopResult.executions) {
+    const startedAt = new Date().toISOString();
+    events.push(createAgentEvent("tool_started", { toolName: item.call.name }));
+    const status = item.result.ok ? "completed" : "failed";
+    await persistToolRun({
+      agentRunId,
+      toolName: item.call.name,
+      args: item.call.arguments,
+      output: item.normalized,
+      status,
+      errorCode: item.result.code,
+      errorMessage: item.result.error,
+      startedAt,
+      durationMs: 0,
+    });
+    events.push(
+      createAgentEvent("tool_finished", {
+        toolName: item.call.name,
+        status,
+        errorCode: item.result.code,
+      }),
+    );
+    logger.info("tool_run", {
+      agent_run_id: agentRunId,
+      tool_name: item.call.name,
+      status,
+      error_code: item.result.code,
+      generation_id: item.result.generation?.generationId,
+    });
+    if (item.result.generation) {
+      generations.push(item.result.generation);
+      events.push(
+        createAgentEvent("generation_created", {
+          generationId: item.result.generation.generationId,
+          toolName: item.call.name,
+        }),
+      );
+    }
+    if (item.result.sources?.length) sources.push(...item.result.sources);
+  }
+
+  let finalContent = loopResult.content;
+  if (!finalContent) {
+    finalContent =
+      generations.length || sources.length
+        ? "Готово. Ниже — результаты выполнения."
+        : loopResult.stopReason === "tool_limit"
+          ? "Достигнут лимит шагов инструментов. Уточните задачу, и я продолжу."
+          : "Готово.";
+  }
+
+  events.push(createAgentEvent("final", { status: "completed" }));
+
+  const metadata: MessageMetadata = {
+    type: generations.length ? "generation" : sources.length ? "sources" : "text",
+    generation: generations[0],
+    generations: generations.length ? generations : undefined,
+    sources: sources.length ? sources : undefined,
+    agentRunId,
+    events: events.map((event) => ({
+      type: event.type,
+      toolName: event.toolName,
+      label: event.label,
+      status: event.status,
+    })),
+  };
+
+  await service
+    .from("agent_runs")
+    .update({
+      status: "completed",
+      finished_at: new Date().toISOString(),
+      usage: {
+        prompt_tokens: loopResult.usage.promptTokens ?? 0,
+        completion_tokens: loopResult.usage.completionTokens ?? 0,
+        total_tokens: loopResult.usage.totalTokens ?? 0,
+        iterations: loopResult.executions.length,
+      },
+    })
+    .eq("id", agentRunId);
+
+  logger.info("agent_run_completed", { agent_run_id: agentRunId, status: "completed" });
+
+  return {
+    content: finalContent,
+    metadata,
+    agentRunId,
+    events,
+    status: "completed",
+  };
+}
+
+function providerNotConfiguredMessage(code: string): string {
+  if (code === AGENT_ERROR_CODES.PROVIDER_NOT_CONFIGURED) {
+    return "AI-агент сейчас не настроен: не задан AGENT_LLM_BASE_URL / AGENT_LLM_API_KEY. Сообщение сохранено, но ответ модели недоступен.";
+  }
+  return "Провайдер агента вернул ошибку.";
+}
+
+export async function attachAssistantToRun(agentRunId: string, assistantMessageId: string) {
+  if (!agentRunId) return;
+  const service = createSupabaseServiceClient();
+  await service
+    .from("agent_runs")
+    .update({ assistant_message_id: assistantMessageId })
+    .eq("id", agentRunId);
+}

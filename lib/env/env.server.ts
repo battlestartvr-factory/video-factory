@@ -25,6 +25,13 @@ const serverEnvSchema = z.object({
   B2_ACCESS_KEY_ID: z.string().optional().or(z.literal("")),
   B2_SECRET_ACCESS_KEY: z.string().optional().or(z.literal("")),
   B2_BUCKET: z.string().optional().or(z.literal("")),
+  AGENT_LLM_BASE_URL: z.string().optional().or(z.literal("")),
+  AGENT_LLM_API_KEY: z.string().optional().or(z.literal("")),
+  AGENT_LLM_DEFAULT_MODEL: z.string().optional().or(z.literal("")),
+  AGENT_LLM_ALLOWED_MODELS: z.string().optional().or(z.literal("")),
+  WEB_SEARCH_PROVIDER: z.string().optional().or(z.literal("")),
+  WEB_SEARCH_API_KEY: z.string().optional().or(z.literal("")),
+  WEB_SEARCH_BASE_URL: z.string().optional().or(z.literal("")),
 });
 
 function parseServerEnv() {
@@ -49,4 +56,43 @@ export function isGoogleDriveConfigured(): boolean {
         serverEnv.GOOGLE_DRIVE_PRIVATE_KEY,
     )
   );
+}
+
+export function getAgentLlmConfig() {
+  const baseUrl = (serverEnv.AGENT_LLM_BASE_URL ?? "").trim().replace(/\/+$/, "");
+  const apiKey = (serverEnv.AGENT_LLM_API_KEY ?? "").trim();
+  const defaultModel = (serverEnv.AGENT_LLM_DEFAULT_MODEL ?? "").trim() || "gpt-4o-mini";
+  const allowedModels = (serverEnv.AGENT_LLM_ALLOWED_MODELS ?? "")
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+
+  return {
+    configured: Boolean(baseUrl && apiKey),
+    baseUrl,
+    apiKey,
+    defaultModel,
+    allowedModels,
+  };
+}
+
+export function isAgentProviderConfigured(): boolean {
+  return getAgentLlmConfig().configured;
+}
+
+export function getWebSearchConfig() {
+  const provider = (serverEnv.WEB_SEARCH_PROVIDER ?? "").trim().toLowerCase();
+  const apiKey = (serverEnv.WEB_SEARCH_API_KEY ?? "").trim();
+  const baseUrl = (serverEnv.WEB_SEARCH_BASE_URL ?? "").trim().replace(/\/+$/, "");
+  const configured =
+    Boolean(provider) &&
+    provider !== "none" &&
+    Boolean(apiKey) &&
+    (provider !== "generic" || Boolean(baseUrl));
+
+  return { configured, provider, apiKey, baseUrl };
+}
+
+export function isWebSearchConfigured(): boolean {
+  return getWebSearchConfig().configured;
 }
