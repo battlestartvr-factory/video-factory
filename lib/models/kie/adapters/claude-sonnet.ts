@@ -136,12 +136,76 @@ export function assertClaudeMessagesNonEmpty(messages: ClaudeSonnetMessage[]): v
   }
 }
 
-export function buildClaudeSonnetTools(tools: AgentRequest["tools"]) {
-  return tools.map((tool) => ({
+export type KieClaudeTool = {
+  name: string;
+  description: string;
+  input_schema: {
+    type: "object";
+    properties: Record<string, unknown>;
+    required?: string[];
+  };
+};
+
+function normalizeClaudeInputSchema(
+  parameters: Record<string, unknown>,
+): KieClaudeTool["input_schema"] {
+  const type = parameters.type;
+  if (type !== "object") {
+    throw new KieProviderError(
+      AGENT_ERROR_CODES.CLAUDE_TOOL_SCHEMA_UNSUPPORTED,
+      "Claude tool schema must have type object",
+    );
+  }
+
+  const properties =
+    parameters.properties && typeof parameters.properties === "object" && !Array.isArray(parameters.properties)
+      ? (parameters.properties as Record<string, unknown>)
+      : {};
+
+  const required = Array.isArray(parameters.required)
+    ? parameters.required.filter((item): item is string => typeof item === "string")
+    : [];
+
+  return { type: "object", properties, required };
+}
+
+/** Converts a provider-neutral tool definition to KIE Claude format with validation. */
+export function toKieClaudeTool(tool: AgentRequest["tools"][number]): KieClaudeTool {
+  if (!tool.name?.trim()) {
+    throw new KieProviderError(
+      AGENT_ERROR_CODES.CLAUDE_TOOL_SCHEMA_UNSUPPORTED,
+      "Claude tool must have a name",
+    );
+  }
+  if (!tool.description?.trim()) {
+    throw new KieProviderError(
+      AGENT_ERROR_CODES.CLAUDE_TOOL_SCHEMA_UNSUPPORTED,
+      `Claude tool ${tool.name} must have a description`,
+    );
+  }
+
+  const maybeOpenAi = tool as unknown as Record<string, unknown>;
+  if (maybeOpenAi.type === "function" || maybeOpenAi.function) {
+    throw new KieProviderError(
+      AGENT_ERROR_CODES.CLAUDE_TOOL_SCHEMA_UNSUPPORTED,
+      "OpenAI function wrapper is not supported for Claude",
+    );
+  }
+
+  const schemaSource =
+    "input_schema" in tool && tool.input_schema && typeof tool.input_schema === "object"
+      ? (tool.input_schema as Record<string, unknown>)
+      : tool.parameters;
+
+  return {
     name: tool.name,
     description: tool.description,
-    input_schema: tool.parameters,
-  }));
+    input_schema: normalizeClaudeInputSchema(schemaSource),
+  };
+}
+
+export function buildClaudeSonnetTools(tools: AgentRequest["tools"]): KieClaudeTool[] {
+  return tools.map((tool) => toKieClaudeTool(tool));
 }
 
 export function resolveClaudeThinkingFlag(
@@ -253,13 +317,21 @@ function logClaudeRequestDiagnostics(input: {
   endpoint: string;
   http_status?: number;
   messages_count: number;
+  current_user_chars?: number;
   last_message_role?: string;
   last_message_chars: number;
   thinking_mode: string;
   tools_count: number;
+  tool_names?: string[];
   provider_error_body?: string;
 }) {
   console.info("kie_claude_sonnet_request", input);
+}
+
+function currentUserCharsFromMessages(messages: ClaudeSonnetMessage[]): number {
+  const lastUser = [...messages].reverse().find((message) => message.role === "user");
+  if (!lastUser) return 0;
+  return messageContentLength(lastUser.content);
 }
 
 export class KieClaudeSonnetAdapter implements KieAdapter {
@@ -289,9 +361,11 @@ export class KieClaudeSonnetAdapter implements KieAdapter {
         endpoint: CLAUDE_ENDPOINT,
         http_status: response.status,
         messages_count: messages.length,
+        current_user_chars: currentUserCharsFromMessages(messages),
         ...lastDiag,
         thinking_mode: thinkingMode,
         tools_count: toolsCount,
+        tool_names: (body.tools as KieClaudeTool[] | undefined)?.map((tool) => tool.name),
         provider_error_body: text ? text.slice(0, 4096) : undefined,
       });
 
@@ -319,9 +393,11 @@ export class KieClaudeSonnetAdapter implements KieAdapter {
       endpoint: CLAUDE_ENDPOINT,
       http_status: response.status,
       messages_count: messages.length,
+      current_user_chars: currentUserCharsFromMessages(messages),
       ...lastDiag,
       thinking_mode: thinkingMode,
       tools_count: toolsCount,
+      tool_names: (body.tools as KieClaudeTool[] | undefined)?.map((tool) => tool.name),
     });
 
     let payload: unknown;

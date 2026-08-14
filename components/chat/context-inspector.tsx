@@ -22,6 +22,11 @@ interface ContextPreviewResponse {
   instructionsCharCount: number;
   recentMessagesCount: number;
   currentUserMessageChars: number;
+  turnTools?: {
+    intent: string;
+    count: number;
+    names: string[];
+  };
 }
 
 interface ContextInspectorProps {
@@ -92,7 +97,25 @@ export function ContextInspector({ chatId, modelId, presetId, draftContent }: Co
               {loading ? (
                 <p className="text-sm text-muted-foreground">{t("common.loading")}</p>
               ) : data ? (
-                <ul className="space-y-2">
+                <>
+                  {data.turnTools ? (
+                    <div className="mb-4 rounded-lg border border-border-subtle bg-surface-hover/40 px-3 py-2">
+                      <p className="text-sm font-medium">Инструменты этого запроса</p>
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        {data.turnTools.count === 0
+                          ? "0 инструментов"
+                          : `${data.turnTools.count} инструмент${data.turnTools.count === 1 ? "" : data.turnTools.count < 5 ? "а" : "ов"}`}
+                      </p>
+                      {data.turnTools.names.length > 0 ? (
+                        <ul className="mt-2 space-y-0.5 text-xs text-muted-foreground">
+                          {data.turnTools.names.map((name) => (
+                            <li key={name}>{name}</li>
+                          ))}
+                        </ul>
+                      ) : null}
+                    </div>
+                  ) : null}
+                  <ul className="space-y-2">
                   {data.layers.map((layer) => {
                     const canExpand = layer.present && layer.text && layer.id !== "runtimePolicy";
                     const isExpanded = expanded[layer.id];
@@ -131,6 +154,7 @@ export function ContextInspector({ chatId, modelId, presetId, draftContent }: Co
                     );
                   })}
                 </ul>
+                </>
               ) : (
                 <p className="text-sm text-muted-foreground">{t("common.error")}</p>
               )}

@@ -1,6 +1,7 @@
 import { Sidebar, MobileNav } from "@/components/layout/sidebar";
 import { DemoBanner } from "@/components/ui/states";
 import { ThemeProvider } from "@/components/providers/theme-provider";
+import { RecentChatsProvider } from "@/components/providers/recent-chats-provider";
 import { isMockWorkflowsEnabled } from "@/lib/env/mock-workflows";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import type { Chat } from "@/lib/types/workspace";
@@ -35,16 +36,21 @@ export default async function DashboardLayout({
 
   return (
     <ThemeProvider>
-      <div className="gradient-bg flex min-h-dvh flex-col">
-        {isMockWorkflowsEnabled() && <DemoBanner />}
-        <div className="flex min-h-0 flex-1">
-          <Sidebar recentProjects={recentProjects} recentChats={recentChats} />
-          <div className="flex min-h-dvh min-w-0 flex-1 flex-col pb-16 md:pb-0">
-            <main className="flex min-h-0 flex-1 flex-col">{children}</main>
+      <RecentChatsProvider
+        key={recentChats.map((chat) => chat.id).join(",")}
+        initialChats={recentChats}
+      >
+        <div className="gradient-bg flex min-h-dvh flex-col">
+          {isMockWorkflowsEnabled() && <DemoBanner />}
+          <div className="flex min-h-0 flex-1">
+            <Sidebar recentProjects={recentProjects} />
+            <div className="flex min-h-dvh min-w-0 flex-1 flex-col pb-16 md:pb-0">
+              <main className="flex min-h-0 flex-1 flex-col">{children}</main>
+            </div>
           </div>
+          <MobileNav />
         </div>
-        <MobileNav />
-      </div>
+      </RecentChatsProvider>
     </ThemeProvider>
   );
 }

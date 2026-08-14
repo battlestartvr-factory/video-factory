@@ -2,9 +2,10 @@
 
 import { useState, useRef, useEffect } from "react";
 import { MoreHorizontal } from "lucide-react";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { t } from "@/lib/i18n/dictionary";
+import { useRecentChatsOptional } from "@/components/providers/recent-chats-provider";
 
 interface ChatActionsMenuProps {
   chatId: string;
@@ -22,6 +23,8 @@ export function ChatActionsMenu({
   variant = "header",
 }: ChatActionsMenuProps) {
   const router = useRouter();
+  const pathname = usePathname();
+  const recentChats = useRecentChatsOptional();
   const [open, setOpen] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -47,19 +50,38 @@ export function ChatActionsMenu({
       body: JSON.stringify({ title: next.trim() }),
     });
     const data = await res.json();
-    if (data.ok) onRenamed?.(data.data.title);
+    if (data.ok) {
+      recentChats?.updateChatTitle(chatId, data.data.title);
+      onRenamed?.(data.data.title);
+    }
   };
 
   const handleDelete = async () => {
     setOpen(false);
     if (!window.confirm(t("chat.deleteConfirm"))) return;
+
+    const removed = recentChats?.removeChat(chatId) ?? null;
+    const isCurrentChat = pathname === `/chat/${chatId}`;
+
+    if (isCurrentChat) {
+      router.replace("/chat");
+    }
+    onDeleted?.();
+
     const res = await fetch(`/api/chats/${chatId}`, { method: "DELETE" });
     const data = await res.json();
+
     if (data.ok) {
       setToast(t("chat.deleted"));
-      onDeleted?.();
-      router.push("/chat");
       setTimeout(() => setToast(null), 3000);
+      return;
+    }
+
+    if (removed && recentChats) {
+      recentChats.restoreChat(removed);
+    }
+    if (isCurrentChat) {
+      router.replace(`/chat/${chatId}`);
     }
   };
 

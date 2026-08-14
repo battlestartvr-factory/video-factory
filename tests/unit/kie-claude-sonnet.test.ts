@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { AGENT_ERROR_CODES } from "@/lib/agent/config";
 import { runAgentToolLoop } from "@/lib/agent/loop";
-import { getToolDefinitions } from "@/lib/agent/tools";
 import type { AgentProvider, AgentProviderResponse, AgentRequest, ToolContext } from "@/lib/agent/types";
 import {
   assertClaudeMessagesNonEmpty,
@@ -11,7 +10,9 @@ import {
   kieClaudeSonnetAdapter,
   parseClaudeSonnetResponse,
   resolveClaudeThinkingFlag,
+  toKieClaudeTool,
 } from "@/lib/models/kie/adapters/claude-sonnet";
+import { resolveToolsForTurn } from "@/lib/agent/tools";
 import { joinKieUrl } from "@/lib/models/kie/adapters/base";
 import { KieProviderError } from "@/lib/models/kie/errors";
 import { getKieModelById } from "@/lib/models/kie/registry";
@@ -145,6 +146,37 @@ describe("KieClaudeSonnetAdapter request contract", () => {
     expect(resolveReasoning(model, "thinking").providerParam).toEqual({ thinkingFlag: true });
   });
 
+  it("builds KIE tool schema with input_schema via toKieClaudeTool", () => {
+    const tool = toKieClaudeTool({
+      name: "search_knowledge",
+      description: "Search knowledge base",
+      parameters: { type: "object", properties: { query: { type: "string" } }, required: ["query"] },
+    });
+
+    expect(tool).toEqual({
+      name: "search_knowledge",
+      description: "Search knowledge base",
+      input_schema: {
+        type: "object",
+        properties: { query: { type: "string" } },
+        required: ["query"],
+      },
+    });
+  });
+
+  it("rejects OpenAI function wrapper for Claude", () => {
+    expect(() =>
+      toKieClaudeTool({
+        name: "search_knowledge",
+        description: "Search",
+        parameters: { type: "object", properties: {} },
+        type: "function",
+      } as never),
+    ).toThrowError(
+      expect.objectContaining({ code: AGENT_ERROR_CODES.CLAUDE_TOOL_SCHEMA_UNSUPPORTED }),
+    );
+  });
+
   it("builds KIE tool schema with input_schema", () => {
     const tools = buildClaudeSonnetTools([
       {
@@ -157,7 +189,7 @@ describe("KieClaudeSonnetAdapter request contract", () => {
     expect(tools[0]).toEqual({
       name: "search_knowledge",
       description: "Search knowledge base",
-      input_schema: { type: "object", properties: { query: { type: "string" } } },
+      input_schema: { type: "object", properties: { query: { type: "string" } }, required: [] },
     });
   });
 
@@ -261,6 +293,52 @@ describe("KieClaudeSonnetAdapter HTTP", () => {
   });
 });
 
+describe("Claude context-aware tools regression", () => {
+  it('"Привет" resolves to 0 tools and plain Claude request has no tools key', () => {
+    const resolved = resolveToolsForTurn({ userMessage: "Привет" });
+    expect(resolved.tools).toHaveLength(0);
+
+    const input: AgentRequest = {
+      model: "claude-sonnet-5",
+      system: "Universal Agent base instructions.",
+      messages: [{ role: "user", content: "Привет" }],
+      tools: resolved.tools,
+    };
+
+    const { body, messages } = buildClaudeSonnetRequestBody(input, {
+      baseUrl: KIE_ROOT,
+      apiKey: "test",
+      model,
+    });
+
+    expect(messages.length).toBe(1);
+    expect(body.tools).toBeUndefined();
+  });
+
+  it("knowledge request passes only knowledge tools to Claude", () => {
+    const resolved = resolveToolsForTurn({
+      userMessage: 'Расскажи про урок 3 «Волшебная копилка» из базы знаний',
+    });
+
+    expect(resolved.tools.length).toBeGreaterThan(0);
+    expect(resolved.tools.length).toBeLessThanOrEqual(4);
+
+    const { body } = buildClaudeSonnetRequestBody(
+      {
+        model: "claude-sonnet-5",
+        system: "test",
+        messages: [{ role: "user", content: "Расскажи про урок 3" }],
+        tools: resolved.tools,
+      },
+      { baseUrl: KIE_ROOT, apiKey: "test", model },
+    );
+
+    const tools = body.tools as Array<{ name: string; input_schema: unknown }>;
+    expect(tools.every((tool) => tool.input_schema && typeof tool.input_schema === "object")).toBe(true);
+    expect(tools.map((tool) => tool.name)).toEqual(resolved.toolNames);
+  });
+});
+
 describe("Claude Sonnet tool roundtrip", () => {
   const ctx: ToolContext = {
     requestId: "req-claude",
@@ -293,12 +371,16 @@ describe("Claude Sonnet tool roundtrip", () => {
       },
     };
 
+    const knowledgeTools = resolveToolsForTurn({
+      userMessage: "Search knowledge base",
+    }).tools;
+
     const result = await runAgentToolLoop({
       provider,
       model: "claude-sonnet-5",
       system: "test",
       messages: [{ role: "user", content: "Search knowledge base" }],
-      tools: getToolDefinitions(),
+      tools: knowledgeTools,
       toolContext: ctx,
       maxIterations: 4,
     });

@@ -20,8 +20,8 @@ import {
 import { cn } from "@/lib/utils";
 import { t } from "@/lib/i18n/dictionary";
 import { useTheme } from "@/components/providers/theme-provider";
+import { useRecentChats } from "@/components/providers/recent-chats-provider";
 import { ChatActionsMenu } from "@/components/chat/chat-actions-menu";
-import type { Chat } from "@/lib/types/workspace";
 import type { Project } from "@/lib/types/database";
 
 const mainNavItems = [
@@ -37,7 +37,6 @@ const mainNavItems = [
 
 interface SidebarProps {
   recentProjects?: Pick<Project, "id" | "name">[];
-  recentChats?: Pick<Chat, "id" | "title">[];
 }
 
 function NavLink({
@@ -76,8 +75,9 @@ function NavLink({
   );
 }
 
-export function Sidebar({ recentProjects = [], recentChats = [] }: SidebarProps) {
+export function Sidebar({ recentProjects = [] }: SidebarProps) {
   const { sidebarCollapsed, setSidebarCollapsed, mobileSidebarOpen, setMobileSidebarOpen } = useTheme();
+  const { recentChats } = useRecentChats();
   const closeMobile = () => setMobileSidebarOpen(false);
 
   const sidebarContent = (

@@ -4,6 +4,7 @@ import { apiSuccess, apiError } from "@/lib/api/response";
 import { generateRequestId } from "@/lib/logging/logger";
 import { loadContextSources } from "@/lib/agent/conversation";
 import { buildAgentContext, buildContextPreview } from "@/lib/agent/context-builder";
+import { resolveToolsForTurn } from "@/lib/agent/tools";
 import type { Chat, ChatMessage } from "@/lib/types/workspace";
 
 type Params = { params: Promise<{ chatId: string }> };
@@ -75,11 +76,24 @@ export async function GET(request: Request, { params }: Params) {
   const context = buildAgentContext(sources);
   const layers = buildContextPreview(context);
 
+  const userMessageText =
+    typeof currentMessage.content === "string" ? currentMessage.content : "";
+  const resolvedTools = resolveToolsForTurn({
+    userMessage: userMessageText,
+    projectId: chat.project_id,
+    presetId: presetId ?? chat.preset_id,
+  });
+
   return apiSuccess({
     manifest: context.manifest,
     layers,
     instructionsCharCount: context.instructions.length,
     recentMessagesCount: context.messages.length,
     currentUserMessageChars: context.manifest.current_user_message_chars,
+    turnTools: {
+      intent: resolvedTools.intent,
+      count: resolvedTools.tools.length,
+      names: resolvedTools.toolNames,
+    },
   });
 }

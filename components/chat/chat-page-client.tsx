@@ -17,6 +17,7 @@ import {
 import type { Chat, ChatMessage, ErrorCardData, Preset, AgentUiEvent } from "@/lib/types/workspace";
 import { AgentActivityPanel } from "@/components/chat/agent-activity-panel";
 import { ChatActionsMenu } from "@/components/chat/chat-actions-menu";
+import { useRecentChatsOptional } from "@/components/providers/recent-chats-provider";
 import type { StreamEvent } from "@/lib/agent/stream-events.types";
 
 interface ChatPageClientProps {
@@ -57,6 +58,7 @@ export function ChatPageClient({ chatId: chatIdProp, projectId }: ChatPageClient
   const [sendError, setSendError] = useState<ErrorCardData | null>(null);
   const [loadedChatIds, setLoadedChatIds] = useState<Record<string, boolean>>({});
   const loading = !!chatId && !loadedChatIds[chatId] && messages.length === 0;
+  const recentChats = useRecentChatsOptional();
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fetchGenerationRef = useRef(0);
   const displayedChat = chat?.id === chatId ? chat : null;
@@ -126,6 +128,7 @@ export function ChatPageClient({ chatId: chatIdProp, projectId }: ChatPageClient
     if (data.ok) {
       setPendingChatId(data.data.id);
       setChat(data.data);
+      recentChats?.prependChat({ id: data.data.id, title: data.data.title });
       setSendError(null);
       router.push(`/chat/${data.data.id}`);
     }
@@ -154,6 +157,7 @@ export function ChatPageClient({ chatId: chatIdProp, projectId }: ChatPageClient
       activeChatId = data.data.id as string;
       setPendingChatId(activeChatId);
       setChat(data.data);
+      recentChats?.prependChat({ id: data.data.id, title: data.data.title });
     }
 
     if (!activeChatId) return;
@@ -314,7 +318,10 @@ export function ChatPageClient({ chatId: chatIdProp, projectId }: ChatPageClient
             <ChatActionsMenu
               chatId={chatId}
               title={displayedChat.title}
-              onRenamed={(title) => setChat((c) => (c ? { ...c, title } : c))}
+              onRenamed={(title) => {
+                setChat((c) => (c ? { ...c, title } : c));
+                recentChats?.updateChatTitle(chatId, title);
+              }}
             />
           ) : null}
           <Button variant="ghost" size="sm" onClick={createChat}>

@@ -10,7 +10,7 @@ import { getChatReasoningFromMetadata } from "@/lib/models/kie/registry";
 import { loadAgentContext } from "./conversation";
 import { assertCurrentUserMessage, AgentContextError } from "./context-builder";
 import { runAgentToolLoop } from "./loop";
-import { getToolDefinitions } from "./tools";
+import { resolveToolsForTurn } from "./tools";
 import { redactForStorage } from "./redaction";
 import {
   streamEvent,
@@ -193,7 +193,22 @@ export async function runUniversalAgent(input: UniversalAgentInput): Promise<Uni
     model_id: context.manifest.model,
   });
 
-  const tools = getToolDefinitions();
+  const userMessageText =
+    typeof input.userMessage.content === "string" ? input.userMessage.content : "";
+  const { tools, toolNames, intent: turnIntent } = resolveToolsForTurn({
+    userMessage: userMessageText,
+    attachmentIds: input.attachmentIds,
+    projectId: input.chat.project_id,
+    presetId: input.presetId ?? input.chat.preset_id,
+  });
+
+  logger.info("agent_tools_resolved", {
+    agent_run_id: agentRunId,
+    turn_intent: turnIntent,
+    tools_count: tools.length,
+    tool_names: toolNames,
+  });
+
   const toolCtx: ToolContext = {
     requestId: input.requestId,
     userId: input.userId,

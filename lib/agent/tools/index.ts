@@ -55,3 +55,14 @@ export function getToolDefinitions(): AgentToolDefinition[] {
 export function listToolNames(): string[] {
   return TOOLS.map((tool) => tool.name);
 }
+
+export {
+  resolveToolsForTurn,
+  detectTurnIntent,
+  TOOL_GROUPS,
+  MAX_TOOLS_PER_REQUEST,
+  TARGET_TOOLS_PER_REQUEST,
+  type TurnIntent,
+  type ResolveToolsForTurnInput,
+  type ResolveToolsForTurnResult,
+} from "./resolve-tools-for-turn";
