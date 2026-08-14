@@ -39,6 +39,7 @@ export interface Project {
   target_platforms: string[];
   created_by: string;
   factory_settings: Record<string, unknown>;
+  system_prompt: string | null;
   created_at: string;
   updated_at: string;
 }

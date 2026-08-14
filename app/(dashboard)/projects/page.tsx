@@ -26,7 +26,8 @@ export default async function ProjectsPage() {
   const projects = await getProjects();
 
   return (
-    <div className="mx-auto max-w-6xl space-y-6">
+    <div className="flex flex-1 flex-col p-4 md:p-8">
+      <div className="mx-auto w-full max-w-6xl space-y-6">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <h1 className="text-2xl font-bold">{t("projects.title")}</h1>
         <Button>
@@ -50,6 +51,7 @@ export default async function ProjectsPage() {
       {projects.length === 0 ? (
         <EmptyState
           title={t("projects.empty")}
+          description={t("projects.emptyDescription")}
           action={
             <Button>
               <Link href="/projects/new">{t("projects.new")}</Link>
@@ -77,6 +79,7 @@ export default async function ProjectsPage() {
           ))}
         </div>
       )}
+      </div>
     </div>
   );
 }

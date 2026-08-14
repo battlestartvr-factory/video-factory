@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { Plus } from "lucide-react";
+import { MessageSquare } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -62,13 +62,14 @@ export default async function DashboardPage() {
   const { jobs, stats } = await getDashboardData();
 
   return (
-    <div className="mx-auto max-w-6xl space-y-8">
+    <div className="flex flex-1 flex-col p-4 md:p-8">
+      <div className="mx-auto w-full max-w-6xl space-y-8">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <h1 className="text-2xl font-bold text-zinc-100">{t("dashboard.title")}</h1>
         <Button>
-          <Link href="/projects" className="inline-flex items-center gap-2">
-            <Plus className="h-4 w-4" aria-hidden />
-            {t("dashboard.createJob")}
+          <Link href="/chat" className="inline-flex items-center gap-2">
+            <MessageSquare className="h-4 w-4" aria-hidden />
+            {t("dashboard.newChat")}
           </Link>
         </Button>
       </div>
@@ -110,6 +111,7 @@ export default async function DashboardPage() {
           </div>
         )}
       </section>
+      </div>
     </div>
   );
 }
