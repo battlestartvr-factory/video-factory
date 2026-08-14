@@ -98,13 +98,13 @@ export const LLM_MODELS: KieModelEntry[] = [
     ],
   },
   {
-    id: "claude-sonnet-5",
-    displayName: "Claude Sonnet 5",
+    id: "claude-sonnet-4-5",
+    displayName: "Claude Sonnet 4.5",
     provider: "kie",
     category: "llm",
     adapter: "claude_sonnet",
     endpoint: "/claude/v1/messages",
-    providerModel: "claude-sonnet-5",
+    providerModel: "claude-sonnet-4-5",
     capabilities: {
       chat: true,
       vision: true,
@@ -117,6 +117,7 @@ export const LLM_MODELS: KieModelEntry[] = [
       mapping: { standard: "disabled", thinking: "enabled" },
     },
     enabled: true,
+    aliases: ["claude-sonnet-5"],
     useCases: [
       "creative writing",
       "сценарии",

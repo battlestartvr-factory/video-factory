@@ -29,7 +29,9 @@ describe("KIE Model Registry", () => {
   it("resolves legacy aliases", () => {
     expect(resolveModelId("gemini-3-flash")).toBe("gemini-3-6-flash");
     expect(resolveModelId("nano-banana-2-lite")).toBe("nano-banana-2");
+    expect(resolveModelId("claude-sonnet-5")).toBe("claude-sonnet-4-5");
     expect(getKieModelById("gemini-3-flash")?.id).toBe("gemini-3-6-flash");
+    expect(getKieModelById("claude-sonnet-5")?.id).toBe("claude-sonnet-4-5");
   });
 
   it("returns public metadata without secrets", () => {
@@ -58,7 +60,7 @@ describe("reasoning mapping", () => {
   });
 
   it("uses binary control for Claude Sonnet", () => {
-    const model = getKieModelById("claude-sonnet-5")!;
+    const model = getKieModelById("claude-sonnet-4-5")!;
     const resolved = resolveReasoning(model, "standard");
     expect(resolved.requestedReasoning).toBe("standard");
     expect(resolved.effectiveReasoning).toBe("disabled");

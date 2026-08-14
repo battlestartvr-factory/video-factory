@@ -16,17 +16,17 @@ import { getKieModelById } from "@/lib/models/kie/registry";
 import { resolveReasoning } from "@/lib/models/kie/reasoning";
 
 const KIE_ROOT = "https://api.kie.ai";
-const model = getKieModelById("claude-sonnet-5")!;
+const model = getKieModelById("claude-sonnet-4-5")!;
 
 describe("KieAnthropicProvider request contract", () => {
-  it("resolves claude-sonnet-5 to KIE Anthropic-compatible base URL", () => {
+  it("resolves claude-sonnet-4-5 to KIE Anthropic-compatible base URL", () => {
     expect(buildKieAnthropicBaseUrl(KIE_ROOT)).toBe(`${KIE_ROOT}/claude`);
   });
 
   it('production-equivalent plain chat: "ты умеешь монтировать видео?"', () => {
     const userText = "ты умеешь монтировать видео?";
     const input: AgentRequest = {
-      model: "claude-sonnet-5",
+      model: "claude-sonnet-4-5",
       system: "Universal Agent base instructions with runtime policy and preset layers.",
       messages: [{ role: "user", content: userText }],
       tools: [],
@@ -46,7 +46,7 @@ describe("KieAnthropicProvider request contract", () => {
     expect(String(messages[0]?.content)).not.toContain("<user_request>");
 
     expect(params.system).toBe(input.system);
-    expect(params.model).toBe("claude-sonnet-5");
+    expect(params.model).toBe("claude-sonnet-4-5");
     expect(params.max_tokens).toBe(4096);
     expect(params.stream).toBe(false);
     expect(params.thinkingFlag).toBeUndefined();
@@ -59,7 +59,7 @@ describe("KieAnthropicProvider request contract", () => {
 
   it('builds plain "Say hello" payload with system separate from user message', () => {
     const input: AgentRequest = {
-      model: "claude-sonnet-5",
+      model: "claude-sonnet-4-5",
       system: "Base agent instructions.",
       messages: [{ role: "user", content: "Say hello" }],
       tools: [],
@@ -77,7 +77,7 @@ describe("KieAnthropicProvider request contract", () => {
 
   it("never modifies the current user message (Russian plain chat)", () => {
     const input: AgentRequest = {
-      model: "claude-sonnet-5",
+      model: "claude-sonnet-4-5",
       system: "Universal Agent base instructions.",
       messages: [{ role: "user", content: "Привет" }],
       tools: [],
@@ -91,7 +91,7 @@ describe("KieAnthropicProvider request contract", () => {
 
   it("includes prior history plus unmodified current user turn", () => {
     const input: AgentRequest = {
-      model: "claude-sonnet-5",
+      model: "claude-sonnet-4-5",
       system: "Instructions",
       messages: [
         { role: "user", content: "First question" },
@@ -112,7 +112,7 @@ describe("KieAnthropicProvider request contract", () => {
 
   it("keeps system instructions out of messages", () => {
     const input: AgentRequest = {
-      model: "claude-sonnet-5",
+      model: "claude-sonnet-4-5",
       system: "Runtime policy and global instructions.",
       messages: [{ role: "user", content: "Hello" }],
       tools: [],
@@ -136,7 +136,7 @@ describe("KieAnthropicProvider request contract", () => {
     expect(() =>
       buildAnthropicRequestParams(
         {
-          model: "claude-sonnet-5",
+          model: "claude-sonnet-4-5",
           system: "Instructions",
           messages: [],
           tools: [],
@@ -149,7 +149,7 @@ describe("KieAnthropicProvider request contract", () => {
   it("Standard thinking omits thinkingFlag", () => {
     const { params } = buildAnthropicRequestParams(
       {
-        model: "claude-sonnet-5",
+        model: "claude-sonnet-4-5",
         system: "",
         messages: [{ role: "user", content: "hi" }],
         tools: [],
@@ -170,7 +170,7 @@ describe("KieAnthropicProvider request contract", () => {
   it("Thinking mode sends thinkingFlag: true", () => {
     const { params } = buildAnthropicRequestParams(
       {
-        model: "claude-sonnet-5",
+        model: "claude-sonnet-4-5",
         system: "",
         messages: [{ role: "user", content: "hi" }],
         tools: [],
@@ -222,7 +222,7 @@ describe("KieAnthropicProvider request contract", () => {
   it("includes tools in request params when provided", () => {
     const { params } = buildAnthropicRequestParams(
       {
-        model: "claude-sonnet-5",
+        model: "claude-sonnet-4-5",
         system: "test",
         messages: [{ role: "user", content: "Search" }],
         tools: [
@@ -250,7 +250,7 @@ describe("KieAnthropicProvider SDK integration", () => {
       type: "message",
       role: "assistant",
       content: [{ type: "text", text: "Hello!" }],
-      model: "claude-sonnet-5",
+      model: "claude-sonnet-4-5",
       stop_reason: "end_turn",
       stop_sequence: null,
       usage: {
@@ -291,7 +291,7 @@ describe("KieAnthropicProvider SDK integration", () => {
     const result = await provider.run(
       { baseUrl: KIE_ROOT, apiKey: "test-key", model },
       {
-        model: "claude-sonnet-5",
+        model: "claude-sonnet-4-5",
         system: "Be helpful.",
         messages: [{ role: "user", content: "Say hello" }],
         tools: [],
@@ -309,7 +309,7 @@ describe("KieAnthropicProvider SDK integration", () => {
       thinkingFlag?: unknown;
     };
 
-    expect(callArgs.model).toBe("claude-sonnet-5");
+    expect(callArgs.model).toBe("claude-sonnet-4-5");
     expect(callArgs.system).toBe("Be helpful.");
     expect(callArgs.messages).toEqual([{ role: "user", content: "Say hello" }]);
     expect(callArgs.tools).toBeUndefined();
@@ -326,7 +326,7 @@ describe("Claude context-aware tools regression", () => {
     expect(resolved.tools).toHaveLength(0);
 
     const input: AgentRequest = {
-      model: "claude-sonnet-5",
+      model: "claude-sonnet-4-5",
       system: "Universal Agent base instructions.",
       messages: [{ role: "user", content: "Привет" }],
       tools: resolved.tools,
@@ -352,7 +352,7 @@ describe("Claude context-aware tools regression", () => {
 
     const { params } = buildAnthropicRequestParams(
       {
-        model: "claude-sonnet-5",
+        model: "claude-sonnet-4-5",
         system: "test",
         messages: [{ role: "user", content: "Расскажи про урок 3" }],
         tools: resolved.tools,
@@ -404,7 +404,7 @@ describe("Claude Sonnet tool roundtrip", () => {
 
     const result = await runAgentToolLoop({
       provider,
-      model: "claude-sonnet-5",
+      model: "claude-sonnet-4-5",
       system: "test",
       messages: [{ role: "user", content: "Search knowledge base" }],
       tools: knowledgeTools,
@@ -419,7 +419,7 @@ describe("Claude Sonnet tool roundtrip", () => {
 
   it("Anthropic messages include tool_result blocks after tool execution", () => {
     const messages = buildAnthropicMessages({
-      model: "claude-sonnet-5",
+      model: "claude-sonnet-4-5",
       system: "test",
       messages: [
         { role: "user", content: "Search" },

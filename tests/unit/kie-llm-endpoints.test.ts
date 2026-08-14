@@ -35,7 +35,7 @@ describe("KIE LLM endpoint URLs", () => {
       expected: `${KIE_ROOT}/codex/v1/responses`,
     },
     {
-      modelId: "claude-sonnet-5",
+      modelId: "claude-sonnet-4-5",
       expected: `${KIE_ROOT}/claude/v1/messages`,
     },
   ] as const;

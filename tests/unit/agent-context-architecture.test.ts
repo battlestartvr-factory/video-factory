@@ -270,7 +270,7 @@ describe("provider payload regression — current user message", () => {
 
   it("Claude payload contains Привет as plain user message", () => {
     const messages = buildAnthropicMessages({
-      model: "claude-sonnet-5",
+      model: "claude-sonnet-4-5",
       system,
       messages: [{ role: "user", content: "Привет" }],
       tools: [],

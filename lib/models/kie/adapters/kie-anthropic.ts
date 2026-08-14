@@ -299,22 +299,6 @@ function parseAnthropicResponse(message: Anthropic.Message): {
   };
 }
 
-function logAnthropicRequestDiagnostics(input: {
-  model: string;
-  endpoint: string;
-  http_status?: number;
-  messages_count: number;
-  current_user_chars: number;
-  system_chars: number;
-  last_message_chars: number;
-  thinking_mode: string;
-  tools_count: number;
-  tool_names?: string[];
-  provider_error_body?: string;
-}) {
-  console.info("kie_anthropic_request", input);
-}
-
 function createKieAnthropicClient(ctx: KieAdapterContext): Anthropic {
   return new Anthropic({
     authToken: ctx.apiKey,
@@ -327,33 +311,12 @@ function createKieAnthropicClient(ctx: KieAdapterContext): Anthropic {
 export class KieAnthropicProvider implements KieAdapter {
   async run(ctx: KieAdapterContext, input: AgentRequest): Promise<AgentProviderResponse> {
     const client = createKieAnthropicClient(ctx);
-    const {
-      params,
-      messages,
-      thinkingMode,
-      toolsCount,
-      systemChars,
-      currentUserChars,
-      lastMessageChars,
-    } = buildAnthropicRequestParams(input, ctx);
+    const { params } = buildAnthropicRequestParams(input, ctx);
 
     const endpoint = `${CLAUDE_ANTHROPIC_BASE_PATH}/v1/messages`;
 
     try {
       const response = await client.messages.create(params);
-
-      logAnthropicRequestDiagnostics({
-        model: ctx.model.providerModel,
-        endpoint,
-        http_status: 200,
-        messages_count: messages.length,
-        current_user_chars: currentUserChars,
-        system_chars: systemChars,
-        last_message_chars: lastMessageChars,
-        thinking_mode: thinkingMode,
-        tools_count: toolsCount,
-        tool_names: params.tools?.map((tool) => tool.name),
-      });
 
       const parsed = parseAnthropicResponse(response);
       return {
@@ -371,20 +334,6 @@ export class KieAnthropicProvider implements KieAdapter {
         const text = typeof error.error === "object" ? JSON.stringify(error.error) : String(error.error ?? error.message);
         const providerError = normalizeKieError(error.status ?? 502, text, "application/json", "claude_sonnet");
         const parsed = parseKieErrorBody(text);
-
-        logAnthropicRequestDiagnostics({
-          model: ctx.model.providerModel,
-          endpoint,
-          http_status: error.status,
-          messages_count: messages.length,
-          current_user_chars: currentUserChars,
-          system_chars: systemChars,
-          last_message_chars: lastMessageChars,
-          thinking_mode: thinkingMode,
-          tools_count: toolsCount,
-          tool_names: params.tools?.map((tool) => tool.name),
-          provider_error_body: text ? text.slice(0, 4096) : undefined,
-        });
 
         logKieProviderError({
           model_id: ctx.model.id,
