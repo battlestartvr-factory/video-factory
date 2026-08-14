@@ -139,6 +139,23 @@ export class KieClaudeMessagesAdapter implements KieAdapter {
       requestBody.system = input.system;
     }
 
+    console.log(
+      "CLAUDE_REQUEST_DEBUG",
+      JSON.stringify(
+        {
+          model: requestBody.model,
+          system: requestBody.system,
+          messages: requestBody.messages,
+          max_tokens: requestBody.max_tokens,
+          stream: requestBody.stream,
+          thinkingFlag: requestBody.thinkingFlag,
+          tools: requestBody.tools,
+        },
+        null,
+        2,
+      ),
+    );
+
     const response = await kieFetch(ctx, requestBody, AGENT_PROVIDER_TIMEOUT_MS);
 
     return handleKieResponse(
