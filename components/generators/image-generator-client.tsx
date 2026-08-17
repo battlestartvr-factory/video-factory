@@ -8,12 +8,11 @@ import { Input, Textarea, Label, Select } from "@/components/ui/input";
 import { EmptyState, Skeleton } from "@/components/ui/states";
 import { ModelSelector } from "@/components/chat/model-selector";
 import { QualitySelector } from "@/components/chat/quality-selector";
-import { PresetSelector } from "@/components/chat/preset-selector";
 import { getModelById } from "@/lib/models/registry";
 import { DEFAULT_IMAGE_MODEL, DEFAULT_MEDIA_QUALITY } from "@/lib/agent/config";
 import type { MediaQuality } from "@/lib/models/kie/types";
 import { t } from "@/lib/i18n/dictionary";
-import type { Generation, Preset } from "@/lib/types/workspace";
+import type { Generation } from "@/lib/types/workspace";
 
 const IMAGE_MODES = [
   { id: "text-to-image", label: t("images.modes.textToImage") },
@@ -27,27 +26,23 @@ export function ImageGeneratorClient() {
   const [prompt, setPrompt] = useState("");
   const [modelId, setModelId] = useState(DEFAULT_IMAGE_MODEL);
   const [quality, setQuality] = useState<MediaQuality>(DEFAULT_MEDIA_QUALITY);
-  const [presetId, setPresetId] = useState("00000000-0000-4000-8000-000000000002");
   const [aspectRatio, setAspectRatio] = useState("16:9");
   const [resolution, setResolution] = useState("1024");
   const [numOutputs, setNumOutputs] = useState(1);
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [history, setHistory] = useState<Generation[]>([]);
-  const [presets, setPresets] = useState<Preset[]>([]);
   const [loading, setLoading] = useState(true);
 
   const model = getModelById(modelId);
 
   useEffect(() => {
-    Promise.all([
-      fetch("/api/presets?type=image").then((r) => r.json()),
-      fetch("/api/generations?type=image").then((r) => r.json()),
-    ]).then(([presetRes, genRes]) => {
-      if (presetRes.ok) setPresets(presetRes.data.presets);
-      if (genRes.ok) setHistory(genRes.data.generations);
-      setLoading(false);
-    });
+    fetch("/api/generations?type=image")
+      .then((r) => r.json())
+      .then((genRes) => {
+        if (genRes.ok) setHistory(genRes.data.generations);
+        setLoading(false);
+      });
   }, []);
 
   const handleGenerate = async () => {
@@ -61,7 +56,6 @@ export function ImageGeneratorClient() {
         mode,
         prompt,
         modelId,
-        presetId,
         settings: { aspectRatio, resolution, numOutputs, quality },
       }),
     });
@@ -109,10 +103,6 @@ export function ImageGeneratorClient() {
                     value={quality}
                     onChange={(q) => setQuality(q as MediaQuality)}
                   />
-                </div>
-                <div>
-                  <Label className="mb-1 block text-xs">Пресет</Label>
-                  <PresetSelector value={presetId} onChange={setPresetId} presets={presets} />
                 </div>
               </div>
 
