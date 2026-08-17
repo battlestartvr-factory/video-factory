@@ -36,7 +36,7 @@ services:
     environment:
       NODE_ENV: production
       AI_FACTORY_DATA_ROOT: /srv/ai-factory
-      ORCHESTRATOR_BUILD_SHA: ${DEPLOY_COMMIT:-local}
+      BUILD_SHA: ${DEPLOY_COMMIT:-local}
     volumes:
       - ${AI_FACTORY_DATA_ROOT:-/srv/ai-factory}:/srv/ai-factory
     restart: unless-stopped
