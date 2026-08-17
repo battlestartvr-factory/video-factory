@@ -7,6 +7,7 @@ export interface ClaimedJob {
   workflowVersion: number;
   currentStage: string | null;
   state: Record<string, unknown>;
+  retryCount: number;
   leaseToken: string;
   leaseExpiresAt: string;
   recovered: boolean;
@@ -52,6 +53,7 @@ export interface FinishTickResult {
   success: boolean;
   reason?: string;
   status?: string;
+  retryCount?: number;
   queueMsgId?: number;
   nextActionAt?: string;
   traceId?: string;
@@ -101,6 +103,7 @@ export class OrchestratorRepository {
         row.state && typeof row.state === "object" && !Array.isArray(row.state)
           ? (row.state as Record<string, unknown>)
           : {},
+      retryCount: typeof row.retry_count === "number" ? row.retry_count : 0,
       leaseToken: row.lease_token,
       leaseExpiresAt: row.lease_expires_at,
       recovered: row.recovered === true,
@@ -160,6 +163,7 @@ export class OrchestratorRepository {
       success: row.success === true,
       reason: typeof row.reason === "string" ? row.reason : undefined,
       status: typeof row.status === "string" ? row.status : undefined,
+      retryCount: typeof row.retry_count === "number" ? row.retry_count : undefined,
       queueMsgId: typeof row.queue_msg_id === "number" ? row.queue_msg_id : undefined,
       nextActionAt:
         typeof row.next_action_at === "string" ? row.next_action_at : undefined,
@@ -178,5 +182,21 @@ export class OrchestratorRepository {
       p_metadata: input.metadata ?? {},
     });
     if (error) throw new Error(`Failed to heartbeat worker ${input.workerId}: ${error.message}`);
+  }
+
+  async recoverDueJobs(input: {
+    limit?: number;
+    reenqueueAfterSeconds?: number;
+  } = {}): Promise<{ recovered: number; staleLeases: number }> {
+    const { data, error } = await this.rpcClient.rpc("orchestrator_watchdog_recover", {
+      p_limit: input.limit ?? 50,
+      p_reenqueue_after_seconds: input.reenqueueAfterSeconds ?? 60,
+    });
+    if (error) throw new Error(`Failed to run orchestrator watchdog: ${error.message}`);
+    const row = requireRpcObject(data, "orchestrator_watchdog_recover");
+    return {
+      recovered: typeof row.recovered === "number" ? row.recovered : 0,
+      staleLeases: typeof row.stale_leases === "number" ? row.stale_leases : 0,
+    };
   }
 }
