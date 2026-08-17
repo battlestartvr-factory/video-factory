@@ -1,7 +1,6 @@
-# Production reverse proxy — access via VPS IP on port 80.
-# Domain/TLS will be configured in a follow-up step.
+# Production reverse proxy — TLS via Caddy automatic HTTPS (Let's Encrypt).
 
-:80 {
+battlestart-factory.duckdns.org {
 	encode gzip zstd
 
 	# Knowledge server-side upload (PATCH) allows up to 15 MiB; keep headroom.
