@@ -7,10 +7,15 @@ const migration = readFileSync(
   "utf-8",
 );
 
+const queueMigration = readFileSync(
+  join(process.cwd(), "supabase/migrations/20260817180500_stage3_queue_atomic_primitives.sql"),
+  "utf-8",
+);
+
 describe("stage3 durable schema — additive compatibility", () => {
-  it("does not drop factory tables or truncate data", () => {
+  it("does not drop factory tables or issue a TRUNCATE statement", () => {
     expect(migration).not.toMatch(/\bDROP TABLE\b/i);
-    expect(migration).not.toMatch(/^\s*TRUNCATE\s+(?:TABLE\s+)?public\./im);
+    expect(migration).not.toMatch(/^\s*TRUNCATE\s+/im);
   });
 
   it("backfills existing jobs as legacy_content before workflow_kind becomes required", () => {
@@ -18,6 +23,12 @@ describe("stage3 durable schema — additive compatibility", () => {
     const notNull = migration.indexOf("ALTER COLUMN workflow_kind SET NOT NULL");
     expect(backfill).toBeGreaterThan(-1);
     expect(notNull).toBeGreaterThan(backfill);
+  });
+
+  it("keeps legacy create RPC compatible with the required workflow identity", () => {
+    expect(queueMigration).toMatch(
+      /ALTER COLUMN workflow_kind SET DEFAULT 'legacy_content'/,
+    );
   });
 
   it("makes content-era fields optional while preserving the legacy contract", () => {
