@@ -1,6 +1,4 @@
-import "server-only";
-
-import { createSupabaseServiceClient } from "@/lib/supabase/server";
+import type { OrchestratorRpcClient } from "../rpc";
 import {
   parseOrchestratorQueueMessage,
   type OrchestratorQueueAdapter,
@@ -29,11 +27,12 @@ function isQueueRow(value: unknown): value is QueueRow {
 }
 
 export class PgmqQueueAdapter implements OrchestratorQueueAdapter {
+  constructor(private readonly rpcClient: OrchestratorRpcClient) {}
+
   async read(options: QueueReadOptions = {}): Promise<QueueDelivery[]> {
     const visibilitySeconds = options.visibilitySeconds ?? 120;
     const quantity = options.quantity ?? 1;
-    const service = createSupabaseServiceClient();
-    const { data, error } = await service.rpc("orchestrator_read_queue", {
+    const { data, error } = await this.rpcClient.rpc("orchestrator_read_queue", {
       p_visibility_seconds: visibilitySeconds,
       p_qty: quantity,
     });
@@ -60,8 +59,7 @@ export class PgmqQueueAdapter implements OrchestratorQueueAdapter {
   }
 
   async ack(msgId: number): Promise<boolean> {
-    const service = createSupabaseServiceClient();
-    const { data, error } = await service.rpc("orchestrator_archive_queue_message", {
+    const { data, error } = await this.rpcClient.rpc("orchestrator_archive_queue_message", {
       p_msg_id: msgId,
     });
 
@@ -71,8 +69,4 @@ export class PgmqQueueAdapter implements OrchestratorQueueAdapter {
 
     return data === true;
   }
-}
-
-export function createPgmqQueueAdapter(): OrchestratorQueueAdapter {
-  return new PgmqQueueAdapter();
 }
