@@ -40,13 +40,19 @@ cd "$APP_DIR"
 log "Fetching origin/main"
 git fetch origin main
 
+# Production working tree is deployment-only. Discard tracked manual edits so
+# checkout of the CI-approved commit is deterministic. Secrets and persistent
+# data live outside the repository and are not affected by this reset.
+log "Resetting tracked local changes"
+git reset --hard HEAD
+
 if [[ -n "$COMMIT" ]]; then
   log "Checking out commit $COMMIT"
   git checkout --detach "$COMMIT"
 else
   log "Fast-forwarding to origin/main"
   git checkout main
-  git pull --ff-only origin main
+  git reset --hard origin/main
 fi
 
 log "Loading production env from $ENV_FILE"
