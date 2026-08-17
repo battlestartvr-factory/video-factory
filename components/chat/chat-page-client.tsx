@@ -127,6 +127,24 @@ export function ChatPageClient({ chatId: chatIdProp, projectId }: ChatPageClient
     }
   };
 
+  const uploadAttachments = async (activeChatId: string, files: File[]): Promise<string[]> => {
+    const ids: string[] = [];
+    for (const file of files) {
+      const form = new FormData();
+      form.append("file", file);
+      const res = await fetch(`/api/chats/${activeChatId}/attachments`, {
+        method: "POST",
+        body: form,
+      });
+      const data = await res.json();
+      if (!data.ok || !data.data?.attachmentId) {
+        throw new Error(data.error?.message ?? `Не удалось загрузить ${file.name}`);
+      }
+      ids.push(data.data.attachmentId as string);
+    }
+    return ids;
+  };
+
   const handleSend = async (
     content: string,
     options: { modelId?: string; reasoningLevel?: string; files: File[] },
@@ -144,10 +162,7 @@ export function ChatPageClient({ chatId: chatIdProp, projectId }: ChatPageClient
       });
       const data = await res.json();
       if (!data.ok) {
-        setSendError({
-          code: data.error?.code,
-          message: data.error?.message ?? t("common.error"),
-        });
+        setSendError({ code: data.error?.code, message: data.error?.message ?? t("common.error") });
         return;
       }
       activeChatId = data.data.id as string;
@@ -157,13 +172,27 @@ export function ChatPageClient({ chatId: chatIdProp, projectId }: ChatPageClient
     }
 
     if (!activeChatId) return;
+    setSending(true);
+
+    let attachmentIds: string[] = [];
+    try {
+      if (options.files.length) {
+        setLiveActivity([{ type: "attachment.upload", label: "● Загружаю и разбираю источник…", status: "running" }]);
+        attachmentIds = await uploadAttachments(activeChatId, options.files);
+        setLiveActivity([{ type: "attachment.uploaded", label: "✓ Источник готов", status: "completed" }]);
+      }
+    } catch (error) {
+      setSendError({ message: error instanceof Error ? error.message : "Не удалось загрузить документ" });
+      setSending(false);
+      setLiveActivity([]);
+      return;
+    }
 
     const optimistic = optimisticUserMessage(activeChatId, content);
     setMessagesByChat((prev) => ({
       ...prev,
-      [activeChatId]: mergeMessagesById(prev[activeChatId] ?? [], [optimistic]),
+      [activeChatId!]: mergeMessagesById(prev[activeChatId!] ?? [], [optimistic]),
     }));
-    setSending(true);
 
     const appendActivity = (event: StreamEvent) => {
       if (!event.label && event.type !== "agent.run.started") return;
@@ -171,9 +200,7 @@ export function ChatPageClient({ chatId: chatIdProp, projectId }: ChatPageClient
         const next: AgentUiEvent = {
           type: event.type,
           toolName: event.toolName,
-          label:
-            event.label ??
-            (event.type === "agent.run.started" ? "● Думаю…" : undefined),
+          label: event.label ?? (event.type === "agent.run.started" ? "● Думаю…" : undefined),
           status: event.type.includes("failed")
             ? "failed"
             : event.type.includes("completed") || event.summary?.startsWith("✓")
@@ -189,8 +216,7 @@ export function ChatPageClient({ chatId: chatIdProp, projectId }: ChatPageClient
     };
 
     try {
-      const useStream = true;
-      const res = await fetch(`/api/chats/${activeChatId}/messages?stream=${useStream ? "1" : "0"}`, {
+      const res = await fetch(`/api/chats/${activeChatId}/messages?stream=1`, {
         method: "POST",
         cache: "no-store",
         headers: { "Content-Type": "application/json" },
@@ -198,17 +224,15 @@ export function ChatPageClient({ chatId: chatIdProp, projectId }: ChatPageClient
           content,
           modelId: options.modelId,
           reasoningLevel: options.reasoningLevel,
+          attachmentIds,
         }),
       });
 
-      if (useStream && res.headers.get("content-type")?.includes("text/event-stream") && res.body) {
+      if (res.headers.get("content-type")?.includes("text/event-stream") && res.body) {
         const reader = res.body.getReader();
         const decoder = new TextDecoder();
         let buffer = "";
-        let turnResult: {
-          userMessage: ChatMessage;
-          assistantMessage: ChatMessage;
-        } | null = null;
+        let turnResult: { userMessage: ChatMessage; assistantMessage: ChatMessage } | null = null;
 
         while (true) {
           const { done, value } = await reader.read();
@@ -224,11 +248,7 @@ export function ChatPageClient({ chatId: chatIdProp, projectId }: ChatPageClient
             try {
               const event = JSON.parse(payload) as StreamEvent;
               if (event.type === "turn.completed" && event.content) {
-                const parsed = JSON.parse(event.content) as {
-                  userMessage: ChatMessage;
-                  assistantMessage: ChatMessage;
-                };
-                turnResult = parsed;
+                turnResult = JSON.parse(event.content) as { userMessage: ChatMessage; assistantMessage: ChatMessage };
               } else {
                 appendActivity(event);
               }
@@ -241,8 +261,8 @@ export function ChatPageClient({ chatId: chatIdProp, projectId }: ChatPageClient
         if (turnResult) {
           setMessagesByChat((prev) => ({
             ...prev,
-            [activeChatId]: replaceOptimisticUserMessage(
-              prev[activeChatId] ?? [],
+            [activeChatId!]: replaceOptimisticUserMessage(
+              prev[activeChatId!] ?? [],
               optimistic.id,
               [turnResult!.userMessage, turnResult!.assistantMessage],
             ),
@@ -257,17 +277,14 @@ export function ChatPageClient({ chatId: chatIdProp, projectId }: ChatPageClient
           const assistantMessage = data.data.assistantMessage as ChatMessage;
           setMessagesByChat((prev) => ({
             ...prev,
-            [activeChatId]: replaceOptimisticUserMessage(
-              prev[activeChatId] ?? [],
+            [activeChatId!]: replaceOptimisticUserMessage(
+              prev[activeChatId!] ?? [],
               optimistic.id,
               [userMessage, assistantMessage],
             ),
           }));
         } else {
-          setSendError({
-            code: data.error?.code,
-            message: data.error?.message ?? t("common.error"),
-          });
+          setSendError({ code: data.error?.code, message: data.error?.message ?? t("common.error") });
         }
       }
     } catch {
@@ -275,9 +292,7 @@ export function ChatPageClient({ chatId: chatIdProp, projectId }: ChatPageClient
     } finally {
       setSending(false);
       setLiveActivity([]);
-      if (!chatId && activeChatId) {
-        router.push(`/chat/${activeChatId}`);
-      }
+      if (!chatId && activeChatId) router.push(`/chat/${activeChatId}`);
     }
   };
 
@@ -292,14 +307,8 @@ export function ChatPageClient({ chatId: chatIdProp, projectId }: ChatPageClient
               </h1>
             </div>
             <ChatComposer onSend={handleSend} disabled={sending} variant="hero" autoFocus />
-            {sendError ? (
-              <div className="mx-auto mt-4 max-w-3xl px-4">
-                <ErrorCard error={sendError} />
-              </div>
-            ) : null}
-            <p className="mt-3 text-center text-xs text-muted-foreground">
-              Enter — отправить · Shift+Enter — новая строка
-            </p>
+            {sendError ? <div className="mx-auto mt-4 max-w-3xl px-4"><ErrorCard error={sendError} /></div> : null}
+            <p className="mt-3 text-center text-xs text-muted-foreground">Enter — отправить · Shift+Enter — новая строка</p>
           </div>
         </div>
       </div>
@@ -309,9 +318,7 @@ export function ChatPageClient({ chatId: chatIdProp, projectId }: ChatPageClient
   return (
     <div className="flex flex-1 flex-col">
       <header className="flex items-center justify-between border-b border-border px-4 py-3">
-        <h1 className="truncate text-sm font-medium text-foreground">
-          {displayedChat?.title ?? t("chat.title")}
-        </h1>
+        <h1 className="truncate text-sm font-medium text-foreground">{displayedChat?.title ?? t("chat.title")}</h1>
         <div className="flex items-center gap-1">
           {chatId && displayedChat ? (
             <ChatActionsMenu
@@ -332,34 +339,18 @@ export function ChatPageClient({ chatId: chatIdProp, projectId }: ChatPageClient
 
       <div className="flex-1 overflow-y-auto">
         {loading && messages.length === 0 ? (
-          <div className="space-y-4 p-4">
-            <Skeleton className="h-16 w-full" />
-            <Skeleton className="h-16 w-full" />
-          </div>
+          <div className="space-y-4 p-4"><Skeleton className="h-16 w-full" /><Skeleton className="h-16 w-full" /></div>
         ) : messages.length === 0 && !sendError ? (
           <EmptyState title={t("chat.empty")} description={t("chat.emptyDescription")} />
         ) : (
           <div className="mx-auto max-w-3xl divide-y divide-border-subtle">
-            {messages.map((msg) => (
-              <ChatMessageView key={msg.id} message={msg} />
-            ))}
+            {messages.map((msg) => <ChatMessageView key={msg.id} message={msg} />)}
             {sending && liveActivity.length > 0 ? (
-              <div className="px-4 py-2">
-                <AgentActivityPanel events={liveActivity} isActive />
-              </div>
+              <div className="px-4 py-2"><AgentActivityPanel events={liveActivity} isActive /></div>
             ) : sending ? (
-              <div className="px-4 py-2">
-                <AgentActivityPanel
-                  events={[{ type: "agent.run.started", label: "● Думаю…" }]}
-                  isActive
-                />
-              </div>
+              <div className="px-4 py-2"><AgentActivityPanel events={[{ type: "agent.run.started", label: "● Думаю…" }]} isActive /></div>
             ) : null}
-            {sendError ? (
-              <div className="px-4 py-4">
-                <ErrorCard error={sendError} />
-              </div>
-            ) : null}
+            {sendError ? <div className="px-4 py-4"><ErrorCard error={sendError} /></div> : null}
             <div ref={messagesEndRef} />
           </div>
         )}
@@ -372,9 +363,7 @@ export function ChatPageClient({ chatId: chatIdProp, projectId }: ChatPageClient
         chatId={chatId}
         defaultModelId={displayedChat?.model_id ?? undefined}
         defaultReasoningLevel={
-          typeof displayedChat?.metadata?.reasoning_level === "string"
-            ? displayedChat.metadata.reasoning_level
-            : undefined
+          typeof displayedChat?.metadata?.reasoning_level === "string" ? displayedChat.metadata.reasoning_level : undefined
         }
       />
     </div>
