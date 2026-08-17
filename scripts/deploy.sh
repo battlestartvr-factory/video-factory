@@ -12,8 +12,8 @@ DATA_ROOT="${AI_FACTORY_DATA_ROOT:-/srv/ai-factory}"
 COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.yml}"
 HEALTH_TIMEOUT_SECONDS="${HEALTH_TIMEOUT_SECONDS:-180}"
 HEALTH_POLL_SECONDS="${HEALTH_POLL_SECONDS:-3}"
-LAST_GOOD_FILE="${LAST_GOOD_FILE:-/opt/ai-factory/last-good-commit}"
-ROLLBACK_CANDIDATE_FILE="${ROLLBACK_CANDIDATE_FILE:-/opt/ai-factory/rollback-candidate-commit}"
+LAST_GOOD_FILE="${LAST_GOOD_FILE:-$DATA_ROOT/.deploy-last-good-commit}"
+ROLLBACK_CANDIDATE_FILE="${ROLLBACK_CANDIDATE_FILE:-$DATA_ROOT/.deploy-rollback-candidate-commit}"
 
 log() {
   printf '[deploy] %s\n' "$*"
