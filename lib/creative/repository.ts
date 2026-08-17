@@ -17,8 +17,27 @@ async function assertOptionalProjectAccess(userId: string, projectId?: string | 
   if (projectId) await assertProjectAccess(userId, projectId);
 }
 
+async function assertRecordAccess(input: {
+  userId: string;
+  ownerUserId: string;
+  projectId?: string | null;
+}): Promise<void> {
+  if (input.ownerUserId === input.userId) return;
+  if (!input.projectId) throw new Error("FORBIDDEN");
+  await assertProjectAccess(input.userId, input.projectId);
+}
+
 export async function createCreativeRun(input: CreateCreativeRunInput): Promise<CreativeRun> {
   await assertOptionalProjectAccess(input.userId, input.projectId);
+
+  if (input.parentRunId) {
+    const parent = await getCreativeRun({ userId: input.userId, runId: input.parentRunId });
+    if (!parent) throw new Error("PARENT_CREATIVE_RUN_NOT_FOUND");
+    if ((parent.project_id ?? null) !== (input.projectId ?? null)) {
+      throw new Error("PARENT_CREATIVE_RUN_PROJECT_MISMATCH");
+    }
+  }
+
   const service = createSupabaseServiceClient();
   const { data, error } = await service
     .from("creative_runs")
@@ -70,7 +89,11 @@ export async function getCreativeRun(input: {
   if (!data) return null;
 
   const run = data as CreativeRun;
-  if (run.user_id !== input.userId) await assertOptionalProjectAccess(input.userId, run.project_id);
+  await assertRecordAccess({
+    userId: input.userId,
+    ownerUserId: run.user_id,
+    projectId: run.project_id,
+  });
   return run;
 }
 
@@ -149,7 +172,7 @@ export async function addCreativeReference(
     .insert({
       run_id: input.runId,
       user_id: input.userId,
-      project_id: input.projectId ?? run.project_id,
+      project_id: run.project_id,
       reference_type: input.referenceType,
       source_id: input.sourceId ?? null,
       source_url: input.sourceUrl ?? null,
@@ -276,9 +299,12 @@ export async function attachRunToExperiment(input: {
     .maybeSingle();
   if (experimentError) throw new Error(`Failed to load creative experiment: ${experimentError.message}`);
   if (!experiment) throw new Error("CREATIVE_EXPERIMENT_NOT_FOUND");
-  if (experiment.user_id !== input.userId) {
-    await assertOptionalProjectAccess(input.userId, experiment.project_id as string | null);
-  }
+
+  await assertRecordAccess({
+    userId: input.userId,
+    ownerUserId: experiment.user_id as string,
+    projectId: experiment.project_id as string | null,
+  });
 
   if ((experiment.project_id ?? null) !== (run.project_id ?? null)) {
     throw new Error("CREATIVE_EXPERIMENT_PROJECT_MISMATCH");
