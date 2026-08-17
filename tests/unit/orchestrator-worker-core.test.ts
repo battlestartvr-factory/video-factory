@@ -17,6 +17,7 @@ describe("core_smoke@1", () => {
       workflowVersion: 1,
       currentStage: null,
       state: {},
+      retryCount: 0,
       signal: signal(),
     });
 
@@ -31,6 +32,7 @@ describe("core_smoke@1", () => {
       workflowVersion: 1,
       currentStage: first.currentStage ?? null,
       state: first.state ?? {},
+      retryCount: 0,
       signal: signal(),
     });
 
@@ -38,6 +40,31 @@ describe("core_smoke@1", () => {
     expect(second.progress).toBe(100);
     expect(second.state?.smoke_step).toBe(2);
     expect(second.result?.ok).toBe(true);
+  });
+
+  it("injects one retryable failure when requested", async () => {
+    await expect(
+      coreSmokeV1({
+        jobId: "job-retry",
+        workflowKind: "core_smoke",
+        workflowVersion: 1,
+        currentStage: null,
+        state: { simulate_retry_once: true },
+        retryCount: 0,
+        signal: signal(),
+      }),
+    ).rejects.toMatchObject({ code: "CORE_SMOKE_TRANSIENT", retryable: true });
+
+    const retried = await coreSmokeV1({
+      jobId: "job-retry",
+      workflowKind: "core_smoke",
+      workflowVersion: 1,
+      currentStage: null,
+      state: { simulate_retry_once: true },
+      retryCount: 1,
+      signal: signal(),
+    });
+    expect(retried.status).toBe("queued");
   });
 
   it("registers workflows by exact kind + version", () => {
@@ -101,6 +128,7 @@ describe("OrchestratorRepository", () => {
             workflow_version: 1,
             current_stage: null,
             state: { smoke_step: 1 },
+            retry_count: 2,
             lease_token: "lease-1",
             lease_expires_at: "2026-08-17T15:02:00Z",
             recovered: true,
@@ -118,6 +146,7 @@ describe("OrchestratorRepository", () => {
       workflowVersion: 1,
       currentStage: null,
       state: { smoke_step: 1 },
+      retryCount: 2,
       leaseToken: "lease-1",
       leaseExpiresAt: "2026-08-17T15:02:00Z",
       recovered: true,
