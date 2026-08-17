@@ -9,9 +9,7 @@ const settingsNav = [
   { href: "/settings", label: t("settings.general") },
   { href: "/settings/appearance", label: t("settings.appearance") },
   { href: "/settings/agent", label: t("settings.agent") },
-  { href: "/settings/personalization", label: t("settings.personalization") },
   { href: "/settings/memory", label: t("settings.memory") },
-  { href: "/settings/presets", label: t("settings.presets") },
 ];
 
 export function SettingsNav() {
