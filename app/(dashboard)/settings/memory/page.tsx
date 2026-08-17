@@ -1,9 +1,9 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import { Pin, PinOff, Trash2, Plus } from "lucide-react";
+import { useEffect, useState } from "react";
+import { Pin, PinOff, Trash2 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input, Textarea } from "@/components/ui/input";
+import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { EmptyState, Skeleton } from "@/components/ui/states";
 import { SettingsLayout } from "@/components/settings/settings-nav";
@@ -13,7 +13,6 @@ import type { MemoryItem } from "@/lib/types/workspace";
 export default function MemorySettingsPage() {
   const [items, setItems] = useState<MemoryItem[]>([]);
   const [search, setSearch] = useState("");
-  const [newContent, setNewContent] = useState("");
   const [loading, setLoading] = useState(true);
 
   const load = (q?: string) => {
@@ -28,20 +27,6 @@ export default function MemorySettingsPage() {
   };
 
   useEffect(() => { load(); }, []);
-
-  const handleAdd = async () => {
-    if (!newContent.trim()) return;
-    const res = await fetch("/api/memory", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ scope: "global", content: newContent }),
-    });
-    const data = await res.json();
-    if (data.ok) {
-      setItems((prev) => [data.data, ...prev]);
-      setNewContent("");
-    }
-  };
 
   const togglePin = async (item: MemoryItem) => {
     await fetch(`/api/memory?id=${item.id}`, {
@@ -68,22 +53,21 @@ export default function MemorySettingsPage() {
 
   return (
     <SettingsLayout>
-      <div className="mx-auto max-w-2xl space-y-6">
-        <h1 className="text-2xl font-bold">{t("settings.memory")}</h1>
+      <div className="mx-auto max-w-3xl space-y-6">
+        <div>
+          <h1 className="text-2xl font-bold">Память / Learnings</h1>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Здесь хранятся не произвольные заметки, а переиспользуемые выводы с источниками и confidence. Новые learnings появляются через явный импорт/обучение в чате и будущие Learning/Market Intelligence pipelines.
+          </p>
+        </div>
 
         <Card>
-          <CardHeader><CardTitle>{t("common.add")}</CardTitle></CardHeader>
-          <CardContent className="space-y-3">
-            <Textarea
-              value={newContent}
-              onChange={(e) => setNewContent(e.target.value)}
-              placeholder="Добавить факт в глобальную память…"
-              rows={2}
-            />
-            <Button onClick={handleAdd} disabled={!newContent.trim()}>
-              <Plus className="h-4 w-4" />
-              {t("common.add")}
-            </Button>
+          <CardHeader>
+            <CardTitle className="text-base">Как пополнять память</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2 text-sm text-muted-foreground">
+            <p>Прикрепите в чат документ, срез рынка или исследование и попросите: «проанализируй и запомни важные инсайты».</p>
+            <p>Агент должен извлечь источник, разбить выводы на атомарные learnings и сохранить provenance/evidence. Сырой документ остаётся в Knowledge/Google Drive, а не дублируется целиком в Supabase memory.</p>
           </CardContent>
         </Card>
 
@@ -96,26 +80,33 @@ export default function MemorySettingsPage() {
         {loading ? (
           <Skeleton className="h-20 w-full" />
         ) : items.length === 0 ? (
-          <EmptyState title="Память пуста" description="Добавьте факты, предпочтения и правила для агента." />
+          <EmptyState
+            title="Learnings пока нет"
+            description="Добавляйте evidence-backed знания через чат или будущие автоматические learning/intelligence pipelines."
+          />
         ) : (
           <div className="space-y-2">
             {items.map((item) => (
               <Card key={item.id} className={!item.enabled ? "opacity-50" : ""}>
-                <CardContent className="flex items-start justify-between gap-3 py-3">
-                  <div className="flex-1 min-w-0">
+                <CardContent className="flex items-start justify-between gap-3 py-4">
+                  <div className="min-w-0 flex-1">
                     <p className="text-sm">{item.content}</p>
-                    {item.category && (
-                      <p className="mt-1 text-xs text-muted-foreground">{item.category}</p>
-                    )}
+                    <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
+                      {item.category ? <span>Категория: {item.category}</span> : null}
+                      {item.source ? <span>Источник: {item.source}</span> : null}
+                      {item.learned_from ? <span>Learned from: {item.learned_from}</span> : null}
+                      {item.confidence != null ? <span>Confidence: {Math.round(item.confidence * 100)}%</span> : null}
+                      <span>Evidence: {Array.isArray(item.evidence) ? item.evidence.length : 0}</span>
+                    </div>
                   </div>
                   <div className="flex shrink-0 gap-1">
-                    <Button variant="ghost" size="icon" onClick={() => togglePin(item)}>
+                    <Button variant="ghost" size="icon" onClick={() => togglePin(item)} title={item.pinned ? "Открепить" : "Закрепить"}>
                       {item.pinned ? <PinOff className="h-4 w-4" /> : <Pin className="h-4 w-4" />}
                     </Button>
                     <Button variant="ghost" size="icon" onClick={() => toggleEnabled(item)}>
                       <span className="text-xs">{item.enabled ? "Вкл" : "Выкл"}</span>
                     </Button>
-                    <Button variant="ghost" size="icon" onClick={() => handleDelete(item.id)}>
+                    <Button variant="ghost" size="icon" onClick={() => handleDelete(item.id)} title="Удалить learning">
                       <Trash2 className="h-4 w-4" />
                     </Button>
                   </div>
