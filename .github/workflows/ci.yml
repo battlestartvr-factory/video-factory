@@ -32,6 +32,8 @@ jobs:
 
       - run: pnpm typecheck
 
+      - run: pnpm exec tsc -p tsconfig.worker.json
+
       - run: pnpm test
 
       - run: pnpm build
