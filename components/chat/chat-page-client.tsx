@@ -14,7 +14,7 @@ import {
   mergeMessagesById,
   replaceOptimisticUserMessage,
 } from "@/lib/chat/messages-state";
-import type { Chat, ChatMessage, ErrorCardData, Preset, AgentUiEvent } from "@/lib/types/workspace";
+import type { Chat, ChatMessage, ErrorCardData, AgentUiEvent } from "@/lib/types/workspace";
 import { AgentActivityPanel } from "@/components/chat/agent-activity-panel";
 import { ChatActionsMenu } from "@/components/chat/chat-actions-menu";
 import { useRecentChatsOptional } from "@/components/providers/recent-chats-provider";
@@ -52,7 +52,6 @@ export function ChatPageClient({ chatId: chatIdProp, projectId }: ChatPageClient
     () => (chatId ? (messagesByChat[chatId] ?? EMPTY_MESSAGES) : EMPTY_MESSAGES),
     [chatId, messagesByChat],
   );
-  const [presets, setPresets] = useState<Preset[]>([]);
   const [sending, setSending] = useState(false);
   const [liveActivity, setLiveActivity] = useState<AgentUiEvent[]>([]);
   const [sendError, setSendError] = useState<ErrorCardData | null>(null);
@@ -65,12 +64,6 @@ export function ChatPageClient({ chatId: chatIdProp, projectId }: ChatPageClient
 
   const scrollToBottom = useCallback(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, []);
-
-  useEffect(() => {
-    fetch("/api/presets?type=chat")
-      .then((r) => r.json())
-      .then((d) => { if (d.ok) setPresets(d.data.presets); });
   }, []);
 
   useEffect(() => {
@@ -134,7 +127,10 @@ export function ChatPageClient({ chatId: chatIdProp, projectId }: ChatPageClient
     }
   };
 
-  const handleSend = async (content: string, options: { modelId?: string; reasoningLevel?: string; presetId?: string; files: File[] }) => {
+  const handleSend = async (
+    content: string,
+    options: { modelId?: string; reasoningLevel?: string; files: File[] },
+  ) => {
     if (sending) return;
     setSendError(null);
     setLiveActivity([]);
@@ -144,7 +140,7 @@ export function ChatPageClient({ chatId: chatIdProp, projectId }: ChatPageClient
       const res = await fetch("/api/chats", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ projectId: projectId ?? null, modelId: options.modelId, presetId: options.presetId }),
+        body: JSON.stringify({ projectId: projectId ?? null, modelId: options.modelId }),
       });
       const data = await res.json();
       if (!data.ok) {
@@ -202,7 +198,6 @@ export function ChatPageClient({ chatId: chatIdProp, projectId }: ChatPageClient
           content,
           modelId: options.modelId,
           reasoningLevel: options.reasoningLevel,
-          presetId: options.presetId,
         }),
       });
 
@@ -296,13 +291,7 @@ export function ChatPageClient({ chatId: chatIdProp, projectId }: ChatPageClient
                 Над чем поработаем?
               </h1>
             </div>
-            <ChatComposer
-              onSend={handleSend}
-              disabled={sending}
-              presets={presets}
-              variant="hero"
-              autoFocus
-            />
+            <ChatComposer onSend={handleSend} disabled={sending} variant="hero" autoFocus />
             {sendError ? (
               <div className="mx-auto mt-4 max-w-3xl px-4">
                 <ErrorCard error={sendError} />
@@ -380,7 +369,6 @@ export function ChatPageClient({ chatId: chatIdProp, projectId }: ChatPageClient
         key={`${chatId}-${displayedChat?.model_id ?? ""}-${String(displayedChat?.metadata?.reasoning_level ?? "")}`}
         onSend={handleSend}
         disabled={sending}
-        presets={presets}
         chatId={chatId}
         defaultModelId={displayedChat?.model_id ?? undefined}
         defaultReasoningLevel={
@@ -388,7 +376,6 @@ export function ChatPageClient({ chatId: chatIdProp, projectId }: ChatPageClient
             ? displayedChat.metadata.reasoning_level
             : undefined
         }
-        defaultPresetId={displayedChat?.preset_id ?? undefined}
       />
     </div>
   );
