@@ -26,7 +26,13 @@ export const TOOL_GROUPS: Record<Exclude<TurnIntent, "general">, readonly string
   ],
   image: ["generate_image", "inspect_attachment"],
   video: ["generate_video", "inspect_attachment"],
-  memory: ["search_memory", "save_memory", "update_memory"],
+  memory: [
+    "search_memory",
+    "save_memory",
+    "update_memory",
+    "inspect_attachment",
+    "extract_document",
+  ],
   projects: [
     "get_project_context",
     "list_project_files",
@@ -78,7 +84,9 @@ const VIDEO_PATTERNS: RegExp[] = [
 
 const MEMORY_PATTERNS: RegExp[] = [
   /(?:search_memory|save_memory|update_memory)/i,
-  /(?:запомни|remember|сохрани\s+в\s+памят)/i,
+  /(?:запомни|remember|сохрани\s+в\s+памят|добав.*в\s+памят)/i,
+  /(?:научись|learn).*(?:из|from).*(?:документ|файл|research|report)/i,
+  /(?:инсайт|вывод|срез\s+рынка|market\s+(?:snapshot|report)).*(?:памят|запом|learn)/i,
   /(?:найди|ищи|search).*(?:памят|memory)/i,
   /(?:моя\s+)?память/i,
   /что\s+(?:ты\s+)?(?:знаешь|помнишь)\s+обо\s+мне/i,
@@ -103,8 +111,9 @@ export interface ResolveToolsForTurnInput {
   userMessage: string;
   attachmentIds?: string[];
   projectId?: string | null;
+  /** @deprecated Presets are retired and this value is ignored. */
   presetId?: string | null;
-  /** Optional preset slug/type hint from UI (e.g. "image", "knowledge"). */
+  /** @deprecated Presets are retired and this value is ignored. */
   presetType?: string | null;
 }
 
@@ -122,19 +131,11 @@ export function detectTurnIntent(input: ResolveToolsForTurnInput): TurnIntent {
   const text = input.userMessage.trim();
   if (!text) return "general";
 
-  const preset = (input.presetType ?? "").toLowerCase();
-  if (preset.includes("knowledge")) return "knowledge";
-  if (preset.includes("image")) return "image";
-  if (preset.includes("video")) return "video";
-  if (preset.includes("memory")) return "memory";
-  if (preset.includes("project")) return "projects";
-  if (preset.includes("web")) return "web";
-
+  if (matchesAny(text, MEMORY_PATTERNS)) return "memory";
   if (matchesAny(text, WEB_PATTERNS)) return "web";
   if (matchesAny(text, KNOWLEDGE_PATTERNS)) return "knowledge";
   if (matchesAny(text, IMAGE_PATTERNS)) return "image";
   if (matchesAny(text, VIDEO_PATTERNS)) return "video";
-  if (matchesAny(text, MEMORY_PATTERNS)) return "memory";
 
   if (matchesAny(text, PROJECT_PATTERNS) || (input.projectId && /файл|file|контекст|context/i.test(text))) {
     return "projects";
@@ -144,8 +145,7 @@ export function detectTurnIntent(input: ResolveToolsForTurnInput): TurnIntent {
   if (hasAttachments) {
     if (matchesAny(text, IMAGE_PATTERNS)) return "image";
     if (matchesAny(text, VIDEO_PATTERNS)) return "video";
-    if (/pdf|документ|document|extract|извлеч/i.test(text)) return "knowledge";
-    if (matchesAny(text, KNOWLEDGE_PATTERNS)) return "knowledge";
+    if (/pdf|документ|document|extract|извлеч|research|report|срез\s+рынка/i.test(text)) return "knowledge";
   }
 
   if (matchesAny(text, GENERAL_PATTERNS)) return "general";
@@ -175,10 +175,7 @@ function definitionsByNames(names: string[]): AgentToolDefinition[] {
     .filter((tool): tool is AgentToolDefinition => tool != null);
 }
 
-/**
- * Provider-neutral tool selection for a single user turn.
- * Called before the provider adapter — never passes the full registry.
- */
+/** Provider-neutral tool selection for a single user turn. */
 export function resolveToolsForTurn(input: ResolveToolsForTurnInput): ResolveToolsForTurnResult {
   const intent = detectTurnIntent(input);
   const toolNames = toolNamesForIntent(intent, input);
