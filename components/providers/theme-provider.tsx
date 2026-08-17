@@ -1,6 +1,15 @@
 "use client";
 
-import { createContext, useContext, useEffect, useState, useCallback, useSyncExternalStore, useMemo } from "react";
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useState,
+  useCallback,
+  useSyncExternalStore,
+  useMemo,
+  useRef,
+} from "react";
 import type { AppearanceSettings } from "@/lib/types/workspace";
 import {
   DEFAULT_APPEARANCE,
@@ -25,6 +34,10 @@ interface ThemeContextValue {
 
 const ThemeContext = createContext<ThemeContextValue | null>(null);
 
+function resolveAppearance(settings?: Partial<AppearanceSettings> | null): AppearanceSettings {
+  return { ...DEFAULT_APPEARANCE, ...(settings ?? {}) };
+}
+
 function applyAppearance(settings: AppearanceSettings) {
   const root = document.documentElement;
 
@@ -39,47 +52,57 @@ function applyAppearance(settings: AppearanceSettings) {
   root.setAttribute("data-accent", settings.accentColor ?? "amber");
   root.setAttribute("data-density", settings.density ?? "comfortable");
 
+  const body = document.body;
   if (settings.font === "mono") {
-    root.style.setProperty("--font-geist-sans", "var(--font-geist-mono)");
+    body.style.setProperty("--font-app-sans", "var(--font-geist-mono)");
+  } else if (settings.font === "system") {
+    body.style.setProperty(
+      "--font-app-sans",
+      "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+    );
   } else {
-    root.style.removeProperty("--font-geist-sans");
+    body.style.setProperty("--font-app-sans", "var(--font-geist-sans)");
   }
 }
 
-function subscribeStorage(callback: () => void) {
-  const unsubAppearance = subscribeAppearanceStorage(callback);
-  const unsubSidebar = subscribeSidebarStorage(callback);
-  return () => {
-    unsubAppearance();
-    unsubSidebar();
-  };
-}
+export function ThemeProvider({
+  children,
+  initialAppearance,
+}: {
+  children: React.ReactNode;
+  initialAppearance?: AppearanceSettings | null;
+}) {
+  const serverAppearance = useMemo(
+    () => resolveAppearance(initialAppearance),
+    [initialAppearance],
+  );
+  const seededServerAppearance = useRef(false);
 
-export function ThemeProvider({ children }: { children: React.ReactNode }) {
-  const storedAppearance = useSyncExternalStore(
-    subscribeStorage,
+  const appearance = useSyncExternalStore(
+    subscribeAppearanceStorage,
     getAppearanceSnapshot,
-    () => DEFAULT_APPEARANCE,
+    () => serverAppearance,
   );
   const storedCollapsed = useSyncExternalStore(
-    subscribeStorage,
+    subscribeSidebarStorage,
     getSidebarCollapsedSnapshot,
     () => false,
   );
 
-  const [appearanceOverrides, setAppearanceOverrides] = useState<Partial<AppearanceSettings>>({});
   const [sidebarCollapsedOverride, setSidebarCollapsedOverride] = useState<boolean | null>(null);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
-
-  const appearance = useMemo(() => {
-    if (Object.keys(appearanceOverrides).length === 0) return storedAppearance;
-    return { ...storedAppearance, ...appearanceOverrides };
-  }, [storedAppearance, appearanceOverrides]);
   const sidebarCollapsed = sidebarCollapsedOverride ?? storedCollapsed;
+
+  // Supabase is the durable source of truth. Seed the client cache once when the
+  // dashboard mounts so a stale localStorage value cannot silently win later.
+  useEffect(() => {
+    if (seededServerAppearance.current || !initialAppearance) return;
+    seededServerAppearance.current = true;
+    writeAppearanceSnapshot(serverAppearance);
+  }, [initialAppearance, serverAppearance]);
 
   useEffect(() => {
     applyAppearance(appearance);
-    writeAppearanceSnapshot(appearance);
   }, [appearance]);
 
   useEffect(() => {
@@ -95,13 +118,9 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   }, [appearance]);
 
   const setAppearance = useCallback((partial: Partial<AppearanceSettings>) => {
-    setAppearanceOverrides((prev) => {
-      const next = { ...prev, ...partial };
-      const merged = { ...storedAppearance, ...next };
-      writeAppearanceSnapshot(merged);
-      return next;
-    });
-  }, [storedAppearance]);
+    const current = getAppearanceSnapshot();
+    writeAppearanceSnapshot(resolveAppearance({ ...current, ...partial }));
+  }, []);
 
   const setSidebarCollapsed = useCallback((v: boolean) => {
     setSidebarCollapsedOverride(v);
