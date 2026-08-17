@@ -5,7 +5,7 @@ import { getOrCreateAgentConfig } from "./agent-config-service";
 import { listMemoryForContext } from "@/lib/memory";
 import { searchKnowledge } from "@/lib/knowledge";
 import { truncateText } from "./redaction";
-import type { Chat, ChatAttachment, ChatMessage, Preset, UserPreferences } from "@/lib/types/workspace";
+import type { Chat, ChatAttachment, ChatMessage } from "@/lib/types/workspace";
 import type { Project } from "@/lib/types/database";
 
 export async function loadContextSources(input: {
@@ -19,13 +19,7 @@ export async function loadContextSources(input: {
   const service = createSupabaseServiceClient();
   const projectId = input.chat.project_id;
 
-  const [preferencesRes, presetRes, projectRes, memory, messagesRes, agentConfig] = await Promise.all([
-    service.from("user_preferences").select("*").eq("user_id", input.userId).maybeSingle(),
-    input.presetId
-      ? service.from("presets").select("*").eq("id", input.presetId).maybeSingle()
-      : input.chat.preset_id
-        ? service.from("presets").select("*").eq("id", input.chat.preset_id).maybeSingle()
-        : Promise.resolve({ data: null }),
+  const [projectRes, memory, messagesRes, agentConfig] = await Promise.all([
     projectId
       ? service.from("projects").select("*").eq("id", projectId).maybeSingle()
       : Promise.resolve({ data: null }),
@@ -38,8 +32,6 @@ export async function loadContextSources(input: {
       .limit(CONTEXT_BUDGET.recentMessages),
     getOrCreateAgentConfig(input.userId),
   ]);
-
-  const preset = presetRes.data as Preset | null;
 
   let attachments: ChatAttachment[] = [];
   const ids = input.attachmentIds?.length
@@ -76,9 +68,9 @@ export async function loadContextSources(input: {
   return {
     chat: input.chat,
     project: (projectRes.data as Project | null) ?? null,
-    preset: preset && (preset.is_system || preset.user_id === input.userId) ? preset : null,
+    preset: null,
     agentConfig,
-    preferences: (preferencesRes.data as UserPreferences | null) ?? null,
+    preferences: null,
     memory,
     knowledgeNotes,
     recentMessages: ((messagesRes.data ?? []) as ChatMessage[]).reverse(),
