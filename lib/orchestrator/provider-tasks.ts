@@ -83,6 +83,34 @@ export class ProviderTaskRepository {
     if (error) throw new Error(`Failed to record provider submit: ${error.message}`);
   }
 
+  async recordSubmitFailure(input: {
+    providerTaskId: string;
+    error: Record<string, unknown>;
+  }): Promise<void> {
+    const { error } = await this.rpcClient.rpc("orchestrator_record_provider_submit_failure", {
+      p_provider_task_id: input.providerTaskId,
+      p_error: input.error,
+    });
+    if (error) throw new Error(`Failed to record provider submit failure: ${error.message}`);
+  }
+
+  async failImageSubmit(input: {
+    jobId: string;
+    providerTaskId: string;
+    errorCode: string;
+    errorMessage: string;
+    error: Record<string, unknown>;
+  }): Promise<void> {
+    const { error } = await this.rpcClient.rpc("orchestrator_fail_image_provider_submit", {
+      p_job_id: input.jobId,
+      p_provider_task_id: input.providerTaskId,
+      p_error_code: input.errorCode,
+      p_error_message: input.errorMessage,
+      p_error: input.error,
+    });
+    if (error) throw new Error(`Failed to atomically fail image provider submit: ${error.message}`);
+  }
+
   async recordStatus(input: {
     providerTaskId: string;
     externalTaskId: string;

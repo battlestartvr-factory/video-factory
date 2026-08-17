@@ -1,3 +1,7 @@
+import type { GenerationImageRepository } from "../../lib/orchestrator/generation-images";
+import type { ProviderTaskRepository } from "../../lib/orchestrator/provider-tasks";
+import type { KieMarketTaskAdapter } from "../../lib/models/kie/market-task";
+
 export type DurableTickStatus =
   | "queued"
   | "waiting"
@@ -7,6 +11,13 @@ export type DurableTickStatus =
   | "failed"
   | "cancelled";
 
+export interface WorkflowServices {
+  providerTasks: ProviderTaskRepository;
+  generationImages: GenerationImageRepository;
+  kieMarketTask: KieMarketTaskAdapter | null;
+  appUrl: string;
+}
+
 export interface WorkflowTickContext {
   jobId: string;
   workflowKind: string;
@@ -15,6 +26,9 @@ export interface WorkflowTickContext {
   state: Record<string, unknown>;
   retryCount: number;
   signal: AbortSignal;
+  workerId?: string;
+  leaseToken?: string;
+  services?: WorkflowServices;
 }
 
 export interface WorkflowTickOutcome {

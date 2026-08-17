@@ -10,7 +10,10 @@ import {
   validateVideoGenerationRequest,
 } from "./validate";
 
+const DURABLE_IMAGE_MODELS = new Set(["gpt-image-2", "nano-banana-2"]);
+
 export interface CanonicalGenerationInput {
+  requestId?: string;
   userId: string;
   projectId?: string | null;
   chatId?: string | null;
@@ -154,6 +157,72 @@ async function createQueuedGeneration(input: {
   return { generation, action };
 }
 
+function rpcObject(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+async function createDurableImageGeneration(input: {
+  requestId: string;
+  userId: string;
+  mode: string;
+  prompt: string;
+  modelId: string;
+  presetId?: string | null;
+  settings: Record<string, unknown>;
+  referenceAssets: Array<{ id?: string; url?: string; mimeType?: string; filename?: string; role?: string }>;
+  projectId?: string | null;
+  chatId?: string | null;
+  sourceMessageId?: string | null;
+  agentRunId?: string | null;
+}): Promise<CanonicalGenerationResult> {
+  if (input.projectId) await assertProjectAccess(input.userId, input.projectId);
+  if (input.chatId) await assertChatOwner(input.userId, input.chatId);
+
+  const service = createSupabaseServiceClient();
+  const actionInput = redactForStorage({
+    prompt: input.prompt,
+    model: input.modelId,
+    mode: input.mode,
+    settings: input.settings,
+    assetIds: input.referenceAssets.map((asset) => asset.id).filter(Boolean),
+  });
+
+  const { data, error } = await service.rpc("orchestrator_create_image_generation", {
+    payload: {
+      request_id: input.requestId,
+      user_id: input.userId,
+      project_id: input.projectId ?? null,
+      chat_id: input.chatId ?? null,
+      message_id: input.sourceMessageId ?? null,
+      agent_run_id: input.agentRunId ?? null,
+      prompt: input.prompt,
+      model_id: input.modelId,
+      preset_id: input.presetId ?? null,
+      mode: input.mode,
+      settings: input.settings,
+      reference_assets: input.referenceAssets,
+      action_input: actionInput,
+    },
+  });
+
+  if (error) {
+    throw new Error(`Failed to create durable image generation: ${error.message}`);
+  }
+  const row = rpcObject(data);
+  const generation = rpcObject(row.generation);
+  const action = rpcObject(row.action);
+  if (typeof generation.id !== "string" || typeof action.id !== "string") {
+    throw new Error("Invalid orchestrator_create_image_generation response");
+  }
+
+  return {
+    generation: generation as unknown as Generation,
+    action: action as unknown as AgentAction,
+  };
+}
+
 export async function createImageGeneration(
   input: CanonicalGenerationInput,
 ): Promise<CanonicalGenerationResult> {
@@ -181,6 +250,31 @@ export async function createImageGeneration(
   const assets = input.inputAssetIds?.length
     ? await resolveOwnedAssets(input.userId, input.inputAssetIds)
     : (input.referenceAssets ?? []);
+  const settings = {
+    ...settingsIn,
+    ...validated.settings,
+    model_id: validated.model.id,
+    requested_quality: validated.settings.quality,
+    effective_quality: validated.settings.effectiveQuality,
+    selection_source: validated.settings.selectionSource ?? "default",
+  };
+
+  if (DURABLE_IMAGE_MODELS.has(validated.model.id)) {
+    return createDurableImageGeneration({
+      requestId: input.requestId ?? crypto.randomUUID(),
+      userId: input.userId,
+      mode: validated.mode,
+      prompt: input.prompt,
+      modelId: validated.model.id,
+      presetId: input.presetId,
+      settings,
+      referenceAssets: assets,
+      projectId: input.projectId,
+      chatId: input.chatId,
+      sourceMessageId: input.sourceMessageId,
+      agentRunId: input.agentRunId,
+    });
+  }
 
   return createQueuedGeneration({
     userId: input.userId,
@@ -189,14 +283,7 @@ export async function createImageGeneration(
     prompt: input.prompt,
     modelId: validated.model.id,
     presetId: input.presetId,
-    settings: {
-      ...settingsIn,
-      ...validated.settings,
-      model_id: validated.model.id,
-      requested_quality: validated.settings.quality,
-      effective_quality: validated.settings.effectiveQuality,
-      selection_source: validated.settings.selectionSource ?? "default",
-    },
+    settings,
     referenceAssets: assets,
     projectId: input.projectId,
     chatId: input.chatId,

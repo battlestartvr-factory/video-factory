@@ -15,7 +15,8 @@
   },
   "include": [
     "worker/**/*.ts",
-    "lib/orchestrator/**/*.ts"
+    "lib/orchestrator/**/*.ts",
+    "lib/models/kie/market-task.ts"
   ],
   "exclude": ["node_modules", ".next"]
 }

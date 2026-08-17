@@ -1,7 +1,11 @@
 import { coreSmokeV1 } from "./core-smoke-v1";
+import { generationImageV1 } from "./generation-image-v1";
 import type { WorkflowTickHandler } from "./types";
 
-const registry = new Map<string, WorkflowTickHandler>([["core_smoke@1", coreSmokeV1]]);
+const registry = new Map<string, WorkflowTickHandler>([
+  ["core_smoke@1", coreSmokeV1],
+  ["generation_image@1", generationImageV1],
+]);
 
 export function workflowRegistryKey(kind: string, version: number): string {
   return `${kind}@${version}`;

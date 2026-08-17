@@ -6,6 +6,9 @@ export interface WorkerConfig {
   serviceRoleKey: string;
   workerId: string;
   buildSha: string | null;
+  appUrl: string;
+  kieApiKey: string | null;
+  kieApiBaseUrl: string;
   queuePollMs: number;
   leaseSeconds: number;
   visibilitySeconds: number;
@@ -20,6 +23,11 @@ function requiredEnv(name: string, fallbackName?: string): string {
   const value = raw?.trim().replace(/^['"]|['"]$/g, "");
   if (!value) throw new Error(`${name} is required for the durable worker`);
   return value;
+}
+
+function optionalEnv(name: string): string | null {
+  const value = process.env[name]?.trim().replace(/^['"]|['"]$/g, "");
+  return value || null;
 }
 
 function integerEnv(name: string, fallback: number, min: number, max: number): number {
@@ -50,6 +58,9 @@ export function loadWorkerConfig(): WorkerConfig {
     serviceRoleKey: requiredEnv("SUPABASE_SERVICE_ROLE_KEY", "SUPABASE_SECRET_KEY"),
     workerId,
     buildSha: process.env.BUILD_SHA?.trim() || process.env.GIT_COMMIT?.trim() || null,
+    appUrl: optionalEnv("APP_URL") ?? "http://localhost:3000",
+    kieApiKey: optionalEnv("KIE_API_KEY"),
+    kieApiBaseUrl: optionalEnv("KIE_API_BASE_URL") ?? "https://api.kie.ai",
     queuePollMs: integerEnv("ORCHESTRATOR_QUEUE_POLL_MS", 1000, 100, 60_000),
     leaseSeconds,
     visibilitySeconds,

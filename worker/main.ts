@@ -1,4 +1,6 @@
 import { setTimeout as sleep } from "node:timers/promises";
+import { GenerationImageRepository } from "../lib/orchestrator/generation-images";
+import { ProviderTaskRepository } from "../lib/orchestrator/provider-tasks";
 import { OrchestratorRepository, type ClaimedJob } from "../lib/orchestrator/repository";
 import { PgmqQueueAdapter } from "../lib/orchestrator/queue/pgmq";
 import type { QueueDelivery } from "../lib/orchestrator/queue/types";
@@ -7,11 +9,12 @@ import {
   normalizeWorkflowError,
   shouldRetry,
 } from "../lib/orchestrator/retry";
+import { KieMarketTaskAdapter } from "../lib/models/kie/market-task";
 import { loadWorkerConfig, type WorkerConfig } from "./config";
 import { workerLog } from "./log";
 import { createWorkerRpcClient } from "./rpc-client";
 import { getWorkflowHandler, listRegisteredWorkflows } from "./workflows/registry";
-import type { WorkflowTickOutcome } from "./workflows/types";
+import type { WorkflowServices, WorkflowTickOutcome } from "./workflows/types";
 
 function errorPayload(error: unknown): Record<string, unknown> {
   const normalized = normalizeWorkflowError(error);
@@ -104,11 +107,12 @@ async function processClaimedDelivery(input: {
   claimed: ClaimedJob;
   repository: OrchestratorRepository;
   queue: PgmqQueueAdapter;
+  services: WorkflowServices;
   config: WorkerConfig;
   setActiveAbort: (controller: AbortController | null) => void;
   isStopping: () => boolean;
 }): Promise<void> {
-  const { delivery, claimed, repository, queue, config } = input;
+  const { delivery, claimed, repository, queue, services, config } = input;
   const fields = {
     worker_id: config.workerId,
     job_id: claimed.jobId,
@@ -184,6 +188,9 @@ async function processClaimedDelivery(input: {
           state: claimed.state,
           retryCount: claimed.retryCount,
           signal: controller.signal,
+          workerId: config.workerId,
+          leaseToken: claimed.leaseToken,
+          services,
         });
       } catch (error) {
         if (controller.signal.aborted || input.isStopping()) {
@@ -253,6 +260,14 @@ export async function runWorker(): Promise<void> {
   const rpcClient = createWorkerRpcClient(config.supabaseUrl, config.serviceRoleKey);
   const repository = new OrchestratorRepository(rpcClient);
   const queue = new PgmqQueueAdapter(rpcClient);
+  const services: WorkflowServices = {
+    providerTasks: new ProviderTaskRepository(rpcClient),
+    generationImages: new GenerationImageRepository(rpcClient),
+    kieMarketTask: config.kieApiKey
+      ? new KieMarketTaskAdapter(config.kieApiBaseUrl, config.kieApiKey)
+      : null,
+    appUrl: config.appUrl,
+  };
   let stopping = false;
   let activeAbort: AbortController | null = null;
   let watchdogInFlight = false;
@@ -389,6 +404,7 @@ export async function runWorker(): Promise<void> {
           claimed: claim,
           repository,
           queue,
+          services,
           config,
           setActiveAbort: (controller) => {
             activeAbort = controller;
