@@ -58,12 +58,10 @@ jobs:
           if [[ -n "${DEPLOY_SSH_KEY_B64:-}" ]]; then
             printf '%s' "$DEPLOY_SSH_KEY_B64" | base64 --decode > ~/.ssh/deploy_key
           else
-            # Normalize Windows CRLF if the multiline secret was copied from Windows.
             printf '%s\n' "$DEPLOY_SSH_KEY" | tr -d '\r' > ~/.ssh/deploy_key
           fi
           chmod 600 ~/.ssh/deploy_key
 
-          # Fail early with a clear message if the secret is not a valid private key.
           if ! ssh-keygen -y -f ~/.ssh/deploy_key >/dev/null 2>&1; then
             echo "The deploy SSH secret is not a valid OpenSSH private key." >&2
             echo "Use DEPLOY_SSH_KEY_B64 to preserve the key exactly." >&2
@@ -74,4 +72,4 @@ jobs:
             -o StrictHostKeyChecking=accept-new \
             -o BatchMode=yes \
             "${DEPLOY_USER}@${DEPLOY_HOST}" \
-            "/opt/ai-factory/app/scripts/deploy.sh ${DEPLOY_COMMIT}"
+            "cd /opt/ai-factory/app && git reset --hard HEAD && /opt/ai-factory/app/scripts/deploy.sh ${DEPLOY_COMMIT}"
