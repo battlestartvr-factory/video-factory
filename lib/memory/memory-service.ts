@@ -82,6 +82,10 @@ export async function saveMemory(input: {
   category?: string;
   source?: string;
   importance?: number;
+  sourceRunId?: string | null;
+  confidence?: number | null;
+  evidence?: unknown[];
+  learnedFrom?: string | null;
 }): Promise<MemoryItem> {
   const scope = input.scope ?? (input.projectId ? "project" : "global");
   if (scope === "project") {
@@ -99,6 +103,10 @@ export async function saveMemory(input: {
       category: input.category ?? null,
       source: input.source ?? "agent",
       importance: input.importance ?? 5,
+      source_run_id: input.sourceRunId ?? null,
+      confidence: input.confidence ?? null,
+      evidence: input.evidence ?? [],
+      learned_from: input.learnedFrom ?? null,
     })
     .select()
     .single();
@@ -114,6 +122,8 @@ export async function updateMemory(input: {
   importance?: number;
   pinned?: boolean;
   enabled?: boolean;
+  confidence?: number | null;
+  evidence?: unknown[];
 }): Promise<MemoryItem> {
   const service = createSupabaseServiceClient();
   const { data: existing } = await service
@@ -134,6 +144,8 @@ export async function updateMemory(input: {
   if (input.importance !== undefined) updates.importance = input.importance;
   if (input.pinned !== undefined) updates.pinned = input.pinned;
   if (input.enabled !== undefined) updates.enabled = input.enabled;
+  if (input.confidence !== undefined) updates.confidence = input.confidence;
+  if (input.evidence !== undefined) updates.evidence = input.evidence;
 
   const { data, error } = await service
     .from("memory_items")
