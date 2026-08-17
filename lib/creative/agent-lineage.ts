@@ -182,7 +182,6 @@ export async function recordAgentCreativeRunBestEffort(
         generations: generations.map(sanitizeGenerationCard),
       },
       usage: redactForStorage(agentRun?.usage ?? {}),
-      errorCode: undefined,
       metadata: {
         request_id: input.requestId,
         source: "universal_agent",
