@@ -42,7 +42,10 @@ export function redactForStorage(value: unknown): Record<string, unknown> {
 
 export function truncateText(value: string, maxChars: number): string {
   if (value.length <= maxChars) return value;
-  return `${value.slice(0, maxChars)}…[truncated]`;
+  if (maxChars <= 0) return "";
+  const marker = "…[truncated]";
+  if (maxChars <= marker.length) return marker.slice(0, maxChars);
+  return `${value.slice(0, maxChars - marker.length)}${marker}`;
 }
 
 export function stripSignedUrl(url: string): string {
