@@ -1,7 +1,6 @@
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { CONTEXT_BUDGET } from "./config";
 import { buildAgentContext, type AgentContext, type ContextSources } from "./context-builder";
-import { getOrCreateAgentConfig } from "./agent-config-service";
 import { listMemoryForContext } from "@/lib/memory";
 import { searchKnowledge } from "@/lib/knowledge";
 import { truncateText } from "./redaction";
@@ -13,13 +12,14 @@ export async function loadContextSources(input: {
   chat: Chat;
   currentMessage: ChatMessage;
   modelId: string;
+  /** @deprecated Ignored. */
   presetId?: string | null;
   attachmentIds?: string[];
 }): Promise<ContextSources> {
   const service = createSupabaseServiceClient();
   const projectId = input.chat.project_id;
 
-  const [projectRes, memory, messagesRes, agentConfig] = await Promise.all([
+  const [projectRes, memory, messagesRes] = await Promise.all([
     projectId
       ? service.from("projects").select("*").eq("id", projectId).maybeSingle()
       : Promise.resolve({ data: null }),
@@ -30,7 +30,6 @@ export async function loadContextSources(input: {
       .eq("chat_id", input.chat.id)
       .order("created_at", { ascending: false })
       .limit(CONTEXT_BUDGET.recentMessages),
-    getOrCreateAgentConfig(input.userId),
   ]);
 
   let attachments: ChatAttachment[] = [];
@@ -69,7 +68,7 @@ export async function loadContextSources(input: {
     chat: input.chat,
     project: (projectRes.data as Project | null) ?? null,
     preset: null,
-    agentConfig,
+    agentConfig: null,
     preferences: null,
     memory,
     knowledgeNotes,
@@ -85,6 +84,7 @@ export async function loadAgentContext(input: {
   chat: Chat;
   currentMessage: ChatMessage;
   modelId: string;
+  /** @deprecated Ignored. */
   presetId?: string | null;
   attachmentIds?: string[];
 }): Promise<AgentContext> {
