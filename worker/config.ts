@@ -11,6 +11,8 @@ export interface WorkerConfig {
   visibilitySeconds: number;
   leaseHeartbeatMs: number;
   workerHeartbeatMs: number;
+  watchdogMs: number;
+  maxAttempts: number;
 }
 
 function requiredEnv(name: string, fallbackName?: string): string {
@@ -53,5 +55,7 @@ export function loadWorkerConfig(): WorkerConfig {
     visibilitySeconds,
     leaseHeartbeatMs,
     workerHeartbeatMs: integerEnv("ORCHESTRATOR_WORKER_HEARTBEAT_MS", 15_000, 5_000, 300_000),
+    watchdogMs: integerEnv("ORCHESTRATOR_WATCHDOG_MS", 60_000, 15_000, 3_600_000),
+    maxAttempts: integerEnv("ORCHESTRATOR_MAX_ATTEMPTS", 5, 1, 20),
   };
 }
