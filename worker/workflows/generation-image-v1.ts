@@ -52,6 +52,16 @@ export function buildImageProviderRequest(
       });
     }
 
+    // Validation resolves GPT Image 2 low/medium/high quality to the provider's
+    // 1K/2K/4K tiers. Preserve that durable choice in the actual provider request so
+    // execution semantics and the persisted pricing evidence describe the same task.
+    const resolution = stringSetting(
+      generation.settings,
+      "effectiveQuality",
+      "effective_quality",
+      "resolution",
+    );
+
     if (referenceUrls.length > 0) {
       return {
         model: "gpt-image-2-image-to-image",
@@ -59,6 +69,7 @@ export function buildImageProviderRequest(
           prompt: generation.prompt,
           input_urls: referenceUrls,
           aspect_ratio: aspectRatio,
+          ...(resolution ? { resolution } : {}),
         },
       };
     }
@@ -68,6 +79,7 @@ export function buildImageProviderRequest(
       input: {
         prompt: generation.prompt,
         aspect_ratio: aspectRatio,
+        ...(resolution ? { resolution } : {}),
       },
     };
   }

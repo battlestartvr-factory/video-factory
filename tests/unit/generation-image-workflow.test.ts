@@ -136,6 +136,23 @@ describe("generation_image@1 provider mapping", () => {
     });
   });
 
+  it("passes validated GPT Image 2 quality through as provider resolution", () => {
+    expect(
+      buildImageProviderRequest(
+        generation({
+          settings: { aspectRatio: "16:9", effectiveQuality: "4K", numOutputs: 1 },
+        }),
+      ),
+    ).toEqual({
+      model: "gpt-image-2-text-to-image",
+      input: {
+        prompt: "A cinematic factory at night",
+        aspect_ratio: "16:9",
+        resolution: "4K",
+      },
+    });
+  });
+
   it("maps GPT Image 2 references to image-to-image input_urls", () => {
     expect(
       buildImageProviderRequest(
