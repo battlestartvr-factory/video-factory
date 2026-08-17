@@ -2,6 +2,11 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { OrchestratorRepository, type ClaimedJob } from "../lib/orchestrator/repository";
 import { PgmqQueueAdapter } from "../lib/orchestrator/queue/pgmq";
 import type { QueueDelivery } from "../lib/orchestrator/queue/types";
+import {
+  computeRetryDelayMs,
+  normalizeWorkflowError,
+  shouldRetry,
+} from "../lib/orchestrator/retry";
 import { loadWorkerConfig, type WorkerConfig } from "./config";
 import { workerLog } from "./log";
 import { createWorkerRpcClient } from "./rpc-client";
@@ -9,10 +14,68 @@ import { getWorkflowHandler, listRegisteredWorkflows } from "./workflows/registr
 import type { WorkflowTickOutcome } from "./workflows/types";
 
 function errorPayload(error: unknown): Record<string, unknown> {
-  if (error instanceof Error) {
-    return { code: "WORKFLOW_TICK_FAILED", message: error.message, name: error.name };
+  const normalized = normalizeWorkflowError(error);
+  return {
+    code: normalized.code,
+    message: normalized.message,
+    retryable: normalized.retryable,
+    ...(normalized.retryAfterMs !== undefined ? { retry_after_ms: normalized.retryAfterMs } : {}),
+    ...(normalized.details ? { details: normalized.details } : {}),
+  };
+}
+
+function failureOutcome(
+  error: unknown,
+  claimed: ClaimedJob,
+  config: WorkerConfig,
+): WorkflowTickOutcome {
+  const normalized = normalizeWorkflowError(error);
+  const payload = errorPayload(error);
+
+  if (
+    shouldRetry({
+      retryable: normalized.retryable,
+      retryCount: claimed.retryCount,
+      maxAttempts: config.maxAttempts,
+    })
+  ) {
+    const delayMs = computeRetryDelayMs({
+      retryCount: claimed.retryCount,
+      retryAfterMs: normalized.retryAfterMs,
+    });
+    const nextActionAt = new Date(Date.now() + delayMs).toISOString();
+    return {
+      status: "retrying",
+      state: claimed.state,
+      currentStage: claimed.currentStage,
+      nextActionAt,
+      error: payload,
+      stateReason: `retry_scheduled:${normalized.code}`,
+      eventType: "retry.scheduled",
+      eventPayload: {
+        error: payload,
+        retry_count: claimed.retryCount + 1,
+        max_attempts: config.maxAttempts,
+        delay_ms: delayMs,
+        next_action_at: nextActionAt,
+      },
+      enqueueReason: "retry",
+    };
   }
-  return { code: "WORKFLOW_TICK_FAILED", message: String(error) };
+
+  return {
+    status: "failed",
+    state: claimed.state,
+    currentStage: claimed.currentStage,
+    error: payload,
+    stateReason: normalized.retryable ? "retry_exhausted" : "terminal_error",
+    eventType: "job.failed",
+    eventPayload: {
+      error: payload,
+      retry_count: claimed.retryCount,
+      max_attempts: config.maxAttempts,
+    },
+  };
 }
 
 async function safeAck(
@@ -51,6 +114,7 @@ async function processClaimedDelivery(input: {
     job_id: claimed.jobId,
     workflow_kind: claimed.workflowKind,
     workflow_version: claimed.workflowVersion,
+    retry_count: claimed.retryCount,
     queue_msg_id: delivery.msgId,
     queue_read_count: delivery.readCount,
     trace_id: delivery.message.trace_id,
@@ -105,6 +169,7 @@ async function processClaimedDelivery(input: {
         error: {
           code: "WORKFLOW_NOT_REGISTERED",
           message: `No handler for ${claimed.workflowKind}@${claimed.workflowVersion}`,
+          retryable: false,
         },
         stateReason: "workflow_not_registered",
         eventType: "job.failed",
@@ -127,14 +192,7 @@ async function processClaimedDelivery(input: {
           });
           return;
         }
-        outcome = {
-          status: "failed",
-          state: claimed.state,
-          currentStage: claimed.currentStage,
-          error: errorPayload(error),
-          stateReason: "workflow_tick_failed",
-          eventType: "job.failed",
-        };
+        outcome = failureOutcome(error, claimed, config);
       }
     }
 
@@ -178,6 +236,7 @@ async function processClaimedDelivery(input: {
     workerLog("info", "orchestrator.job.tick_committed", {
       ...fields,
       status: outcome.status,
+      persisted_retry_count: finished.retryCount,
       next_action_at: finished.nextActionAt,
       next_queue_msg_id: finished.queueMsgId,
     });
@@ -195,6 +254,7 @@ export async function runWorker(): Promise<void> {
   const queue = new PgmqQueueAdapter(rpcClient);
   let stopping = false;
   let activeAbort: AbortController | null = null;
+  let watchdogInFlight = false;
 
   const stop = (signal: string) => {
     if (stopping) return;
@@ -230,12 +290,39 @@ export async function runWorker(): Promise<void> {
       );
   }, config.workerHeartbeatMs);
 
+  const runWatchdog = async () => {
+    if (watchdogInFlight || stopping) return;
+    watchdogInFlight = true;
+    try {
+      const result = await repository.recoverDueJobs();
+      if (result.recovered > 0 || result.staleLeases > 0) {
+        workerLog("warn", "orchestrator.watchdog.recovered", {
+          worker_id: config.workerId,
+          recovered: result.recovered,
+          stale_leases: result.staleLeases,
+        });
+      }
+    } catch (error) {
+      workerLog("error", "orchestrator.watchdog.failed", {
+        worker_id: config.workerId,
+        error: errorPayload(error),
+      });
+    } finally {
+      watchdogInFlight = false;
+    }
+  };
+
+  await runWatchdog();
+  const watchdogTimer = setInterval(() => void runWatchdog(), config.watchdogMs);
+
   workerLog("info", "orchestrator.worker.started", {
     worker_id: config.workerId,
     build_sha: config.buildSha,
     workflows: listRegisteredWorkflows(),
     lease_seconds: config.leaseSeconds,
     visibility_seconds: config.visibilitySeconds,
+    watchdog_ms: config.watchdogMs,
+    max_attempts: config.maxAttempts,
   });
 
   try {
@@ -311,6 +398,7 @@ export async function runWorker(): Promise<void> {
     }
   } finally {
     clearInterval(workerHeartbeatTimer);
+    clearInterval(watchdogTimer);
     workerLog("info", "orchestrator.worker.stopped", { worker_id: config.workerId });
   }
 }
