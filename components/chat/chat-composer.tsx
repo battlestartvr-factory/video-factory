@@ -167,7 +167,7 @@ export function ChatComposer({
             className={cn(
               "w-full resize-none bg-transparent text-foreground placeholder:text-muted focus:outline-none",
               isHero
-                ? "min-h-[88px] px-5 pt-5 pb-2 text-base leading-6"
+                ? "min-h-[88px] px-5 pt-5 pb-2 text-base leading-6 focus-visible:outline-none"
                 : "px-4 pt-3 pb-1 text-sm",
             )}
           />
