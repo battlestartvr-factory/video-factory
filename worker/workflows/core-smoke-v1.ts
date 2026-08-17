@@ -1,3 +1,4 @@
+import { DurableWorkflowError } from "../../lib/orchestrator/retry";
 import type { WorkflowTickHandler } from "./types";
 
 export const coreSmokeV1: WorkflowTickHandler = (context) => {
@@ -7,6 +8,27 @@ export const coreSmokeV1: WorkflowTickHandler = (context) => {
 
   const rawStep = context.state.smoke_step;
   const step = typeof rawStep === "number" ? rawStep : 0;
+
+  if (step === 0 && context.state.simulate_terminal_failure === true) {
+    throw new DurableWorkflowError({
+      code: "CORE_SMOKE_TERMINAL",
+      message: "Injected terminal core-smoke failure",
+      retryable: false,
+    });
+  }
+
+  if (
+    step === 0 &&
+    context.state.simulate_retry_once === true &&
+    context.retryCount === 0
+  ) {
+    throw new DurableWorkflowError({
+      code: "CORE_SMOKE_TRANSIENT",
+      message: "Injected transient core-smoke failure",
+      retryable: true,
+      retryAfterMs: 1_000,
+    });
+  }
 
   if (step === 0) {
     return {
