@@ -70,6 +70,10 @@ describe("context engine", () => {
       importance: 5,
       pinned: false,
       enabled: true,
+      source_run_id: null,
+      confidence: null,
+      evidence: [],
+      learned_from: null,
       created_at: "",
       updated_at: "",
     }));
