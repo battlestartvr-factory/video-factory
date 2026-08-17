@@ -30,7 +30,7 @@ const agentConfig: AgentConfig = {
 };
 
 describe("context engine", () => {
-  it("includes runtime policy and agent instructions", () => {
+  it("includes fixed runtime policy, product mission and operating instructions", () => {
     const ctx = buildAgentContext({
       chat,
       project: null,
@@ -52,13 +52,16 @@ describe("context engine", () => {
       modelId: "gemini-3-flash",
     });
     expect(ctx.instructions).toContain("Runtime Policy");
-    expect(ctx.instructions).toContain("Universal Agent");
+    expect(ctx.instructions).toContain("Product Mission");
+    expect(ctx.instructions).toContain("AI Co-op Game Discovery Factory");
     expect(ctx.instructions).toContain("UNTRUSTED CONTENT");
     expect(ctx.instructions.startsWith("\n\n## Runtime Policy")).toBe(true);
+    expect(ctx.manifest.personalization_present).toBe(false);
+    expect(ctx.manifest.preset_id).toBeNull();
     expect(ctx.instructions.length).toBeLessThanOrEqual(CONTEXT_BUDGET.maxSystemPromptChars);
   });
 
-  it("caps memory and does not treat a global chat as a project", () => {
+  it("caps memory and ignores legacy personalization", () => {
     const memory = Array.from({ length: 30 }, (_, i) => ({
       id: String(i),
       user_id: "u1",
@@ -82,13 +85,7 @@ describe("context engine", () => {
       project: null,
       preset: null,
       agentConfig,
-      preferences: {
-        user_id: "u1",
-        personalization: { aboutMe: "Designer" },
-        appearance: {},
-        created_at: "",
-        updated_at: "",
-      },
+      preferences: { aboutMe: "Designer" },
       memory,
       knowledgeNotes: ["doc chunk"],
       recentMessages: [],
@@ -104,7 +101,7 @@ describe("context engine", () => {
       modelId: "gemini-3-flash",
     });
     expect(ctx.instructions).toContain("not inside a project");
-    expect(ctx.instructions).toContain("About user");
+    expect(ctx.instructions).not.toContain("About user");
     expect(ctx.instructions.length).toBeLessThanOrEqual(CONTEXT_BUDGET.maxSystemPromptChars);
   });
 
