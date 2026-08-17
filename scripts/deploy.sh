@@ -63,9 +63,13 @@ set +a
 
 export AI_FACTORY_ENV_FILE="$ENV_FILE"
 export AI_FACTORY_DATA_ROOT="$DATA_ROOT"
+export DEPLOY_COMMIT="$(git rev-parse HEAD)"
 
 : "${NEXT_PUBLIC_SUPABASE_URL:?NEXT_PUBLIC_SUPABASE_URL is required in $ENV_FILE}"
 : "${NEXT_PUBLIC_SUPABASE_ANON_KEY:?NEXT_PUBLIC_SUPABASE_ANON_KEY is required in $ENV_FILE}"
+if [[ -z "${SUPABASE_SERVICE_ROLE_KEY:-}" && -z "${SUPABASE_SECRET_KEY:-}" ]]; then
+  fail "SUPABASE_SERVICE_ROLE_KEY or SUPABASE_SECRET_KEY is required for the durable worker"
+fi
 
 log "Building Docker images"
 docker compose -f "$COMPOSE_FILE" build --pull
@@ -73,18 +77,19 @@ docker compose -f "$COMPOSE_FILE" build --pull
 log "Starting services"
 docker compose -f "$COMPOSE_FILE" up -d --remove-orphans
 
-log "Waiting for app health (timeout ${HEALTH_TIMEOUT_SECONDS}s)"
+log "Waiting for app health and durable worker (timeout ${HEALTH_TIMEOUT_SECONDS}s)"
 deadline=$((SECONDS + HEALTH_TIMEOUT_SECONDS))
 while (( SECONDS < deadline )); do
   health_status="$(docker compose -f "$COMPOSE_FILE" ps app --format '{{.Health}}' 2>/dev/null || true)"
-  if [[ "$health_status" == "healthy" ]]; then
+  worker_running="$(docker compose -f "$COMPOSE_FILE" ps worker --status running --services 2>/dev/null || true)"
+  if [[ "$health_status" == "healthy" && "$worker_running" == "worker" ]]; then
     if curl -fsS "http://127.0.0.1/api/health" >/dev/null 2>&1; then
-      log "Deployment healthy via Caddy"
+      log "Deployment healthy via Caddy; durable worker running"
       docker compose -f "$COMPOSE_FILE" ps
       exit 0
     fi
     if curl -fsS "http://127.0.0.1:3000/api/health" >/dev/null 2>&1; then
-      log "Deployment healthy on app port"
+      log "Deployment healthy on app port; durable worker running"
       docker compose -f "$COMPOSE_FILE" ps
       exit 0
     fi
@@ -94,4 +99,6 @@ done
 
 log "Health check failed — recent app logs:"
 docker compose -f "$COMPOSE_FILE" logs --tail=80 app || true
+log "Recent worker logs:"
+docker compose -f "$COMPOSE_FILE" logs --tail=80 worker || true
 fail "Deployment failed health check within ${HEALTH_TIMEOUT_SECONDS}s"
