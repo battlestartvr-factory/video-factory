@@ -28,7 +28,6 @@ export async function GET(request: Request, { params }: Params) {
   const url = new URL(request.url);
   const draftContent = url.searchParams.get("content")?.trim();
   const modelId = url.searchParams.get("modelId") ?? chat.model_id ?? "gemini-3-6-flash";
-  const presetId = url.searchParams.get("presetId") ?? chat.preset_id;
 
   let currentMessage: ChatMessage;
   if (draftContent) {
@@ -70,7 +69,6 @@ export async function GET(request: Request, { params }: Params) {
     chat,
     currentMessage,
     modelId,
-    presetId,
   });
 
   const context = buildAgentContext(sources);
@@ -81,7 +79,6 @@ export async function GET(request: Request, { params }: Params) {
   const resolvedTools = resolveToolsForTurn({
     userMessage: userMessageText,
     projectId: chat.project_id,
-    presetId: presetId ?? chat.preset_id,
   });
 
   return apiSuccess({
