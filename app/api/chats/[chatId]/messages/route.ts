@@ -4,7 +4,9 @@ import { apiSuccess, apiError, readJsonBody } from "@/lib/api/response";
 import { generateRequestId, createLogger } from "@/lib/logging/logger";
 import { sendMessageSchema } from "@/lib/validation/workspace-schemas";
 import { attachAssistantToRun, runUniversalAgent } from "@/lib/agent";
+import { detectTurnIntent } from "@/lib/agent/tools/resolve-tools-for-turn";
 import { encodeSseEvent, type StreamEvent } from "@/lib/agent/stream-events";
+import { recordAgentCreativeRunBestEffort } from "@/lib/creative/agent-lineage";
 import type { Chat, ChatMessage } from "@/lib/types/workspace";
 
 type Params = { params: Promise<{ chatId: string }> };
@@ -63,6 +65,12 @@ async function handleAgentTurn(input: {
   onStreamEvent?: (event: StreamEvent) => void;
 }) {
   const service = createSupabaseServiceClient();
+  const turnIntent = detectTurnIntent({
+    userMessage: input.parsed.content,
+    attachmentIds: input.parsed.attachmentIds,
+    projectId: input.chat.project_id,
+    presetId: input.parsed.presetId ?? input.chat.preset_id,
+  });
 
   let agentResult;
   try {
@@ -132,6 +140,26 @@ async function handleAgentTurn(input: {
       ? { metadata: { ...(input.chat.metadata ?? {}), reasoning_level: input.parsed.reasoningLevel } }
       : {}),
   }).eq("id", input.chatId);
+
+  await recordAgentCreativeRunBestEffort({
+    requestId: input.requestId,
+    userId: input.user.id,
+    chatId: input.chatId,
+    projectId: input.chat.project_id,
+    userMessageId: input.userMessage.id,
+    assistantMessageId: assistantMsg.id,
+    userMessage: input.parsed.content,
+    modelId: input.parsed.modelId ?? input.chat.model_id,
+    reasoningLevel: input.parsed.reasoningLevel,
+    presetId: input.parsed.presetId ?? input.chat.preset_id,
+    attachmentIds: input.parsed.attachmentIds,
+    turnIntent,
+    agentRunId: agentResult.agentRunId,
+    status: agentResult.status,
+    errorCode: agentResult.metadata.error?.code ?? null,
+    assistantContent: agentResult.content,
+    metadata: agentResult.metadata,
+  });
 
   return {
     userMessage: input.userMessage,

@@ -162,6 +162,10 @@ export interface MemoryItem {
   importance: number;
   pinned: boolean;
   enabled: boolean;
+  source_run_id: string | null;
+  confidence: number | null;
+  evidence: unknown[];
+  learned_from: string | null;
   created_at: string;
   updated_at: string;
 }
