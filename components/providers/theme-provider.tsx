@@ -52,16 +52,18 @@ function applyAppearance(settings: AppearanceSettings) {
   root.setAttribute("data-accent", settings.accentColor ?? "amber");
   root.setAttribute("data-density", settings.density ?? "comfortable");
 
+  // next/font defines these variables on <body>, so an override on <html>
+  // is shadowed. Apply the user-selected font on the same element instead.
   const body = document.body;
   if (settings.font === "mono") {
-    body.style.setProperty("--font-app-sans", "var(--font-geist-mono)");
+    body.style.setProperty("--font-geist-sans", "var(--font-geist-mono)");
   } else if (settings.font === "system") {
     body.style.setProperty(
-      "--font-app-sans",
+      "--font-geist-sans",
       "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
     );
   } else {
-    body.style.setProperty("--font-app-sans", "var(--font-geist-sans)");
+    body.style.removeProperty("--font-geist-sans");
   }
 }
 
