@@ -43,7 +43,7 @@ describe("core_smoke@1", () => {
   });
 
   it("injects one retryable failure when requested", async () => {
-    await expect(
+    expect(() =>
       coreSmokeV1({
         jobId: "job-retry",
         workflowKind: "core_smoke",
@@ -53,7 +53,9 @@ describe("core_smoke@1", () => {
         retryCount: 0,
         signal: signal(),
       }),
-    ).rejects.toMatchObject({ code: "CORE_SMOKE_TRANSIENT", retryable: true });
+    ).toThrow(
+      expect.objectContaining({ code: "CORE_SMOKE_TRANSIENT", retryable: true }),
+    );
 
     const retried = await coreSmokeV1({
       jobId: "job-retry",
