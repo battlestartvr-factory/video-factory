@@ -8,9 +8,7 @@ import { getAcceptString } from "@/lib/attachments/mime";
 import { DEFAULT_LLM_MODEL, DEFAULT_REASONING_LEVEL } from "@/lib/agent/config";
 import { ModelSelector } from "./model-selector";
 import { ReasoningSelector } from "./reasoning-selector";
-import { PresetSelector } from "./preset-selector";
 import { ContextInspector } from "./context-inspector";
-import type { Preset } from "@/lib/types/workspace";
 
 interface PendingFile {
   id: string;
@@ -19,13 +17,11 @@ interface PendingFile {
 }
 
 interface ChatComposerProps {
-  onSend: (content: string, options: { modelId?: string; reasoningLevel?: string; presetId?: string; files: File[] }) => void;
+  onSend: (content: string, options: { modelId?: string; reasoningLevel?: string; files: File[] }) => void;
   disabled?: boolean;
-  presets?: Preset[];
   chatId?: string;
   defaultModelId?: string;
   defaultReasoningLevel?: string;
-  defaultPresetId?: string;
   variant?: "default" | "hero";
   autoFocus?: boolean;
 }
@@ -33,11 +29,9 @@ interface ChatComposerProps {
 export function ChatComposer({
   onSend,
   disabled,
-  presets = [],
   chatId,
   defaultModelId = DEFAULT_LLM_MODEL,
   defaultReasoningLevel = DEFAULT_REASONING_LEVEL,
-  defaultPresetId,
   variant = "default",
   autoFocus = false,
 }: ChatComposerProps) {
@@ -45,7 +39,6 @@ export function ChatComposer({
   const [files, setFiles] = useState<PendingFile[]>([]);
   const [modelId, setModelId] = useState(defaultModelId);
   const [reasoningLevel, setReasoningLevel] = useState(defaultReasoningLevel);
-  const [presetId, setPresetId] = useState(defaultPresetId ?? "00000000-0000-4000-8000-000000000001");
   const [dragOver, setDragOver] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -88,7 +81,7 @@ export function ChatComposer({
   const handleSend = () => {
     const trimmed = content.trim();
     if (!trimmed && files.length === 0) return;
-    onSend(trimmed, { modelId, reasoningLevel, presetId, files: files.map((f) => f.file) });
+    onSend(trimmed, { modelId, reasoningLevel, files: files.map((f) => f.file) });
     setContent("");
     setFiles([]);
     if (textareaRef.current) textareaRef.current.style.height = "auto";
@@ -202,16 +195,10 @@ export function ChatComposer({
                 value={reasoningLevel}
                 onChange={handleReasoningChange}
               />
-              <PresetSelector
-                value={presetId}
-                onChange={setPresetId}
-                presets={presets.filter((p) => p.type === "chat")}
-              />
               {chatId ? (
                 <ContextInspector
                   chatId={chatId}
                   modelId={modelId}
-                  presetId={presetId}
                   draftContent={content}
                 />
               ) : null}
