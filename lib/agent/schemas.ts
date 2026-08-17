@@ -58,6 +58,10 @@ export const saveMemorySchema = z.object({
   scope: z.enum(["global", "project"]).optional(),
   category: z.string().max(100).optional(),
   importance: z.number().int().min(1).max(10).optional(),
+  source: z.string().max(500).optional(),
+  learned_from: z.string().max(120).optional(),
+  confidence: z.number().min(0).max(1).optional(),
+  evidence: z.array(z.string().min(1).max(1000)).max(12).optional(),
 });
 
 export const updateMemorySchema = z.object({
@@ -67,6 +71,8 @@ export const updateMemorySchema = z.object({
   importance: z.number().int().min(1).max(10).optional(),
   pinned: z.boolean().optional(),
   enabled: z.boolean().optional(),
+  confidence: z.number().min(0).max(1).optional().nullable(),
+  evidence: z.array(z.string().min(1).max(1000)).max(12).optional(),
 });
 
 export const getProjectContextSchema = z.object({
