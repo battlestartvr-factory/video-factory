@@ -28,6 +28,14 @@ export const searchKnowledgeTool: AgentTool<typeof searchKnowledgeSchema._output
   inputSchema: searchKnowledgeSchema,
   risk: "safe",
   async handler(input, ctx) {
+    if (process.env.MOCK_WORKFLOWS === "true") {
+      return {
+        ok: true,
+        data: { hits: [] },
+        sources: [],
+      };
+    }
+
     const { hits, sources } = await searchKnowledge({
       userId: ctx.userId,
       query: input.query,
