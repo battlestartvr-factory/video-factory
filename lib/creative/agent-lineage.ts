@@ -2,7 +2,12 @@ import "server-only";
 
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { createLogger } from "@/lib/logging/logger";
-import { redactForStorage, stripSignedUrl, truncateText } from "@/lib/agent/redaction";
+import {
+  redactForStorage,
+  redactValue,
+  stripSignedUrl,
+  truncateText,
+} from "@/lib/agent/redaction";
 import { addCreativeReference, createCreativeRun } from "@/lib/creative/repository";
 import type { CreativeRunType } from "@/lib/creative/types";
 import type { TurnIntent } from "@/lib/agent/tools/resolve-tools-for-turn";
@@ -100,10 +105,15 @@ export function sanitizeGenerationCard(card: GenerationCardData): Record<string,
   };
 }
 
+export function sanitizeSourceUrl(url: string): string {
+  const redacted = redactValue(url);
+  return typeof redacted === "string" ? redacted : "[url]";
+}
+
 export function dedupeSourceCitations(sources: SourceCitation[]): SourceCitation[] {
   const seen = new Set<string>();
   return sources.filter((source) => {
-    const safeUrl = source.url ? stripSignedUrl(source.url) : "";
+    const safeUrl = source.url ? sanitizeSourceUrl(source.url) : "";
     const key = [
       source.source ?? "",
       source.documentId ?? "",
@@ -130,6 +140,19 @@ async function loadAgentRunSnapshot(agentRunId?: string | null): Promise<AgentRu
   return data as AgentRunSnapshot;
 }
 
+async function findExistingCreativeRunId(agentRunId?: string | null): Promise<string | null> {
+  if (!agentRunId) return null;
+  const service = createSupabaseServiceClient();
+  const { data, error } = await service
+    .from("creative_runs")
+    .select("id")
+    .eq("agent_run_id", agentRunId)
+    .limit(1)
+    .maybeSingle();
+  if (error || !data) return null;
+  return data.id as string;
+}
+
 /**
  * Best-effort Stage 2 lineage writer. Creative telemetry must never make a
  * successful chat turn fail, so all persistence failures are contained here.
@@ -146,11 +169,23 @@ export async function recordAgentCreativeRunBestEffort(
   });
 
   try {
+    const existingRunId = await findExistingCreativeRunId(input.agentRunId);
+    if (existingRunId) {
+      logger.info("creative_agent_lineage_already_recorded", {
+        creative_run_id: existingRunId,
+      });
+      return existingRunId;
+    }
+
     const agentRun = await loadAgentRunSnapshot(input.agentRunId);
     const generations = collectGenerationCards(input.metadata);
     const sources = dedupeSourceCitations(input.metadata.sources ?? []);
     const finishedAt = agentRun?.finished_at ?? new Date().toISOString();
     const normalizedTitle = input.userMessage.trim().replace(/\s+/g, " ");
+    const errorCode = input.errorCode ?? agentRun?.error_code ?? null;
+    const errorMessage = agentRun?.error_message
+      ? truncateText(agentRun.error_message, MAX_REFERENCE_CHARS)
+      : null;
 
     const creativeRun = await createCreativeRun({
       userId: input.userId,
@@ -182,16 +217,14 @@ export async function recordAgentCreativeRunBestEffort(
         generations: generations.map(sanitizeGenerationCard),
       },
       usage: redactForStorage(agentRun?.usage ?? {}),
+      errorCode,
+      errorMessage,
       metadata: {
         request_id: input.requestId,
         source: "universal_agent",
         turn_intent: input.turnIntent,
         reference_count: sources.length,
         generation_count: generations.length,
-        error_code: input.errorCode ?? agentRun?.error_code ?? null,
-        error_message: agentRun?.error_message
-          ? truncateText(agentRun.error_message, MAX_REFERENCE_CHARS)
-          : null,
       },
       startedAt: agentRun?.started_at ?? null,
       completedAt: finishedAt,
@@ -209,7 +242,7 @@ export async function recordAgentCreativeRunBestEffort(
                 ? "web"
                 : "other",
           sourceId: source.documentId ?? null,
-          sourceUrl: source.url ? stripSignedUrl(source.url) : null,
+          sourceUrl: source.url ? sanitizeSourceUrl(source.url) : null,
           title: source.title ?? source.filename ?? null,
           excerpt: source.excerpt
             ? truncateText(source.excerpt, MAX_REFERENCE_CHARS)
