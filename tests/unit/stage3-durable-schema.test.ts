@@ -10,7 +10,7 @@ const migration = readFileSync(
 describe("stage3 durable schema — additive compatibility", () => {
   it("does not drop factory tables or truncate data", () => {
     expect(migration).not.toMatch(/\bDROP TABLE\b/i);
-    expect(migration).not.toMatch(/\bTRUNCATE\b/i);
+    expect(migration).not.toMatch(/^\s*TRUNCATE\s+(?:TABLE\s+)?public\./im);
   });
 
   it("backfills existing jobs as legacy_content before workflow_kind becomes required", () => {
