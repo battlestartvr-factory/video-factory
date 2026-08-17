@@ -7,6 +7,9 @@ export const DEFAULT_APPEARANCE: AppearanceSettings = {
   density: "comfortable",
 };
 
+const STORAGE_KEY = "acf-appearance";
+const APPEARANCE_CHANGE_EVENT = "acf-appearance-change";
+
 let cachedRaw: string | null | undefined;
 let cachedSnapshot: AppearanceSettings = DEFAULT_APPEARANCE;
 
@@ -21,7 +24,7 @@ function parseAppearance(raw: string | null): AppearanceSettings {
 
 /** Stable snapshot for useSyncExternalStore — same reference until localStorage changes. */
 export function getAppearanceSnapshot(): AppearanceSettings {
-  const raw = localStorage.getItem("acf-appearance");
+  const raw = localStorage.getItem(STORAGE_KEY);
   if (raw === cachedRaw) return cachedSnapshot;
   cachedRaw = raw;
   cachedSnapshot = parseAppearance(raw);
@@ -29,19 +32,35 @@ export function getAppearanceSnapshot(): AppearanceSettings {
 }
 
 export function writeAppearanceSnapshot(settings: AppearanceSettings): void {
-  const serialized = JSON.stringify(settings);
-  if (localStorage.getItem("acf-appearance") !== serialized) {
-    localStorage.setItem("acf-appearance", serialized);
+  const serialized = JSON.stringify({ ...DEFAULT_APPEARANCE, ...settings });
+  const changed = localStorage.getItem(STORAGE_KEY) !== serialized;
+
+  if (changed) {
+    localStorage.setItem(STORAGE_KEY, serialized);
   }
   if (cachedRaw !== serialized) {
     cachedRaw = serialized;
     cachedSnapshot = parseAppearance(serialized);
   }
+
+  // The native `storage` event only fires in *other* tabs. Emit a local event
+  // so useSyncExternalStore subscribers in the current tab update immediately.
+  // Keep this helper safe in Node/SSR tests that provide localStorage without a DOM.
+  if (changed && typeof window !== "undefined") {
+    window.dispatchEvent(new Event(APPEARANCE_CHANGE_EVENT));
+  }
 }
 
 export function subscribeAppearanceStorage(callback: () => void): () => void {
-  window.addEventListener("storage", callback);
-  return () => window.removeEventListener("storage", callback);
+  const handleStorage = (event: StorageEvent) => {
+    if (event.key === STORAGE_KEY) callback();
+  };
+  window.addEventListener("storage", handleStorage);
+  window.addEventListener(APPEARANCE_CHANGE_EVENT, callback);
+  return () => {
+    window.removeEventListener("storage", handleStorage);
+    window.removeEventListener(APPEARANCE_CHANGE_EVENT, callback);
+  };
 }
 
 /** Test helper — reset module-level cache between tests. */

@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { MessageSquare, Plus } from "lucide-react";
+import { Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { EmptyState, Skeleton } from "@/components/ui/states";
 import { ChatMessageView } from "@/components/chat/chat-message";
@@ -288,21 +288,31 @@ export function ChatPageClient({ chatId: chatIdProp, projectId }: ChatPageClient
 
   if (!chatId) {
     return (
-      <div className="flex flex-1 flex-col">
-        <div className="flex flex-1 flex-col items-center justify-center px-4">
-          <div className="mb-6 flex h-16 w-16 items-center justify-center rounded-2xl bg-accent-muted">
-            <MessageSquare className="h-8 w-8 text-accent" />
+      <div className="flex min-h-0 flex-1 flex-col">
+        <div className="flex flex-1 items-center justify-center px-2 pb-[14vh] pt-8 sm:px-4">
+          <div className="w-full max-w-4xl">
+            <div className="mx-auto mb-6 max-w-3xl px-4">
+              <h1 className="text-center text-2xl font-semibold tracking-tight text-foreground sm:text-3xl">
+                Над чем поработаем?
+              </h1>
+            </div>
+            <ChatComposer
+              onSend={handleSend}
+              disabled={sending}
+              presets={presets}
+              variant="hero"
+              autoFocus
+            />
+            {sendError ? (
+              <div className="mx-auto mt-4 max-w-3xl px-4">
+                <ErrorCard error={sendError} />
+              </div>
+            ) : null}
+            <p className="mt-3 text-center text-xs text-muted-foreground">
+              Enter — отправить · Shift+Enter — новая строка
+            </p>
           </div>
-          <h1 className="text-xl font-semibold text-foreground">{t("chat.empty")}</h1>
-          <p className="mt-2 max-w-md text-center text-sm text-muted-foreground">
-            {t("chat.emptyDescription")}
-          </p>
-          <Button className="mt-6" onClick={createChat}>
-            <Plus className="h-4 w-4" />
-            {t("chat.newChat")}
-          </Button>
         </div>
-        <ChatComposer onSend={handleSend} disabled={sending} presets={presets} />
       </div>
     );
   }

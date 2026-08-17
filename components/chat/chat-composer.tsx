@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef, useCallback } from "react";
-import { Send, Paperclip, X } from "lucide-react";
+import { ArrowUp, Paperclip, Plus, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { getAcceptString } from "@/lib/attachments/mime";
@@ -26,6 +26,8 @@ interface ChatComposerProps {
   defaultModelId?: string;
   defaultReasoningLevel?: string;
   defaultPresetId?: string;
+  variant?: "default" | "hero";
+  autoFocus?: boolean;
 }
 
 export function ChatComposer({
@@ -36,6 +38,8 @@ export function ChatComposer({
   defaultModelId = DEFAULT_LLM_MODEL,
   defaultReasoningLevel = DEFAULT_REASONING_LEVEL,
   defaultPresetId,
+  variant = "default",
+  autoFocus = false,
 }: ChatComposerProps) {
   const [content, setContent] = useState("");
   const [files, setFiles] = useState<PendingFile[]>([]);
@@ -45,6 +49,7 @@ export function ChatComposer({
   const [dragOver, setDragOver] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const isHero = variant === "hero";
 
   const persistChatSettings = useCallback(
     async (updates: { modelId?: string; reasoningLevel?: string }) => {
@@ -100,12 +105,16 @@ export function ChatComposer({
     setContent(e.target.value);
     const el = e.target;
     el.style.height = "auto";
-    el.style.height = `${Math.min(el.scrollHeight, 200)}px`;
+    el.style.height = `${Math.min(el.scrollHeight, isHero ? 240 : 200)}px`;
   };
 
   return (
-    <div className="border-t border-border bg-surface/80 backdrop-blur-sm">
-      <div className="mx-auto max-w-3xl px-4 py-3">
+    <div
+      className={cn(
+        isHero ? "w-full" : "border-t border-border bg-surface/80 backdrop-blur-sm",
+      )}
+    >
+      <div className={cn("mx-auto max-w-3xl px-4", isHero ? "py-0" : "py-3")}>
         {files.length > 0 && (
           <div className="mb-2 flex flex-wrap gap-2">
             {files.map((f) => (
@@ -132,7 +141,10 @@ export function ChatComposer({
 
         <div
           className={cn(
-            "rounded-xl border border-border bg-surface-elevated shadow-md transition-colors",
+            "border border-border bg-surface-elevated transition-colors",
+            isHero
+              ? "rounded-[1.75rem] shadow-lg shadow-black/20"
+              : "rounded-xl shadow-md",
             dragOver && "drag-over",
           )}
           onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
@@ -148,21 +160,33 @@ export function ChatComposer({
             value={content}
             onChange={handleInput}
             onKeyDown={handleKeyDown}
-            placeholder="Напишите сообщение…"
-            rows={1}
+            placeholder={isHero ? "Спросите что угодно" : "Напишите сообщение…"}
+            rows={isHero ? 2 : 1}
+            autoFocus={autoFocus}
             disabled={disabled}
-            className="w-full resize-none bg-transparent px-4 pt-3 pb-1 text-sm text-foreground placeholder:text-muted focus:outline-none"
+            className={cn(
+              "w-full resize-none bg-transparent text-foreground placeholder:text-muted focus:outline-none",
+              isHero
+                ? "min-h-[88px] px-5 pt-5 pb-2 text-base leading-6"
+                : "px-4 pt-3 pb-1 text-sm",
+            )}
           />
-          <div className="flex items-center justify-between gap-2 px-2 pb-2">
-            <div className="flex items-center gap-1">
+          <div
+            className={cn(
+              "flex items-end justify-between gap-2",
+              isHero ? "px-3 pb-3" : "px-2 pb-2",
+            )}
+          >
+            <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1">
               <Button
                 type="button"
                 variant="ghost"
                 size="icon"
-                className="h-8 w-8"
+                className={cn("shrink-0", isHero ? "h-9 w-9 rounded-full" : "h-8 w-8")}
                 onClick={() => fileInputRef.current?.click()}
+                aria-label="Добавить файл"
               >
-                <Paperclip className="h-4 w-4" />
+                {isHero ? <Plus className="h-5 w-5" /> : <Paperclip className="h-4 w-4" />}
               </Button>
               <input
                 ref={fileInputRef}
@@ -194,11 +218,12 @@ export function ChatComposer({
             </div>
             <Button
               size="icon"
-              className="h-8 w-8"
+              className={cn("shrink-0 rounded-full", isHero ? "h-9 w-9" : "h-8 w-8")}
               disabled={disabled || (!content.trim() && files.length === 0)}
               onClick={handleSend}
+              aria-label="Отправить"
             >
-              <Send className="h-4 w-4" />
+              <ArrowUp className={isHero ? "h-5 w-5" : "h-4 w-4"} />
             </Button>
           </div>
         </div>

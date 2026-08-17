@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
+import { useRef, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select } from "@/components/ui/input";
 import { SettingsLayout } from "@/components/settings/settings-nav";
@@ -8,33 +8,69 @@ import { useTheme } from "@/components/providers/theme-provider";
 import { t } from "@/lib/i18n/dictionary";
 
 const ACCENT_COLORS = ["amber", "violet", "emerald", "rose", "sky"] as const;
+const ACCENT_SWATCHES: Record<(typeof ACCENT_COLORS)[number], string> = {
+  amber: "#f59e0b",
+  violet: "#8b5cf6",
+  emerald: "#10b981",
+  rose: "#f43f5e",
+  sky: "#0ea5e9",
+};
+
+type SaveState = "idle" | "saving" | "saved" | "error";
 
 export default function AppearanceSettingsPage() {
   const { appearance, setAppearance } = useTheme();
-
-  useEffect(() => {
-    fetch("/api/preferences")
-      .then((r) => r.json())
-      .then((d) => {
-        if (d.ok && d.data.appearance) {
-          setAppearance(d.data.appearance);
-        }
-      });
-  }, [setAppearance]);
+  const [saveState, setSaveState] = useState<SaveState>("idle");
+  const saveQueue = useRef<Promise<void>>(Promise.resolve());
 
   const save = (partial: Parameters<typeof setAppearance>[0]) => {
+    // Apply instantly in the current tab, then serialize PATCH requests so a
+    // slower older request can never overwrite a newer appearance choice.
     setAppearance(partial);
-    fetch("/api/preferences", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ appearance: { ...appearance, ...partial } }),
-    });
+    setSaveState("saving");
+
+    saveQueue.current = saveQueue.current
+      .catch(() => undefined)
+      .then(async () => {
+        const response = await fetch("/api/preferences", {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ appearance: partial }),
+        });
+        const payload = await response.json();
+        if (!response.ok || !payload.ok) {
+          throw new Error(payload.error?.message ?? "Failed to save appearance");
+        }
+      });
+
+    const pendingSave = saveQueue.current;
+    void pendingSave
+      .then(() => {
+        if (saveQueue.current === pendingSave) setSaveState("saved");
+      })
+      .catch(() => {
+        if (saveQueue.current === pendingSave) setSaveState("error");
+      });
   };
 
   return (
     <SettingsLayout>
       <div className="mx-auto max-w-2xl space-y-6">
-        <h1 className="text-2xl font-bold">{t("settings.appearance")}</h1>
+        <div className="flex items-center justify-between gap-4">
+          <h1 className="text-2xl font-bold">{t("settings.appearance")}</h1>
+          <span
+            className={`text-xs ${saveState === "error" ? "text-rose-400" : "text-muted-foreground"}`}
+            aria-live="polite"
+          >
+            {saveState === "saving"
+              ? "Сохранение…"
+              : saveState === "saved"
+                ? "Сохранено"
+                : saveState === "error"
+                  ? "Не удалось сохранить"
+                  : ""}
+          </span>
+        </div>
 
         <Card>
           <CardHeader><CardTitle>{t("settings.theme")}</CardTitle></CardHeader>
@@ -53,24 +89,24 @@ export default function AppearanceSettingsPage() {
         <Card>
           <CardHeader><CardTitle>{t("settings.accent")}</CardTitle></CardHeader>
           <CardContent>
-            <div className="flex flex-wrap gap-2">
+            <div className="flex flex-wrap gap-3">
               {ACCENT_COLORS.map((color) => (
                 <button
                   key={color}
                   type="button"
                   onClick={() => save({ accentColor: color })}
-                  className={`h-8 w-8 rounded-full border-2 transition-transform hover:scale-110 ${
-                    appearance.accentColor === color ? "border-foreground scale-110" : "border-transparent"
+                  className={`h-9 w-9 rounded-full border-2 transition-transform hover:scale-110 ${
+                    appearance.accentColor === color ? "scale-110 border-foreground" : "border-transparent"
                   }`}
-                  style={{ background: `var(--accent)` }}
-                  data-accent={color}
-                  aria-label={color}
+                  style={{ backgroundColor: ACCENT_SWATCHES[color] }}
+                  aria-label={`Акцент: ${color}`}
+                  aria-pressed={appearance.accentColor === color}
                 />
               ))}
             </div>
             <Select
               value={appearance.accentColor ?? "amber"}
-              onChange={(e) => save({ accentColor: e.target.value as typeof ACCENT_COLORS[number] })}
+              onChange={(e) => save({ accentColor: e.target.value as (typeof ACCENT_COLORS)[number] })}
               className="mt-3"
             >
               {ACCENT_COLORS.map((c) => (

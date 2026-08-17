@@ -4,26 +4,28 @@ import { ThemeProvider } from "@/components/providers/theme-provider";
 import { RecentChatsProvider } from "@/components/providers/recent-chats-provider";
 import { isMockWorkflowsEnabled } from "@/lib/env/mock-workflows";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
-import type { Chat } from "@/lib/types/workspace";
+import type { AppearanceSettings, Chat } from "@/lib/types/workspace";
 import type { Project } from "@/lib/types/database";
 
-async function getSidebarData() {
+async function getDashboardData() {
   try {
     const supabase = await createSupabaseServerClient();
     const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return { recentProjects: [], recentChats: [] };
+    if (!user) return { recentProjects: [], recentChats: [], initialAppearance: null };
 
-    const [{ data: projects }, { data: chats }] = await Promise.all([
+    const [{ data: projects }, { data: chats }, { data: preferences }] = await Promise.all([
       supabase.from("projects").select("id, name").eq("status", "active").order("updated_at", { ascending: false }).limit(5),
       supabase.from("chats").select("id, title").eq("user_id", user.id).is("archived_at", null).order("updated_at", { ascending: false }).limit(5),
+      supabase.from("user_preferences").select("appearance").eq("user_id", user.id).maybeSingle(),
     ]);
 
     return {
       recentProjects: (projects ?? []) as Pick<Project, "id" | "name">[],
       recentChats: (chats ?? []) as Pick<Chat, "id" | "title">[],
+      initialAppearance: (preferences?.appearance ?? null) as AppearanceSettings | null,
     };
   } catch {
-    return { recentProjects: [], recentChats: [] };
+    return { recentProjects: [], recentChats: [], initialAppearance: null };
   }
 }
 
@@ -32,10 +34,10 @@ export default async function DashboardLayout({
 }: {
   children: React.ReactNode;
 }) {
-  const { recentProjects, recentChats } = await getSidebarData();
+  const { recentProjects, recentChats, initialAppearance } = await getDashboardData();
 
   return (
-    <ThemeProvider>
+    <ThemeProvider initialAppearance={initialAppearance}>
       <RecentChatsProvider
         key={recentChats.map((chat) => chat.id).join(",")}
         initialChats={recentChats}
