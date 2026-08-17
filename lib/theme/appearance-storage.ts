@@ -45,7 +45,8 @@ export function writeAppearanceSnapshot(settings: AppearanceSettings): void {
 
   // The native `storage` event only fires in *other* tabs. Emit a local event
   // so useSyncExternalStore subscribers in the current tab update immediately.
-  if (changed) {
+  // Keep this helper safe in Node/SSR tests that provide localStorage without a DOM.
+  if (changed && typeof window !== "undefined") {
     window.dispatchEvent(new Event(APPEARANCE_CHANGE_EVENT));
   }
 }
