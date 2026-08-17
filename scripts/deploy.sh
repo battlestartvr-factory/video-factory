@@ -12,6 +12,8 @@ DATA_ROOT="${AI_FACTORY_DATA_ROOT:-/srv/ai-factory}"
 COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.yml}"
 HEALTH_TIMEOUT_SECONDS="${HEALTH_TIMEOUT_SECONDS:-180}"
 HEALTH_POLL_SECONDS="${HEALTH_POLL_SECONDS:-3}"
+LAST_GOOD_FILE="${LAST_GOOD_FILE:-/opt/ai-factory/last-good-commit}"
+ROLLBACK_CANDIDATE_FILE="${ROLLBACK_CANDIDATE_FILE:-/opt/ai-factory/rollback-candidate-commit}"
 
 log() {
   printf '[deploy] %s\n' "$*"
@@ -37,8 +39,29 @@ mkdir -p "$DATA_ROOT"
 
 cd "$APP_DIR"
 
+CURRENT_COMMIT="$(git rev-parse HEAD)"
+ROLLBACK_CANDIDATE="$CURRENT_COMMIT"
+if [[ -f "$LAST_GOOD_FILE" ]]; then
+  recorded_last_good="$(tr -d '\r\n[:space:]' < "$LAST_GOOD_FILE")"
+  if [[ -n "$recorded_last_good" ]] && git cat-file -e "${recorded_last_good}^{commit}" 2>/dev/null; then
+    ROLLBACK_CANDIDATE="$recorded_last_good"
+  fi
+fi
+log "Current checkout: $CURRENT_COMMIT"
+log "Rollback candidate: $ROLLBACK_CANDIDATE"
+
 log "Fetching origin/main"
 git fetch origin main
+
+# A manual pre-merge deployment can target a commit that is not reachable from main yet.
+# Do not depend on a previous preflight having populated the Git object store.
+if [[ -n "$COMMIT" ]] && ! git cat-file -e "${COMMIT}^{commit}" 2>/dev/null; then
+  log "Target commit is not local; fetching advertised origin branches"
+  git fetch origin '+refs/heads/*:refs/remotes/origin/*'
+fi
+if [[ -n "$COMMIT" ]]; then
+  git cat-file -e "${COMMIT}^{commit}" 2>/dev/null || fail "Target commit is unavailable after fetch: $COMMIT"
+fi
 
 # Production working tree is deployment-only. Discard tracked manual edits so
 # checkout of the CI-approved commit is deterministic. Secrets and persistent
@@ -83,13 +106,15 @@ while (( SECONDS < deadline )); do
   health_status="$(docker compose -f "$COMPOSE_FILE" ps app --format '{{.Health}}' 2>/dev/null || true)"
   worker_running="$(docker compose -f "$COMPOSE_FILE" ps worker --status running --services 2>/dev/null || true)"
   if [[ "$health_status" == "healthy" && "$worker_running" == "worker" ]]; then
-    if curl -fsS "http://127.0.0.1/api/health" >/dev/null 2>&1; then
-      log "Deployment healthy via Caddy; durable worker running"
-      docker compose -f "$COMPOSE_FILE" ps
-      exit 0
-    fi
-    if curl -fsS "http://127.0.0.1:3000/api/health" >/dev/null 2>&1; then
-      log "Deployment healthy on app port; durable worker running"
+    if curl -fsS "http://127.0.0.1/api/health" >/dev/null 2>&1 || \
+       curl -fsS "http://127.0.0.1:3000/api/health" >/dev/null 2>&1; then
+      deployed_commit="$(git rev-parse HEAD)"
+      mkdir -p "$(dirname "$LAST_GOOD_FILE")" "$(dirname "$ROLLBACK_CANDIDATE_FILE")"
+      printf '%s\n' "$ROLLBACK_CANDIDATE" > "$ROLLBACK_CANDIDATE_FILE"
+      printf '%s\n' "$deployed_commit" > "$LAST_GOOD_FILE"
+      log "Deployment healthy; durable worker running"
+      log "Recorded last-good commit: $deployed_commit"
+      log "Recorded rollback candidate: $ROLLBACK_CANDIDATE"
       docker compose -f "$COMPOSE_FILE" ps
       exit 0
     fi
@@ -101,4 +126,5 @@ log "Health check failed — recent app logs:"
 docker compose -f "$COMPOSE_FILE" logs --tail=80 app || true
 log "Recent worker logs:"
 docker compose -f "$COMPOSE_FILE" logs --tail=80 worker || true
+log "Rollback candidate remains: $ROLLBACK_CANDIDATE"
 fail "Deployment failed health check within ${HEALTH_TIMEOUT_SECONDS}s"
