@@ -63,6 +63,8 @@ export async function createCreativeRun(input: CreateCreativeRunInput): Promise<
       usage: input.usage ?? {},
       estimated_cost_usd: input.estimatedCostUsd ?? null,
       actual_cost_usd: input.actualCostUsd ?? null,
+      error_code: input.errorCode ?? null,
+      error_message: input.errorMessage ?? null,
       metadata: input.metadata ?? {},
       started_at: input.startedAt ?? null,
       completed_at: input.completedAt ?? null,
