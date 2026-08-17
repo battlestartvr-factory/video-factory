@@ -6,7 +6,7 @@ import { saveMemory, searchMemory, updateMemory } from "@/lib/memory";
 export const searchMemoryTool: AgentTool<typeof searchMemorySchema._output> = {
   name: "search_memory",
   description:
-    "Search saved memory items. Global memory is always available; project memory is available in a project chat. Use when you need extra remembered facts beyond the context preamble.",
+    "Search durable evidence-backed learnings. Global memory is always available; project memory is available in a project chat. Use for reusable learned patterns, not as a substitute for current web/source verification.",
   inputSchema: searchMemorySchema,
   risk: "safe",
   async handler(input, ctx) {
@@ -24,7 +24,11 @@ export const searchMemoryTool: AgentTool<typeof searchMemorySchema._output> = {
           scope: item.scope,
           content: item.content,
           category: item.category,
+          source: item.source,
           importance: item.importance,
+          confidence: item.confidence,
+          learned_from: item.learned_from,
+          evidence: item.evidence,
         })),
       },
     };
@@ -34,7 +38,7 @@ export const searchMemoryTool: AgentTool<typeof searchMemorySchema._output> = {
 export const saveMemoryTool: AgentTool<typeof saveMemorySchema._output> = {
   name: "save_memory",
   description:
-    "Save a permanent memory item. Call ONLY when the user explicitly asks to remember something (запомни / сохрани в память). Do not auto-save ordinary chat.",
+    "Save ONE atomic durable learning. Use only when the user explicitly asks to remember/learn/import information, or from a dedicated Learning/Intelligence pipeline. For document/market imports, inspect/extract first and save distilled reusable conclusions rather than raw source text. Include source, learned_from, confidence and evidence whenever available.",
   inputSchema: saveMemorySchema,
   risk: "safe",
   async handler(input, ctx) {
@@ -45,18 +49,28 @@ export const saveMemoryTool: AgentTool<typeof saveMemorySchema._output> = {
       projectId: input.scope === "global" ? null : ctx.projectId,
       category: input.category,
       importance: input.importance,
-      source: "agent",
+      source: input.source ?? "agent",
+      confidence: input.confidence,
+      evidence: input.evidence,
+      learnedFrom: input.learned_from,
+      sourceRunId: ctx.agentRunId ?? null,
     });
     return {
       ok: true,
-      data: { memory_id: item.id, scope: item.scope },
+      data: {
+        memory_id: item.id,
+        scope: item.scope,
+        confidence: item.confidence,
+        evidence_count: item.evidence?.length ?? 0,
+      },
     };
   },
 };
 
 export const updateMemoryTool: AgentTool<typeof updateMemorySchema._output> = {
   name: "update_memory",
-  description: "Update an existing memory item owned by the user. Do not delete memory.",
+  description:
+    "Update an existing evidence-backed learning (content/category/importance/confidence/evidence or enabled/pinned state). Do not silently erase source evidence.",
   inputSchema: updateMemorySchema,
   risk: "safe",
   async handler(input, ctx) {
@@ -69,6 +83,8 @@ export const updateMemoryTool: AgentTool<typeof updateMemorySchema._output> = {
         importance: input.importance,
         pinned: input.pinned,
         enabled: input.enabled,
+        confidence: input.confidence,
+        evidence: input.evidence,
       });
       return { ok: true, data: { memory_id: item.id } };
     } catch (error) {
