@@ -247,7 +247,8 @@ CREATE POLICY factory_jobs_select ON public.factory_jobs
   );
 
 -- ---------------------------------------------------------------------------
--- Client-safe detail projection: expose durable state without lease/fencing secrets.
+-- Client-safe detail projection. Existing columns keep their original order;
+-- Stage 3 fields are appended so CREATE OR REPLACE VIEW is production-safe.
 -- ---------------------------------------------------------------------------
 CREATE OR REPLACE VIEW public.factory_job_detail
 WITH (security_invoker = true)
@@ -257,8 +258,6 @@ SELECT
   fj.request_id,
   fj.project_id,
   fj.user_id,
-  fj.workflow_kind,
-  fj.workflow_version,
   fj.job_type,
   fj.preset,
   fj.content_namespace,
@@ -267,14 +266,9 @@ SELECT
   fj.current_stage,
   fj.progress,
   fj.input,
-  fj.state,
   fj.result,
   fj.error,
-  fj.state_reason,
   fj.cancel_requested,
-  fj.next_action_at,
-  fj.last_enqueued_at,
-  fj.retry_of_job_id,
   fj.estimated_cost_usd,
   fj.actual_cost_usd,
   fj.created_at,
@@ -288,7 +282,14 @@ SELECT
     ),
     fj.actual_cost_usd,
     0
-  ) AS aggregated_actual_cost_usd
+  ) AS aggregated_actual_cost_usd,
+  fj.workflow_kind,
+  fj.workflow_version,
+  fj.state,
+  fj.state_reason,
+  fj.next_action_at,
+  fj.last_enqueued_at,
+  fj.retry_of_job_id
 FROM public.factory_jobs AS fj;
 
 GRANT SELECT ON public.factory_job_detail TO authenticated;
