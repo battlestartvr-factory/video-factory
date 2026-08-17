@@ -1,8 +1,13 @@
 import { CONTEXT_BUDGET, AGENT_ERROR_CODES } from "./config";
 import { AGENT_RUNTIME_POLICY, AGENT_RUNTIME_POLICY_VERSION } from "./runtime-policy";
+import { PRODUCT_MISSION, PRODUCT_MISSION_VERSION } from "./product-mission";
+import {
+  AGENT_OPERATING_INSTRUCTIONS_VERSION,
+  DEFAULT_GLOBAL_AGENT_INSTRUCTIONS,
+} from "./default-agent-instructions";
 import { truncateText } from "./redaction";
 import type { AgentConfig } from "./agent-config-service";
-import type { Chat, ChatAttachment, ChatMessage, MemoryItem, Preset, UserPreferences } from "@/lib/types/workspace";
+import type { Chat, ChatAttachment, ChatMessage, MemoryItem } from "@/lib/types/workspace";
 import type { Project } from "@/lib/types/database";
 import type { AgentContentPart, AgentMessage } from "./types";
 import { getCategoryFromMime } from "@/lib/attachments/mime";
@@ -11,9 +16,12 @@ import { getModelById } from "@/lib/models/registry";
 export interface ContextSources {
   chat: Chat;
   project: Project | null;
-  preset: Preset | null;
-  agentConfig: AgentConfig | null;
-  preferences: UserPreferences | null;
+  /** @deprecated User agent configs are ignored; operating instructions are code-controlled. */
+  agentConfig?: AgentConfig | null;
+  /** @deprecated Presets no longer participate in agent context. */
+  preset?: unknown;
+  /** @deprecated Personalization no longer participates in agent context. */
+  preferences?: unknown;
   memory: MemoryItem[];
   knowledgeNotes: string[];
   recentMessages: ChatMessage[];
@@ -24,6 +32,9 @@ export interface ContextSources {
 
 export interface ContextManifest {
   runtime_policy_version: string;
+  product_mission_version: string;
+  agent_operating_instructions_version: string;
+  /** Compatibility fields retained for existing logs/clients. */
   agent_config_id: string | null;
   agent_config_version: number | null;
   personalization_present: boolean;
@@ -50,14 +61,12 @@ export interface ContextLayerPreview {
 
 export interface AgentContext {
   runtimePolicy: { version: string; text: string };
+  productMission: { version: string; text: string };
   agentInstructions: { configId: string | null; version: number | null; text: string };
-  presetInstructions: { presetId: string | null; presetName: string | null; text: string };
-  personalization: {
-    aboutMe?: string;
-    communicationStyle?: string;
-    preferredLanguage?: string;
-    behaviorPreferences?: string;
-  };
+  /** @deprecated Always empty. */
+  presetInstructions: { presetId: null; presetName: null; text: string };
+  /** @deprecated Always empty. */
+  personalization: Record<string, never>;
   globalMemory: MemoryItem[];
   projectInstructions: {
     projectId: string | null;
@@ -133,46 +142,16 @@ export function modelSupportsVision(modelId: string): boolean {
 
 function formatMemoryItems(items: MemoryItem[]): string {
   return items
-    .map((item) => `- [${item.scope}${item.pinned ? ", pinned" : ""}] ${item.content}`)
+    .map((item) => {
+      const meta = [
+        item.scope,
+        item.source ? `source=${item.source}` : "",
+        item.confidence != null ? `confidence=${item.confidence}` : "",
+        item.pinned ? "pinned" : "",
+      ].filter(Boolean);
+      return `- [${meta.join(", ")}] ${item.content}`;
+    })
     .join("\n");
-}
-
-function buildPersonalizationBlock(personalization: UserPreferences["personalization"] | undefined): {
-  text: string;
-  fields: AgentContext["personalization"];
-  present: boolean;
-} {
-  const fields: AgentContext["personalization"] = {
-    aboutMe: personalization?.aboutMe?.trim() || undefined,
-    communicationStyle: personalization?.communicationStyle?.trim() || undefined,
-    preferredLanguage: personalization?.preferredLanguage?.trim() || undefined,
-    behaviorPreferences: personalization?.agentBehavior?.trim() || undefined,
-  };
-  const lines = [
-    fields.aboutMe ? `About user: ${fields.aboutMe}` : "",
-    fields.communicationStyle ? `Style: ${fields.communicationStyle}` : "",
-    fields.preferredLanguage ? `Language: ${fields.preferredLanguage}` : "",
-    fields.behaviorPreferences ?? "",
-  ].filter(Boolean);
-  return {
-    text: lines.join("\n"),
-    fields,
-    present: lines.length > 0,
-  };
-}
-
-function buildPresetBlock(preset: Preset | null): { text: string; presetId: string | null; presetName: string | null } {
-  const presetSettings = preset?.settings ?? {};
-  const lines = [
-    preset?.name ? `Preset: ${preset.name}` : "",
-    typeof presetSettings.systemPrompt === "string" ? presetSettings.systemPrompt : "",
-    typeof presetSettings.model === "string" ? `Preferred model: ${presetSettings.model}` : "",
-  ].filter(Boolean);
-  return {
-    text: lines.join("\n"),
-    presetId: preset?.id ?? null,
-    presetName: preset?.name ?? null,
-  };
 }
 
 function buildProjectBlock(project: Project | null): AgentContext["projectInstructions"] {
@@ -205,28 +184,30 @@ function projectInstructionsText(projectBlock: AgentContext["projectInstructions
     .join("\n");
 }
 
-/** Assemble system prompt with explicit priority ordering and budget trimming. */
+/** Assemble system prompt with explicit product-first priority ordering and budget trimming. */
 export function assembleInstructions(layers: {
   runtimePolicy: string;
+  productMission?: string;
   agentInstructions: string;
-  presetInstructions: string;
-  personalization: string;
   globalMemory: string;
   projectInstructions: string;
   projectMemory: string;
   knowledge: string;
   chatSummary: string;
+  /** @deprecated Ignored. */
+  presetInstructions?: string;
+  /** @deprecated Ignored. */
+  personalization?: string;
 }): string {
   const neverDrop = [
     { key: "runtimePolicy", text: layers.runtimePolicy, max: CONTEXT_BUDGET.maxRuntimePolicyChars },
+    { key: "productMission", text: layers.productMission ?? PRODUCT_MISSION, max: 6000 },
     { key: "agentInstructions", text: layers.agentInstructions, max: CONTEXT_BUDGET.maxAgentInstructionsChars },
   ] as const;
 
   const droppable = [
-    { key: "presetInstructions", text: layers.presetInstructions, max: 3000 },
-    { key: "personalization", text: layers.personalization, max: CONTEXT_BUDGET.maxPersonalizationChars },
-    { key: "globalMemory", text: layers.globalMemory, max: CONTEXT_BUDGET.maxMemoryChars },
     { key: "projectInstructions", text: layers.projectInstructions, max: CONTEXT_BUDGET.maxProjectInstructionsChars },
+    { key: "globalMemory", text: layers.globalMemory, max: CONTEXT_BUDGET.maxMemoryChars },
     { key: "projectMemory", text: layers.projectMemory, max: CONTEXT_BUDGET.maxMemoryChars },
     { key: "knowledge", text: layers.knowledge, max: CONTEXT_BUDGET.maxKnowledgeChars },
     { key: "chatSummary", text: layers.chatSummary, max: CONTEXT_BUDGET.maxSummaryChars },
@@ -234,13 +215,12 @@ export function assembleInstructions(layers: {
 
   const sectionTitles: Record<string, string> = {
     runtimePolicy: "Runtime Policy",
-    agentInstructions: "Global Agent Instructions",
-    presetInstructions: "Preset instructions",
-    personalization: "Personalization",
-    globalMemory: "Global memory",
+    productMission: "Product Mission",
+    agentInstructions: "Agent Operating Instructions",
     projectInstructions: "Project instructions",
-    projectMemory: "Project memory",
-    knowledge: "Relevant knowledge (partial retrieval — use search_knowledge for more)",
+    globalMemory: "Evidence-backed global memory",
+    projectMemory: "Evidence-backed project memory",
+    knowledge: "Relevant knowledge / source evidence (partial retrieval)",
     chatSummary: "Chat summary",
   };
 
@@ -273,10 +253,8 @@ export function assembleInstructions(layers: {
 export function buildAgentContext(sources: ContextSources): AgentContext {
   const globalMemory = sources.memory.filter((item) => item.scope === "global");
   const projectMemory = sources.memory.filter((item) => item.scope === "project");
-  const personalizationBlock = buildPersonalizationBlock(sources.preferences?.personalization);
-  const presetBlock = buildPresetBlock(sources.preset);
   const projectBlock = buildProjectBlock(sources.project);
-  const agentInstructionsText = sources.agentConfig?.system_prompt ?? "";
+  const agentInstructionsText = DEFAULT_GLOBAL_AGENT_INSTRUCTIONS;
 
   const prior = sources.recentMessages.filter((message) => message.id !== sources.currentMessage.id);
   const history = historyToAgentMessages(prior);
@@ -286,9 +264,8 @@ export function buildAgentContext(sources: ContextSources): AgentContext {
 
   const instructions = assembleInstructions({
     runtimePolicy: AGENT_RUNTIME_POLICY,
+    productMission: PRODUCT_MISSION,
     agentInstructions: agentInstructionsText,
-    presetInstructions: presetBlock.text,
-    personalization: personalizationBlock.text,
     globalMemory: formatMemoryItems(globalMemory),
     projectInstructions: projectInstructionsText(projectBlock),
     projectMemory: formatMemoryItems(projectMemory),
@@ -299,9 +276,11 @@ export function buildAgentContext(sources: ContextSources): AgentContext {
   const currentText = extractMessageText(current.message);
   const manifest: ContextManifest = {
     runtime_policy_version: AGENT_RUNTIME_POLICY_VERSION,
-    agent_config_id: sources.agentConfig?.id ?? null,
-    agent_config_version: sources.agentConfig?.version ?? null,
-    personalization_present: personalizationBlock.present,
+    product_mission_version: PRODUCT_MISSION_VERSION,
+    agent_operating_instructions_version: AGENT_OPERATING_INSTRUCTIONS_VERSION,
+    agent_config_id: null,
+    agent_config_version: null,
+    personalization_present: false,
     global_memory_items: globalMemory.length,
     project_id: sources.project?.id ?? null,
     project_memory_items: projectMemory.length,
@@ -309,22 +288,19 @@ export function buildAgentContext(sources: ContextSources): AgentContext {
     chat_messages: history.length,
     current_user_message_chars: currentText.length,
     model: sources.modelId,
-    preset_id: presetBlock.presetId,
+    preset_id: null,
   };
 
   return {
     runtimePolicy: { version: AGENT_RUNTIME_POLICY_VERSION, text: AGENT_RUNTIME_POLICY },
+    productMission: { version: PRODUCT_MISSION_VERSION, text: PRODUCT_MISSION },
     agentInstructions: {
-      configId: sources.agentConfig?.id ?? null,
-      version: sources.agentConfig?.version ?? null,
+      configId: null,
+      version: Number(AGENT_OPERATING_INSTRUCTIONS_VERSION),
       text: agentInstructionsText,
     },
-    presetInstructions: {
-      presetId: presetBlock.presetId,
-      presetName: presetBlock.presetName,
-      text: presetBlock.text,
-    },
-    personalization: personalizationBlock.fields,
+    presetInstructions: { presetId: null, presetName: null, text: "" },
+    personalization: {},
     globalMemory,
     projectInstructions: projectBlock,
     projectMemory,
@@ -358,65 +334,35 @@ export function assembleSystemPrompt(sources: ContextSources): string {
 }
 
 export function buildContextPreview(context: AgentContext): ContextLayerPreview[] {
-  const personalizationText = [
-    context.personalization.aboutMe ? `About user: ${context.personalization.aboutMe}` : "",
-    context.personalization.communicationStyle ? `Style: ${context.personalization.communicationStyle}` : "",
-    context.personalization.preferredLanguage ? `Language: ${context.personalization.preferredLanguage}` : "",
-    context.personalization.behaviorPreferences ?? "",
-  ]
-    .filter(Boolean)
-    .join("\n");
-
   const projectText = context.projectInstructions.absentNote ?? projectInstructionsText(context.projectInstructions);
 
   return [
     {
       id: "runtimePolicy",
-      title: "Runtime Policy",
-      source: `AI Content Factory Runtime Policy v${context.runtimePolicy.version}`,
+      title: "Technical Runtime Policy",
+      source: `Runtime Policy v${context.runtimePolicy.version}`,
       present: true,
       editable: false,
       charCount: context.runtimePolicy.text.length,
       text: context.runtimePolicy.text,
     },
     {
+      id: "productMission",
+      title: "Product Mission",
+      source: `Product Constitution layer v${context.productMission.version}`,
+      present: true,
+      editable: false,
+      charCount: context.productMission.text.length,
+      text: context.productMission.text,
+    },
+    {
       id: "agentInstructions",
-      title: "Agent Instructions",
-      source: context.agentInstructions.configId
-        ? `Global Agent Instructions v${context.agentInstructions.version ?? 1}`
-        : "Global Agent Instructions (default)",
-      present: !!context.agentInstructions.text.trim(),
-      editable: true,
+      title: "Agent Operating Instructions",
+      source: `Code-controlled v${context.agentInstructions.version ?? 1}`,
+      present: true,
+      editable: false,
       charCount: context.agentInstructions.text.length,
       text: context.agentInstructions.text,
-    },
-    {
-      id: "presetInstructions",
-      title: "Preset instructions",
-      source: context.presetInstructions.presetName ?? "No preset",
-      present: !!context.presetInstructions.text.trim(),
-      editable: false,
-      charCount: context.presetInstructions.text.length,
-      text: context.presetInstructions.text || undefined,
-    },
-    {
-      id: "personalization",
-      title: "Personalization",
-      source: "User preferences",
-      present: !!personalizationText.trim(),
-      editable: true,
-      charCount: personalizationText.length,
-      text: personalizationText || undefined,
-    },
-    {
-      id: "globalMemory",
-      title: "Global Memory",
-      source: "Settings → Memory",
-      present: context.globalMemory.length > 0,
-      editable: true,
-      charCount: formatMemoryItems(context.globalMemory).length,
-      itemCount: context.globalMemory.length,
-      text: formatMemoryItems(context.globalMemory) || undefined,
     },
     {
       id: "projectInstructions",
@@ -428,18 +374,28 @@ export function buildContextPreview(context: AgentContext): ContextLayerPreview[
       text: projectText || undefined,
     },
     {
+      id: "globalMemory",
+      title: "Evidence-backed Global Memory",
+      source: "Memory / Learnings",
+      present: context.globalMemory.length > 0,
+      editable: false,
+      charCount: formatMemoryItems(context.globalMemory).length,
+      itemCount: context.globalMemory.length,
+      text: formatMemoryItems(context.globalMemory) || undefined,
+    },
+    {
       id: "projectMemory",
-      title: "Project Memory",
-      source: context.projectInstructions.projectId ? "Project memory" : "No project",
+      title: "Evidence-backed Project Memory",
+      source: context.projectInstructions.projectId ? "Project learnings" : "No project",
       present: context.projectMemory.length > 0,
-      editable: true,
+      editable: false,
       charCount: formatMemoryItems(context.projectMemory).length,
       itemCount: context.projectMemory.length,
       text: formatMemoryItems(context.projectMemory) || undefined,
     },
     {
       id: "knowledge",
-      title: "Knowledge",
+      title: "Knowledge / Source Evidence",
       source: "Retrieved chunks",
       present: context.retrievedKnowledge.length > 0,
       editable: false,
