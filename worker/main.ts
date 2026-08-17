@@ -182,6 +182,7 @@ async function processClaimedDelivery(input: {
           workflowVersion: claimed.workflowVersion,
           currentStage: claimed.currentStage,
           state: claimed.state,
+          retryCount: claimed.retryCount,
           signal: controller.signal,
         });
       } catch (error) {
