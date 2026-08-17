@@ -13,6 +13,7 @@ export interface WorkflowTickContext {
   workflowVersion: number;
   currentStage: string | null;
   state: Record<string, unknown>;
+  retryCount: number;
   signal: AbortSignal;
 }
 
