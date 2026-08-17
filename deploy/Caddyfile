@@ -1,0 +1,27 @@
+# Production reverse proxy — access via VPS IP on port 80.
+# Domain/TLS will be configured in a follow-up step.
+
+:80 {
+	encode gzip zstd
+
+	# Knowledge server-side upload (PATCH) allows up to 15 MiB; keep headroom.
+	request_body {
+		max_size 20MB
+	}
+
+	reverse_proxy app:3000 {
+		# SSE chat streaming and long-running API routes (asset-ingest up to 300s).
+		flush_interval -1
+
+		transport http {
+			dial_timeout 10s
+			read_timeout 6m
+			write_timeout 6m
+		}
+	}
+
+	log {
+		output stdout
+		format console
+	}
+}

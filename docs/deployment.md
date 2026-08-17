@@ -1,5 +1,13 @@
 # Deployment
 
+## Docker (production VPS)
+
+Primary production target: Ubuntu 26.04 VPS with Docker Compose + Caddy.
+
+See **[docs/docker-deployment.md](./docker-deployment.md)** for the full migration report, env list, VPS layout, and GitHub Actions SSH deploy.
+
+Vercel deployment below remains active until URL cutover is confirmed.
+
 ## Supabase
 
 1. Create project

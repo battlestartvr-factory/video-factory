@@ -20,6 +20,7 @@ const securityHeaders = [
 ];
 
 const nextConfig: NextConfig = {
+  output: "standalone",
   serverExternalPackages: ["file-type"],
   experimental: {
     middlewareClientMaxBodySize: "16mb",

@@ -1,0 +1,44 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL}
+        NEXT_PUBLIC_SUPABASE_ANON_KEY: ${NEXT_PUBLIC_SUPABASE_ANON_KEY}
+    image: video-factory-app:latest
+    env_file:
+      - ${AI_FACTORY_ENV_FILE:-/opt/ai-factory/.env}
+    environment:
+      HOSTNAME: "0.0.0.0"
+      PORT: "3000"
+      NODE_ENV: production
+      AI_FACTORY_DATA_ROOT: /srv/ai-factory
+    volumes:
+      - ${AI_FACTORY_DATA_ROOT:-/srv/ai-factory}:/srv/ai-factory
+    expose:
+      - "3000"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:3000/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2.10.2-alpine
+    ports:
+      - "80:80"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      app:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  caddy_data:
+  caddy_config:
