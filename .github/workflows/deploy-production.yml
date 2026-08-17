@@ -38,18 +38,37 @@ jobs:
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
           DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
           DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_SSH_KEY_B64: ${{ secrets.DEPLOY_SSH_KEY_B64 }}
           DEPLOY_COMMIT: ${{ steps.commit.outputs.sha }}
         run: |
           set -euo pipefail
 
-          if [[ -z "${DEPLOY_HOST:-}" || -z "${DEPLOY_USER:-}" || -z "${DEPLOY_SSH_KEY:-}" ]]; then
-            echo "DEPLOY_HOST, DEPLOY_USER, and DEPLOY_SSH_KEY secrets are required." >&2
+          if [[ -z "${DEPLOY_HOST:-}" || -z "${DEPLOY_USER:-}" ]]; then
+            echo "DEPLOY_HOST and DEPLOY_USER secrets are required." >&2
+            exit 1
+          fi
+
+          if [[ -z "${DEPLOY_SSH_KEY_B64:-}" && -z "${DEPLOY_SSH_KEY:-}" ]]; then
+            echo "Set DEPLOY_SSH_KEY_B64 (recommended) or DEPLOY_SSH_KEY." >&2
             exit 1
           fi
 
           install -m 700 -d ~/.ssh
-          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
+
+          if [[ -n "${DEPLOY_SSH_KEY_B64:-}" ]]; then
+            printf '%s' "$DEPLOY_SSH_KEY_B64" | base64 --decode > ~/.ssh/deploy_key
+          else
+            # Normalize Windows CRLF if the multiline secret was copied from Windows.
+            printf '%s\n' "$DEPLOY_SSH_KEY" | tr -d '\r' > ~/.ssh/deploy_key
+          fi
           chmod 600 ~/.ssh/deploy_key
+
+          # Fail early with a clear message if the secret is not a valid private key.
+          if ! ssh-keygen -y -f ~/.ssh/deploy_key >/dev/null 2>&1; then
+            echo "The deploy SSH secret is not a valid OpenSSH private key." >&2
+            echo "Use DEPLOY_SSH_KEY_B64 to preserve the key exactly." >&2
+            exit 1
+          fi
 
           ssh -i ~/.ssh/deploy_key \
             -o StrictHostKeyChecking=accept-new \
