@@ -55,14 +55,51 @@ export class ProviderTaskRepository {
     ) {
       throw new Error("Invalid orchestrator_prepare_provider_task response");
     }
+
+    let status = row.status;
+    const externalTaskId =
+      typeof row.external_task_id === "string" ? row.external_task_id : null;
+    let submissionAttempts =
+      typeof row.submission_attempts === "number" ? row.submission_attempts : 0;
+    let shouldSubmit = row.should_submit === true;
+
+    // Newer Stage 3 databases split durable preparation from the irreversible provider
+    // side effect. A crash after prepare but before this permit claim leaves the row in
+    // `queued`, so recovery may safely claim the one submit permit. Once the row reaches
+    // `submitting`, automatic resubmission is never granted again.
+    if (!externalTaskId && status === "queued") {
+      const { data: beginData, error: beginError } = await this.rpcClient.rpc(
+        "orchestrator_begin_provider_submit",
+        {
+          p_provider_task_id: row.provider_task_id,
+          p_job_id: input.jobId,
+          p_worker_id: input.workerId,
+          p_lease_token: input.leaseToken,
+        },
+      );
+      if (beginError) {
+        throw new Error(`Failed to claim provider submit permit: ${beginError.message}`);
+      }
+      const beginRow = requireRpcObject(beginData, "orchestrator_begin_provider_submit");
+      if (typeof beginRow.status !== "string") {
+        throw new Error("Invalid orchestrator_begin_provider_submit response");
+      }
+      status = beginRow.status;
+      submissionAttempts =
+        typeof beginRow.submission_attempts === "number"
+          ? beginRow.submission_attempts
+          : submissionAttempts;
+      shouldSubmit = beginRow.should_submit === true;
+    }
+
     return {
       providerTaskId: row.provider_task_id,
       stageId: row.stage_id,
-      status: row.status,
-      externalTaskId: typeof row.external_task_id === "string" ? row.external_task_id : null,
+      status,
+      externalTaskId,
       callbackToken: row.callback_token,
-      submissionAttempts: typeof row.submission_attempts === "number" ? row.submission_attempts : 0,
-      shouldSubmit: row.should_submit === true,
+      submissionAttempts,
+      shouldSubmit,
     };
   }
 
