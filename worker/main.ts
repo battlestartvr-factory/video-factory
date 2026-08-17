@@ -1,0 +1,321 @@
+import { setTimeout as sleep } from "node:timers/promises";
+import { OrchestratorRepository, type ClaimedJob } from "../lib/orchestrator/repository";
+import { PgmqQueueAdapter } from "../lib/orchestrator/queue/pgmq";
+import type { QueueDelivery } from "../lib/orchestrator/queue/types";
+import { loadWorkerConfig, type WorkerConfig } from "./config";
+import { workerLog } from "./log";
+import { createWorkerRpcClient } from "./rpc-client";
+import { getWorkflowHandler, listRegisteredWorkflows } from "./workflows/registry";
+import type { WorkflowTickOutcome } from "./workflows/types";
+
+function errorPayload(error: unknown): Record<string, unknown> {
+  if (error instanceof Error) {
+    return { code: "WORKFLOW_TICK_FAILED", message: error.message, name: error.name };
+  }
+  return { code: "WORKFLOW_TICK_FAILED", message: String(error) };
+}
+
+async function safeAck(
+  queue: PgmqQueueAdapter,
+  delivery: QueueDelivery,
+  fields: Record<string, unknown>,
+): Promise<void> {
+  try {
+    const archived = await queue.ack(delivery.msgId);
+    workerLog(archived ? "info" : "warn", "orchestrator.queue.ack", {
+      ...fields,
+      queue_msg_id: delivery.msgId,
+      archived,
+    });
+  } catch (error) {
+    workerLog("error", "orchestrator.queue.ack_failed", {
+      ...fields,
+      queue_msg_id: delivery.msgId,
+      error: errorPayload(error),
+    });
+  }
+}
+
+async function processClaimedDelivery(input: {
+  delivery: QueueDelivery;
+  claimed: ClaimedJob;
+  repository: OrchestratorRepository;
+  queue: PgmqQueueAdapter;
+  config: WorkerConfig;
+  setActiveAbort: (controller: AbortController | null) => void;
+  isStopping: () => boolean;
+}): Promise<void> {
+  const { delivery, claimed, repository, queue, config } = input;
+  const fields = {
+    worker_id: config.workerId,
+    job_id: claimed.jobId,
+    workflow_kind: claimed.workflowKind,
+    workflow_version: claimed.workflowVersion,
+    queue_msg_id: delivery.msgId,
+    queue_read_count: delivery.readCount,
+    trace_id: delivery.message.trace_id,
+    recovered: claimed.recovered,
+  };
+
+  const controller = new AbortController();
+  input.setActiveAbort(controller);
+  let leaseLost = false;
+  let heartbeatInFlight = false;
+
+  const heartbeat = async () => {
+    if (heartbeatInFlight || leaseLost || controller.signal.aborted) return;
+    heartbeatInFlight = true;
+    try {
+      const result = await repository.heartbeatJob({
+        jobId: claimed.jobId,
+        workerId: config.workerId,
+        leaseToken: claimed.leaseToken,
+        msgId: delivery.msgId,
+        leaseSeconds: config.leaseSeconds,
+        visibilitySeconds: config.visibilitySeconds,
+      });
+      if (!result.renewed) {
+        leaseLost = true;
+        controller.abort(new Error(result.reason ?? "lease_not_renewed"));
+        workerLog("warn", "orchestrator.job.lease_lost", { ...fields, reason: result.reason });
+      }
+    } catch (error) {
+      leaseLost = true;
+      controller.abort(error instanceof Error ? error : new Error(String(error)));
+      workerLog("error", "orchestrator.job.heartbeat_failed", {
+        ...fields,
+        error: errorPayload(error),
+      });
+    } finally {
+      heartbeatInFlight = false;
+    }
+  };
+
+  const heartbeatTimer = setInterval(() => void heartbeat(), config.leaseHeartbeatMs);
+
+  try {
+    const handler = getWorkflowHandler(claimed.workflowKind, claimed.workflowVersion);
+    let outcome: WorkflowTickOutcome;
+
+    if (!handler) {
+      outcome = {
+        status: "failed",
+        state: claimed.state,
+        currentStage: claimed.currentStage,
+        error: {
+          code: "WORKFLOW_NOT_REGISTERED",
+          message: `No handler for ${claimed.workflowKind}@${claimed.workflowVersion}`,
+        },
+        stateReason: "workflow_not_registered",
+        eventType: "job.failed",
+      };
+    } else {
+      try {
+        outcome = await handler({
+          jobId: claimed.jobId,
+          workflowKind: claimed.workflowKind,
+          workflowVersion: claimed.workflowVersion,
+          currentStage: claimed.currentStage,
+          state: claimed.state,
+          signal: controller.signal,
+        });
+      } catch (error) {
+        if (controller.signal.aborted || input.isStopping()) {
+          workerLog("warn", "orchestrator.job.tick_abandoned", {
+            ...fields,
+            reason: "shutdown_or_lease_loss",
+          });
+          return;
+        }
+        outcome = {
+          status: "failed",
+          state: claimed.state,
+          currentStage: claimed.currentStage,
+          error: errorPayload(error),
+          stateReason: "workflow_tick_failed",
+          eventType: "job.failed",
+        };
+      }
+    }
+
+    if (leaseLost || controller.signal.aborted || input.isStopping()) {
+      workerLog("warn", "orchestrator.job.commit_skipped", {
+        ...fields,
+        reason: leaseLost ? "lease_lost" : "shutdown",
+      });
+      return;
+    }
+
+    const finished = await repository.finishTick({
+      jobId: claimed.jobId,
+      workerId: config.workerId,
+      leaseToken: claimed.leaseToken,
+      newStatus: outcome.status,
+      state: outcome.state,
+      currentStage: outcome.currentStage,
+      progress: outcome.progress,
+      nextActionAt: outcome.nextActionAt,
+      result: outcome.result,
+      error: outcome.error,
+      stateReason: outcome.stateReason,
+      eventType: outcome.eventType,
+      eventPayload: {
+        ...(outcome.eventPayload ?? {}),
+        trace_id: delivery.message.trace_id,
+      },
+      enqueueReason: outcome.enqueueReason,
+      traceId: delivery.message.trace_id,
+    });
+
+    if (!finished.success) {
+      workerLog("warn", "orchestrator.job.commit_rejected", {
+        ...fields,
+        reason: finished.reason,
+      });
+      return;
+    }
+
+    workerLog("info", "orchestrator.job.tick_committed", {
+      ...fields,
+      status: outcome.status,
+      next_action_at: finished.nextActionAt,
+      next_queue_msg_id: finished.queueMsgId,
+    });
+    await safeAck(queue, delivery, fields);
+  } finally {
+    clearInterval(heartbeatTimer);
+    input.setActiveAbort(null);
+  }
+}
+
+export async function runWorker(): Promise<void> {
+  const config = loadWorkerConfig();
+  const rpcClient = createWorkerRpcClient(config.supabaseUrl, config.serviceRoleKey);
+  const repository = new OrchestratorRepository(rpcClient);
+  const queue = new PgmqQueueAdapter(rpcClient);
+  let stopping = false;
+  let activeAbort: AbortController | null = null;
+
+  const stop = (signal: string) => {
+    if (stopping) return;
+    stopping = true;
+    workerLog("warn", "orchestrator.worker.stopping", {
+      worker_id: config.workerId,
+      signal,
+    });
+    activeAbort?.abort(new Error(`worker shutdown: ${signal}`));
+  };
+
+  process.on("SIGTERM", () => stop("SIGTERM"));
+  process.on("SIGINT", () => stop("SIGINT"));
+
+  await repository.heartbeatWorker({
+    workerId: config.workerId,
+    buildSha: config.buildSha,
+    metadata: { workflows: listRegisteredWorkflows(), pid: process.pid },
+  });
+
+  const workerHeartbeatTimer = setInterval(() => {
+    void repository
+      .heartbeatWorker({
+        workerId: config.workerId,
+        buildSha: config.buildSha,
+        metadata: { workflows: listRegisteredWorkflows(), pid: process.pid },
+      })
+      .catch((error) =>
+        workerLog("error", "orchestrator.worker.heartbeat_failed", {
+          worker_id: config.workerId,
+          error: errorPayload(error),
+        }),
+      );
+  }, config.workerHeartbeatMs);
+
+  workerLog("info", "orchestrator.worker.started", {
+    worker_id: config.workerId,
+    build_sha: config.buildSha,
+    workflows: listRegisteredWorkflows(),
+    lease_seconds: config.leaseSeconds,
+    visibility_seconds: config.visibilitySeconds,
+  });
+
+  try {
+    while (!stopping) {
+      let deliveries: QueueDelivery[];
+      try {
+        deliveries = await queue.read({
+          visibilitySeconds: config.visibilitySeconds,
+          quantity: 1,
+        });
+      } catch (error) {
+        workerLog("error", "orchestrator.queue.read_failed", {
+          worker_id: config.workerId,
+          error: errorPayload(error),
+        });
+        await sleep(Math.max(config.queuePollMs, 2000));
+        continue;
+      }
+
+      if (!deliveries.length) {
+        await sleep(config.queuePollMs);
+        continue;
+      }
+
+      for (const delivery of deliveries) {
+        if (stopping) break;
+        const baseFields = {
+          worker_id: config.workerId,
+          job_id: delivery.message.job_id,
+          queue_msg_id: delivery.msgId,
+          queue_read_count: delivery.readCount,
+          trace_id: delivery.message.trace_id,
+          reason: delivery.message.reason,
+        };
+
+        let claim;
+        try {
+          claim = await repository.claimJob(
+            delivery.message.job_id,
+            config.workerId,
+            config.leaseSeconds,
+          );
+        } catch (error) {
+          workerLog("error", "orchestrator.job.claim_failed", {
+            ...baseFields,
+            error: errorPayload(error),
+          });
+          continue;
+        }
+
+        if (!claim.claimed) {
+          workerLog("info", "orchestrator.job.delivery_skipped", {
+            ...baseFields,
+            reason: claim.reason,
+            status: claim.status,
+          });
+          await safeAck(queue, delivery, baseFields);
+          continue;
+        }
+
+        await processClaimedDelivery({
+          delivery,
+          claimed: claim,
+          repository,
+          queue,
+          config,
+          setActiveAbort: (controller) => {
+            activeAbort = controller;
+          },
+          isStopping: () => stopping,
+        });
+      }
+    }
+  } finally {
+    clearInterval(workerHeartbeatTimer);
+    workerLog("info", "orchestrator.worker.stopped", { worker_id: config.workerId });
+  }
+}
+
+void runWorker().catch((error) => {
+  workerLog("error", "orchestrator.worker.fatal", { error: errorPayload(error) });
+  process.exitCode = 1;
+});
