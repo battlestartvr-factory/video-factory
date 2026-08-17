@@ -32,11 +32,10 @@ interface ContextPreviewResponse {
 interface ContextInspectorProps {
   chatId: string;
   modelId?: string;
-  presetId?: string;
   draftContent?: string;
 }
 
-export function ContextInspector({ chatId, modelId, presetId, draftContent }: ContextInspectorProps) {
+export function ContextInspector({ chatId, modelId, draftContent }: ContextInspectorProps) {
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [data, setData] = useState<ContextPreviewResponse | null>(null);
@@ -47,7 +46,6 @@ export function ContextInspector({ chatId, modelId, presetId, draftContent }: Co
     try {
       const params = new URLSearchParams();
       if (modelId) params.set("modelId", modelId);
-      if (presetId) params.set("presetId", presetId);
       if (draftContent?.trim()) params.set("content", draftContent.trim());
       const res = await fetch(`/api/chats/${chatId}/context-preview?${params.toString()}`);
       const json = await res.json();
@@ -55,7 +53,7 @@ export function ContextInspector({ chatId, modelId, presetId, draftContent }: Co
     } finally {
       setLoading(false);
     }
-  }, [chatId, modelId, presetId, draftContent]);
+  }, [chatId, modelId, draftContent]);
 
   const openInspector = () => {
     setOpen(true);
@@ -116,44 +114,44 @@ export function ContextInspector({ chatId, modelId, presetId, draftContent }: Co
                     </div>
                   ) : null}
                   <ul className="space-y-2">
-                  {data.layers.map((layer) => {
-                    const canExpand = layer.present && layer.text && layer.id !== "runtimePolicy";
-                    const isExpanded = expanded[layer.id];
-                    return (
-                      <li key={layer.id} className="rounded-lg border border-border-subtle bg-surface-hover/40">
-                        <button
-                          type="button"
-                          className="flex w-full items-start gap-2 px-3 py-2 text-left text-sm"
-                          onClick={() => (canExpand || layer.id === "runtimePolicy" ? toggleLayer(layer.id) : undefined)}
-                          disabled={!layer.text}
-                        >
-                          {(canExpand || layer.id === "runtimePolicy") && layer.text ? (
-                            isExpanded ? (
-                              <ChevronDown className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+                    {data.layers.map((layer) => {
+                      const canExpand = layer.present && layer.text;
+                      const isExpanded = expanded[layer.id];
+                      return (
+                        <li key={layer.id} className="rounded-lg border border-border-subtle bg-surface-hover/40">
+                          <button
+                            type="button"
+                            className="flex w-full items-start gap-2 px-3 py-2 text-left text-sm"
+                            onClick={() => (canExpand ? toggleLayer(layer.id) : undefined)}
+                            disabled={!layer.text}
+                          >
+                            {canExpand && layer.text ? (
+                              isExpanded ? (
+                                <ChevronDown className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+                              ) : (
+                                <ChevronRight className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+                              )
                             ) : (
-                              <ChevronRight className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
-                            )
-                          ) : (
-                            <span className="w-4 shrink-0" />
-                          )}
-                          <span className="flex-1">
-                            <span className="font-medium">{layer.title}</span>
-                            <span className="mt-0.5 block text-xs text-muted-foreground">
-                              {layer.present ? "✓" : "—"} {layer.source}
-                              {layer.itemCount != null ? ` · ${layer.itemCount} записей` : ""}
-                              {layer.charCount > 0 ? ` · ${layer.charCount.toLocaleString("ru-RU")} символов` : ""}
+                              <span className="w-4 shrink-0" />
+                            )}
+                            <span className="flex-1">
+                              <span className="font-medium">{layer.title}</span>
+                              <span className="mt-0.5 block text-xs text-muted-foreground">
+                                {layer.present ? "✓" : "—"} {layer.source}
+                                {layer.itemCount != null ? ` · ${layer.itemCount} записей` : ""}
+                                {layer.charCount > 0 ? ` · ${layer.charCount.toLocaleString("ru-RU")} символов` : ""}
+                              </span>
                             </span>
-                          </span>
-                        </button>
-                        {isExpanded && layer.text ? (
-                          <pre className="max-h-48 overflow-auto whitespace-pre-wrap border-t border-border-subtle px-3 py-2 text-xs text-muted-foreground">
-                            {layer.text}
-                          </pre>
-                        ) : null}
-                      </li>
-                    );
-                  })}
-                </ul>
+                          </button>
+                          {isExpanded && layer.text ? (
+                            <pre className="max-h-48 overflow-auto whitespace-pre-wrap border-t border-border-subtle px-3 py-2 text-xs text-muted-foreground">
+                              {layer.text}
+                            </pre>
+                          ) : null}
+                        </li>
+                      );
+                    })}
+                  </ul>
                 </>
               ) : (
                 <p className="text-sm text-muted-foreground">{t("common.error")}</p>
