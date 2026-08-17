@@ -140,6 +140,8 @@ export interface CreateCreativeRunInput {
   usage?: Record<string, unknown>;
   estimatedCostUsd?: number | null;
   actualCostUsd?: number | null;
+  errorCode?: string | null;
+  errorMessage?: string | null;
   metadata?: Record<string, unknown>;
   startedAt?: string | null;
   completedAt?: string | null;
