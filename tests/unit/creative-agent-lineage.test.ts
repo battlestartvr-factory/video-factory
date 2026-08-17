@@ -4,6 +4,7 @@ import {
   dedupeSourceCitations,
   inferCreativeRunType,
   sanitizeGenerationCard,
+  sanitizeSourceUrl,
 } from "@/lib/creative/agent-lineage";
 import type { GenerationCardData, MessageMetadata } from "@/lib/types/workspace";
 
@@ -46,24 +47,30 @@ describe("creative agent lineage mapping", () => {
     expect(collectGenerationCards(metadata)[0]?.generationId).toBe("gen-image-1");
   });
 
-  it("strips query credentials from generation output URLs before lineage storage", () => {
+  it("strips ephemeral query data from generated asset URLs", () => {
     const sanitized = sanitizeGenerationCard(imageGeneration);
     expect(sanitized.outputs).toEqual([
       { kind: "image", url: "https://cdn.example.com/result.png" },
     ]);
   });
 
-  it("deduplicates equivalent source citations after URL sanitization", () => {
+  it("redacts source credentials without removing meaningful query parameters", () => {
+    expect(
+      sanitizeSourceUrl("https://youtube.com/watch?v=abc123&token=secret"),
+    ).toBe("https://youtube.com/watch?v=abc123&token=[redacted]");
+  });
+
+  it("deduplicates source citations that differ only by a signed token", () => {
     const sources = dedupeSourceCitations([
       {
         source: "web",
         title: "Example",
-        url: "https://example.com/article?utm_source=one",
+        url: "https://example.com/article?id=42&token=one",
       },
       {
         source: "web",
         title: "Example",
-        url: "https://example.com/article?utm_source=two",
+        url: "https://example.com/article?id=42&token=two",
       },
     ]);
     expect(sources).toHaveLength(1);
