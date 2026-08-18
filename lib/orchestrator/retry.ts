@@ -31,14 +31,30 @@ export class DurableWorkflowError extends Error {
 
 const DEFAULT_BACKOFF_MS = [5_000, 20_000, 60_000, 180_000, 600_000] as const;
 
+/**
+ * Persistence failures are often marked retryable because an RPC transport can fail
+ * after the database commit and the next tick can reconcile persisted state. A
+ * deterministic PostgreSQL contract error is different: retrying cannot heal it and,
+ * for Stage 4, may cause the paid LLM stage immediately before persistence to run
+ * again. Fail closed instead of silently spending through the retry budget.
+ */
+function isDeterministicPersistenceContractError(error: DurableWorkflowError): boolean {
+  if (!error.code.endsWith("_PERSIST_FAILED")) return false;
+  const message = error.message.toLowerCase();
+  return message.includes("no unique or exclusion constraint matching the on conflict specification");
+}
+
 export function normalizeWorkflowError(error: unknown): DurableErrorShape {
   if (error instanceof DurableWorkflowError) {
+    const retrySuppressed = isDeterministicPersistenceContractError(error);
     return {
       code: error.code,
       message: error.message,
-      retryable: error.retryable,
-      retryAfterMs: error.retryAfterMs,
-      details: error.details,
+      retryable: retrySuppressed ? false : error.retryable,
+      retryAfterMs: retrySuppressed ? undefined : error.retryAfterMs,
+      details: retrySuppressed
+        ? { ...(error.details ?? {}), retry_suppressed: "deterministic_persistence_contract" }
+        : error.details,
     };
   }
 
