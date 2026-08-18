@@ -90,12 +90,15 @@ export class GenerationImageRepository {
     let persistedOutputs: DurableImageOutput[] = input.outputs;
     const archive = getDefaultMediaArchiveService();
     if (archive) {
+      const generation = await this.get(input.jobId);
+      if (!generation) throw new Error("Image generation not found while archiving output");
+
       const archived: DurableImageOutput[] = [];
       for (let index = 0; index < input.outputs.length; index += 1) {
         const output = input.outputs[index]!;
         archived.push(
           await archive.archive({
-            generationId: await this.generationIdForJob(input.jobId),
+            generationId: generation.id,
             outputIndex: index,
             sourceUrl: output.providerUrl ?? output.url,
             kind: "image",
@@ -111,12 +114,6 @@ export class GenerationImageRepository {
       p_outputs: persistedOutputs,
     });
     if (error) throw new Error(`Failed to complete image generation: ${error.message}`);
-  }
-
-  private async generationIdForJob(jobId: string): Promise<string> {
-    const generation = await this.get(jobId);
-    if (!generation) throw new Error("Image generation not found while archiving output");
-    return generation.id;
   }
 
   async fail(input: {
