@@ -13,6 +13,21 @@ function text(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
+function stringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string" && item.length > 0)
+    : [];
+}
+
+function recordArray(value: unknown): Array<Record<string, unknown>> {
+  return Array.isArray(value)
+    ? value.filter(
+        (item): item is Record<string, unknown> =>
+          !!item && typeof item === "object" && !Array.isArray(item),
+      )
+    : [];
+}
+
 function nextAt(delayMs: number): string {
   return new Date(Date.now() + delayMs).toISOString();
 }
@@ -23,6 +38,22 @@ function stableUuid(seed: string): string {
   bytes[8] = (bytes[8]! & 0x3f) | 0x80;
   const hex = bytes.toString("hex");
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+function revisionKey(state: Record<string, unknown>, shotIds: string[]): string {
+  const approvals = recordArray(state.reference_approvals)
+    .filter((item) => shotIds.includes(text(item.shotId) ?? ""))
+    .map((item) => ({
+      reviewId: text(item.reviewId),
+      generationId: text(item.generationId),
+      shotId: text(item.shotId),
+      decision: text(item.decision),
+      structuredFeedback: item.structuredFeedback ?? null,
+    }))
+    .sort((left, right) => String(left.shotId).localeCompare(String(right.shotId)));
+  return createHash("sha256")
+    .update(JSON.stringify({ shotIds: [...shotIds].sort(), approvals }))
+    .digest("hex");
 }
 
 function repositoryRuntime(context: WorkflowTickContext) {
@@ -121,7 +152,9 @@ export const gameDiscoveryBatchStage4V1: WorkflowTickHandler = async (context) =
           retryable: false,
         });
       }
-      const requestId = stableUuid(`stage4-reference:${context.jobId}:${shot.shotId}:v1`);
+      const requestId = stableUuid(
+        `stage4-reference:${context.jobId}:${shot.shotId}:r${visual.referenceRevisionNumber}`,
+      );
       try {
         const admission = await repository.createReferenceImage({
           rootJobId: context.jobId,
@@ -139,8 +172,8 @@ export const gameDiscoveryBatchStage4V1: WorkflowTickHandler = async (context) =
           factoryJobId: admission.factoryJobId,
         });
       } catch (error) {
-        // Stable request IDs make admission retry safe. If a database commit succeeded before
-        // transport failure, the next tick reconciles the root's persisted request map first.
+        // Stable request IDs include the revision number. A committed provider admission is
+        // reconciled from DB instead of spending again after transport/restart failure.
         throw persistenceError("REFERENCE_IMAGE_ADMISSION_FAILED", error);
       }
     }
@@ -154,6 +187,7 @@ export const gameDiscoveryBatchStage4V1: WorkflowTickHandler = async (context) =
       state: {
         ...context.state,
         reference_image_admissions: admissions,
+        reference_revision_number: visual.referenceRevisionNumber,
         reference_approval_required: true,
         video_generation_locked: true,
       },
@@ -162,6 +196,7 @@ export const gameDiscoveryBatchStage4V1: WorkflowTickHandler = async (context) =
       eventPayload: {
         admitted_count: admissions.length,
         expected_count: visual.shots.length,
+        reference_revision_number: visual.referenceRevisionNumber,
         image_model_policy: "shot_generation_plan",
         image_quality: "1K",
         video_generation_locked: true,
@@ -273,7 +308,8 @@ export const gameDiscoveryBatchStage4V1: WorkflowTickHandler = async (context) =
         status: "waiting",
         currentStage: "reference_revision_pending",
         progress: 86,
-        nextActionAt: null,
+        nextActionAt: new Date().toISOString(),
+        enqueueReason: "reference_revision",
         state: {
           ...context.state,
           reference_approvals: approvals.items,
@@ -356,17 +392,175 @@ export const gameDiscoveryBatchStage4V1: WorkflowTickHandler = async (context) =
   }
 
   if (context.currentStage === "reference_revision_pending") {
+    const services = shotRuntime(context);
+    const revisedShotIds = stringArray(context.state.revision_shot_ids);
+    if (!revisedShotIds.length) {
+      throw new DurableWorkflowError({
+        code: "REFERENCE_REVISION_SHOTS_MISSING",
+        message: "Reference revision stage has no revised shot IDs",
+        retryable: false,
+      });
+    }
+    const key = revisionKey(context.state, revisedShotIds);
+
+    let visual;
+    let planning;
+    let concepts;
+    let feedback;
+    try {
+      [visual, planning, concepts, feedback] = await Promise.all([
+        services.repository.getVisualStage({ rootCreativeRunId }),
+        services.repository.getPlanningStage({ rootCreativeRunId }),
+        services.repository.getConceptStage({ rootCreativeRunId }),
+        services.repository.getFeedbackMemory({ rootCreativeRunId }),
+      ]);
+    } catch (error) {
+      throw persistenceError("REFERENCE_REVISION_CONTEXT_LOAD_FAILED", error);
+    }
+
+    let prepared;
+    try {
+      prepared = await services.repository.prepareReferenceRevision({
+        rootCreativeRunId,
+        revisionKey: key,
+        shotIds: revisedShotIds,
+      });
+    } catch (error) {
+      throw persistenceError("REFERENCE_REVISION_PREPARE_FAILED", error);
+    }
+
+    if (
+      prepared.duplicate &&
+      visual.shotPlannerMetadata.reference_revision_key === key &&
+      visual.referenceRevisionNumber === prepared.revisionNumber
+    ) {
+      return {
+        status: "waiting",
+        currentStage: "reference_image_generation_pending",
+        progress: 75,
+        nextActionAt: new Date().toISOString(),
+        enqueueReason: "reference_revision_image_admission_resume",
+        state: {
+          ...context.state,
+          reference_revision_number: prepared.revisionNumber,
+          reference_approval_required: true,
+          video_generation_locked: true,
+        },
+        stateReason: "s4_005_reference_revision_planning_resumed",
+        eventType: "discovery.reference_revision_planning_resumed",
+      };
+    }
+
+    const revisedOldShots = visual.shots.filter((shot) => revisedShotIds.includes(shot.shotId));
+    const revisedMomentIds = new Set(revisedOldShots.map((shot) => shot.momentId));
+    const revisedMoments = planning.moments.filter((moment) => revisedMomentIds.has(moment.momentId));
+    if (revisedMoments.length !== revisedOldShots.length) {
+      throw new DurableWorkflowError({
+        code: "REFERENCE_REVISION_MOMENT_MISMATCH",
+        message: "Could not resolve all revised shots back to persisted gameplay moments",
+        retryable: false,
+      });
+    }
+    const revisedConceptIds = new Set(revisedMoments.map((moment) => moment.conceptId));
+    const revisedConcepts = concepts.acceptedConcepts.filter((concept) =>
+      revisedConceptIds.has(concept.conceptId),
+    );
+    if (revisedConcepts.length !== revisedConceptIds.size) {
+      throw new DurableWorkflowError({
+        code: "REFERENCE_REVISION_CONCEPT_MISMATCH",
+        message: "Could not resolve all revised moments back to persisted concepts",
+        retryable: false,
+      });
+    }
+
+    let replanned;
+    try {
+      replanned = await planGameplayShots({
+        llm: services.claude,
+        objective: objective.data,
+        concepts: revisedConcepts,
+        moments: revisedMoments,
+        feedbackMemory: feedback,
+        signal: context.signal,
+      });
+    } catch (error) {
+      if (error instanceof KieClaudeTaskError) {
+        throw new DurableWorkflowError({
+          code: "REFERENCE_REVISION_PROVIDER_FAILED",
+          message: error.message,
+          retryable: error.retryable,
+          retryAfterMs: error.retryable ? 5_000 : undefined,
+          details: { http_status: error.status },
+          cause: error,
+        });
+      }
+      if (context.signal.aborted) throw error;
+      throw new DurableWorkflowError({
+        code: "REFERENCE_REVISION_PLANNER_FAILED",
+        message: error instanceof Error ? error.message : String(error),
+        retryable: false,
+        cause: error,
+      });
+    }
+
+    const revisedPromptPlans = compileGameplayPromptPlans({
+      concepts: revisedConcepts,
+      moments: revisedMoments,
+      shots: replanned.shots,
+      feedbackMemory: feedback,
+    });
+    const revisedMomentIdSet = new Set(revisedMoments.map((moment) => moment.momentId));
+    const mergedShots = [
+      ...visual.shots.filter((shot) => !revisedMomentIdSet.has(shot.momentId)),
+      ...replanned.shots,
+    ];
+    const mergedPrompts = [
+      ...visual.promptPlans.filter((plan) => !revisedMomentIdSet.has(plan.momentId)),
+      ...revisedPromptPlans,
+    ];
+
+    try {
+      await services.repository.persistShotsAndPrompts({
+        jobId: context.jobId,
+        rootCreativeRunId,
+        result: {
+          ...replanned,
+          shots: mergedShots,
+        },
+        promptPlans: mergedPrompts,
+        revisionKey: key,
+        revisionNumber: prepared.revisionNumber,
+      });
+    } catch (error) {
+      throw persistenceError("REFERENCE_REVISION_PERSIST_FAILED", error);
+    }
+
     return {
       status: "waiting",
-      currentStage: "reference_revision_pending",
-      progress: 86,
-      nextActionAt: null,
+      currentStage: "reference_image_generation_pending",
+      progress: 75,
+      nextActionAt: new Date().toISOString(),
+      enqueueReason: "reference_revision_image_admission",
       state: {
         ...context.state,
+        gameplay_shots: mergedShots,
+        prompt_plans: mergedPrompts,
+        reference_revision_number: prepared.revisionNumber,
+        revision_shot_ids: replanned.shots.map((shot) => shot.shotId),
+        feedback_memory_applied: feedback,
+        reference_approval_required: true,
         video_generation_locked: true,
       },
-      stateReason: "s4_005_targeted_reference_revision_not_enabled_yet",
-      eventType: "discovery.reference_revision_parked",
+      stateReason: "s4_005_reference_revision_replanned_feedback_applied",
+      eventType: "discovery.reference_revision_replanned",
+      eventPayload: {
+        revision_number: prepared.revisionNumber,
+        previous_shot_ids: revisedShotIds,
+        new_shot_ids: replanned.shots.map((shot) => shot.shotId),
+        feedback_rule_count:
+          feedback.mustShow.length + feedback.mustAvoid.length + feedback.errorTags.length,
+        video_generation_locked: true,
+      },
     };
   }
 
@@ -432,9 +626,7 @@ export const gameDiscoveryBatchStage4V1: WorkflowTickHandler = async (context) =
 
   const selectedConceptIds = planning.selectedConceptIds.length
     ? planning.selectedConceptIds
-    : Array.isArray(context.state.selected_concept_ids)
-      ? context.state.selected_concept_ids.filter((value): value is string => typeof value === "string")
-      : [];
+    : stringArray(context.state.selected_concept_ids);
 
   const selectedConcepts = selectedConceptIds.map((conceptId) => {
     const concept = concepts.acceptedConcepts.find((item) => item.conceptId === conceptId);
