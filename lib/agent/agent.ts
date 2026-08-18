@@ -18,7 +18,14 @@ import {
   type StreamEventEmitter,
 } from "./stream-events";
 import type { AgentEvent, AgentMessage, AgentProvider, ToolContext } from "./types";
-import type { Chat, ChatMessage, GenerationCardData, MessageMetadata, SourceCitation } from "@/lib/types/workspace";
+import type {
+  Chat,
+  ChatMessage,
+  GenerationCardData,
+  MessageMetadata,
+  SourceCitation,
+  TaskCardData,
+} from "@/lib/types/workspace";
 
 export interface UniversalAgentInput {
   requestId: string;
@@ -86,6 +93,7 @@ export async function runUniversalAgent(input: UniversalAgentInput): Promise<Uni
   const events: AgentEvent[] = [];
   const generations: GenerationCardData[] = [];
   const sources: SourceCitation[] = [];
+  const tasks: TaskCardData[] = [];
 
   emit?.(streamEvent("message.accepted"));
 
@@ -305,6 +313,7 @@ export async function runUniversalAgent(input: UniversalAgentInput): Promise<Uni
       status,
       error_code: item.result.code,
       generation_id: item.result.generation?.generationId,
+      factory_job_id: item.result.task?.factoryJobId,
     });
     if (item.result.generation) {
       generations.push(item.result.generation);
@@ -322,6 +331,7 @@ export async function runUniversalAgent(input: UniversalAgentInput): Promise<Uni
         }),
       );
     }
+    if (item.result.task) tasks.push(item.result.task);
     if (item.result.sources?.length) sources.push(...item.result.sources);
   }
 
@@ -331,7 +341,7 @@ export async function runUniversalAgent(input: UniversalAgentInput): Promise<Uni
   let finalContent = loopResult.content;
   if (!finalContent) {
     finalContent =
-      generations.length || sources.length
+      generations.length || sources.length || tasks.length
         ? "Готово. Ниже — результаты выполнения."
         : loopResult.stopReason === "tool_limit"
           ? "Достигнут лимит шагов инструментов. Уточните задачу, и я продолжу."
@@ -341,7 +351,9 @@ export async function runUniversalAgent(input: UniversalAgentInput): Promise<Uni
   events.push(createAgentEvent("final", { status: "completed", label: "✓ Сформировал ответ" }));
 
   const metadata: MessageMetadata = {
-    type: generations.length ? "generation" : sources.length ? "sources" : "text",
+    type: tasks.length ? "task" : generations.length ? "generation" : sources.length ? "sources" : "text",
+    task: tasks[0],
+    tasks: tasks.length ? tasks : undefined,
     generation: generations[0],
     generations: generations.length ? generations : undefined,
     sources: sources.length ? sources : undefined,
@@ -379,7 +391,6 @@ export async function runUniversalAgent(input: UniversalAgentInput): Promise<Uni
       agentRunId,
     }),
   );
-  emit?.(streamEvent("agent.run.completed", { agentRunId, label: "✓ Сформировал ответ" }));
 
   return {
     content: finalContent,
@@ -392,16 +403,19 @@ export async function runUniversalAgent(input: UniversalAgentInput): Promise<Uni
 
 function providerNotConfiguredMessage(code: string): string {
   if (code === AGENT_ERROR_CODES.PROVIDER_NOT_CONFIGURED) {
-    return "AI-агент сейчас не настроен: не задан KIE_API_KEY (или AGENT_LLM_API_KEY). Сообщение сохранено, но ответ модели недоступен.";
+    return "AI-провайдер не настроен. Добавьте KIE_API_KEY в .env.local и перезапустите приложение.";
   }
-  return "Провайдер агента вернул ошибку.";
-}
-
-export async function attachAssistantToRun(agentRunId: string, assistantMessageId: string) {
-  if (!agentRunId) return;
-  const service = createSupabaseServiceClient();
-  await service
-    .from("agent_runs")
-    .update({ assistant_message_id: assistantMessageId })
-    .eq("id", agentRunId);
+  if (code === AGENT_ERROR_CODES.MODEL_UNAVAILABLE) {
+    return "Выбранная модель сейчас недоступна. Выберите другую модель.";
+  }
+  if (code === AGENT_ERROR_CODES.MODEL_CAPABILITY_MISSING || code === AGENT_ERROR_CODES.MODEL_CAPABILITY_MISMATCH) {
+    return "Выбранная модель не поддерживает этот тип запроса.";
+  }
+  if (code === AGENT_ERROR_CODES.INVALID_REASONING_LEVEL) {
+    return "Выбранный уровень рассуждения не поддерживается этой моделью.";
+  }
+  if (code === AGENT_ERROR_CODES.CLAUDE_REQUEST_INVALID) {
+    return "Claude отклонил запрос как некорректный. Проверьте формат вложений или выберите другую модель.";
+  }
+  return "Ошибка AI-провайдера. Повторите запрос.";
 }
