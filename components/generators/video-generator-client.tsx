@@ -26,6 +26,8 @@ import type { MediaQuality } from "@/lib/models/kie/types";
 import type { Generation } from "@/lib/types/workspace";
 import { cn } from "@/lib/utils";
 
+const DEFAULT_VIDEO_RATIOS = ["16:9", "9:16", "1:1"];
+const DEFAULT_VIDEO_DURATIONS = [5];
 const VIDEO_MODES = [
   { id: "text-to-video", label: "Text to Video", short: "Text", icon: Film },
   { id: "image-to-video", label: "Image to Video", short: "Image", icon: Images },
@@ -80,34 +82,25 @@ export function VideoGeneratorClient() {
 
   const effectiveModelId = modelId === "auto" ? DEFAULT_VIDEO_MODEL : modelId;
   const model = getModelById(effectiveModelId);
-  const aspectRatios = model?.capabilities.aspectRatios ?? ["16:9", "9:16", "1:1"];
+  const fallbackMode = VIDEO_MODES.find((item) => modeSupported(model, item.id))?.id ?? "text-to-video";
+  const effectiveMode = modeSupported(model, mode) ? mode : fallbackMode;
+  const aspectRatios = model?.capabilities.aspectRatios ?? DEFAULT_VIDEO_RATIOS;
   const resolutions = model?.capabilities.resolutions ?? [];
-  const durations = model?.capabilities.durations ?? [5];
+  const durations = model?.capabilities.durations ?? DEFAULT_VIDEO_DURATIONS;
   const referenceLimit = Math.max(1, model?.capabilities.maxReferenceImages ?? 4);
-
-  useEffect(() => {
-    if (modeSupported(model, mode)) return;
-    const fallback = VIDEO_MODES.find((item) => modeSupported(model, item.id));
-    if (fallback) setMode(fallback.id);
-  }, [mode, model]);
-
-  useEffect(() => {
-    if (!aspectRatios.includes(aspectRatio)) setAspectRatio(aspectRatios[0] ?? "16:9");
-  }, [aspectRatio, aspectRatios]);
-
-  useEffect(() => {
-    if (resolutions.length && !resolutions.includes(resolution)) setResolution(resolutions[0]);
-  }, [resolution, resolutions]);
-
-  useEffect(() => {
-    if (!durations.includes(duration)) setDuration(durations[0] ?? 5);
-  }, [duration, durations]);
+  const resolvedAspectRatio = aspectRatios.includes(aspectRatio)
+    ? aspectRatio
+    : (aspectRatios[0] ?? "16:9");
+  const resolvedResolution = resolutions.length && resolutions.includes(resolution)
+    ? resolution
+    : resolutions[0];
+  const resolvedDuration = durations.includes(duration) ? duration : (durations[0] ?? 5);
 
   const requiredInputsReady =
-    mode === "text-to-video" ||
-    (mode === "image-to-video" && startFrame.length > 0) ||
-    (mode === "start-end-frames" && startFrame.length > 0 && endFrame.length > 0) ||
-    (mode === "reference-to-video" && references.length > 0);
+    effectiveMode === "text-to-video" ||
+    (effectiveMode === "image-to-video" && startFrame.length > 0) ||
+    (effectiveMode === "start-end-frames" && startFrame.length > 0 && endFrame.length > 0) ||
+    (effectiveMode === "reference-to-video" && references.length > 0);
   const canGenerate = prompt.trim().length > 0 && requiredInputsReady && !generating;
 
   const loadHistory = useCallback(async (silent = false) => {
@@ -122,8 +115,19 @@ export function VideoGeneratorClient() {
   }, []);
 
   useEffect(() => {
-    void loadHistory();
-  }, [loadHistory]);
+    let cancelled = false;
+    fetch("/api/generations?type=video&limit=30", { cache: "no-store" })
+      .then((response) => response.json())
+      .then((payload) => {
+        if (!cancelled && payload.ok) setHistory(payload.data.generations ?? []);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const hasActiveGeneration = useMemo(
     () => history.some((generation) => ACTIVE_STATUSES.has(generation.status)),
@@ -142,13 +146,13 @@ export function VideoGeneratorClient() {
     setError(null);
 
     const referenceAssets = [
-      ...(mode === "image-to-video" || mode === "start-end-frames"
+      ...(effectiveMode === "image-to-video" || effectiveMode === "start-end-frames"
         ? startFrame.slice(0, 1).map((asset) => ({ ...asset, role: "start_frame" }))
         : []),
-      ...(mode === "start-end-frames"
+      ...(effectiveMode === "start-end-frames"
         ? endFrame.slice(0, 1).map((asset) => ({ ...asset, role: "end_frame" }))
         : []),
-      ...(mode === "reference-to-video"
+      ...(effectiveMode === "reference-to-video"
         ? references.slice(0, referenceLimit).map((asset) => ({ ...asset, role: "reference" }))
         : []),
     ].map((asset) => ({
@@ -165,13 +169,13 @@ export function VideoGeneratorClient() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           type: "video",
-          mode,
+          mode: effectiveMode,
           prompt: prompt.trim(),
           modelId,
           settings: {
-            aspectRatio,
-            ...(resolutions.length ? { resolution } : {}),
-            duration,
+            aspectRatio: resolvedAspectRatio,
+            ...(resolvedResolution ? { resolution: resolvedResolution } : {}),
+            duration: resolvedDuration,
             numOutputs: 1,
             quality,
             sound: Boolean(model?.capabilities.sound || model?.capabilities.audio) ? sound : false,
@@ -219,7 +223,7 @@ export function VideoGeneratorClient() {
                   onClick={() => supported && setMode(item.id)}
                   className={cn(
                     "flex min-w-0 flex-col items-center gap-1 rounded-lg px-1.5 py-2 text-[10px] font-medium transition",
-                    mode === item.id
+                    effectiveMode === item.id
                       ? "bg-surface text-foreground shadow-sm"
                       : "text-muted-foreground hover:text-foreground",
                     !supported && "cursor-not-allowed opacity-30",
@@ -248,7 +252,7 @@ export function VideoGeneratorClient() {
               </div>
             </div>
 
-            {mode === "image-to-video" ? (
+            {effectiveMode === "image-to-video" ? (
               <GeneratorAssetPicker
                 label="Start Frame"
                 hint="Первый кадр задаёт персонажа, композицию и визуальное направление ролика."
@@ -259,7 +263,7 @@ export function VideoGeneratorClient() {
               />
             ) : null}
 
-            {mode === "start-end-frames" ? (
+            {effectiveMode === "start-end-frames" ? (
               <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-1">
                 <GeneratorAssetPicker
                   label="Start Frame"
@@ -282,7 +286,7 @@ export function VideoGeneratorClient() {
               </div>
             ) : null}
 
-            {mode === "reference-to-video" ? (
+            {effectiveMode === "reference-to-video" ? (
               <GeneratorAssetPicker
                 label="Reference assets"
                 hint="Добавьте изображения персонажей, объектов или стиля. Доступный лимит зависит от модели."
@@ -293,7 +297,7 @@ export function VideoGeneratorClient() {
               />
             ) : null}
 
-            {mode === "text-to-video" ? (
+            {effectiveMode === "text-to-video" ? (
               <div className="rounded-xl border border-border bg-surface-elevated/35 px-3.5 py-3 text-xs leading-5 text-muted-foreground">
                 Генерация без стартового кадра. Опишите действие, сцену, движение камеры, свет и желаемый темп.
               </div>
@@ -324,7 +328,7 @@ export function VideoGeneratorClient() {
                     onClick={() => setAspectRatio(ratio)}
                     className={cn(
                       "rounded-lg border px-2.5 py-1.5 text-xs transition",
-                      aspectRatio === ratio
+                      resolvedAspectRatio === ratio
                         ? "border-accent bg-accent-muted text-accent"
                         : "border-border bg-surface-elevated text-muted-foreground hover:text-foreground",
                     )}
@@ -340,7 +344,7 @@ export function VideoGeneratorClient() {
                 <div className="space-y-1.5">
                   <label className="text-xs font-medium text-muted-foreground">Resolution</label>
                   <select
-                    value={resolution}
+                    value={resolvedResolution}
                     onChange={(event) => setResolution(event.target.value)}
                     className="h-9 w-full rounded-lg border border-border bg-surface-elevated px-2.5 text-xs text-foreground outline-none"
                   >
@@ -351,7 +355,7 @@ export function VideoGeneratorClient() {
               <div className="space-y-1.5">
                 <label className="text-xs font-medium text-muted-foreground">Duration</label>
                 <select
-                  value={String(duration)}
+                  value={String(resolvedDuration)}
                   onChange={(event) => setDuration(Number(event.target.value))}
                   className="h-9 w-full rounded-lg border border-border bg-surface-elevated px-2.5 text-xs text-foreground outline-none"
                 >
@@ -366,13 +370,13 @@ export function VideoGeneratorClient() {
                 {(model.capabilities.sound || model.capabilities.audio) ? (
                   <button type="button" onClick={() => setSound((value) => !value)} className="flex w-full items-center justify-between gap-3 text-left">
                     <span className="flex items-center gap-2 text-sm text-foreground"><Volume2 className="h-4 w-4 text-muted-foreground" />Native audio</span>
-                    <span className={cn("h-5 w-9 rounded-full p-0.5 transition", sound ? "bg-accent" : "bg-border")}> <span className={cn("block h-4 w-4 rounded-full bg-white transition", sound && "translate-x-4")} /></span>
+                    <span className={cn("h-5 w-9 rounded-full p-0.5 transition", sound ? "bg-accent" : "bg-border")}><span className={cn("block h-4 w-4 rounded-full bg-white transition", sound && "translate-x-4")} /></span>
                   </button>
                 ) : null}
                 {model.capabilities.multiShot ? (
                   <button type="button" onClick={() => setMultiShot((value) => !value)} className="flex w-full items-center justify-between gap-3 text-left">
                     <span className="text-sm text-foreground">Multi-shot composition</span>
-                    <span className={cn("h-5 w-9 rounded-full p-0.5 transition", multiShot ? "bg-accent" : "bg-border")}> <span className={cn("block h-4 w-4 rounded-full bg-white transition", multiShot && "translate-x-4")} /></span>
+                    <span className={cn("h-5 w-9 rounded-full p-0.5 transition", multiShot ? "bg-accent" : "bg-border")}><span className={cn("block h-4 w-4 rounded-full bg-white transition", multiShot && "translate-x-4")} /></span>
                   </button>
                 ) : null}
               </div>
