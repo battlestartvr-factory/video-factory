@@ -12,7 +12,7 @@ on:
         required: true
         default: preflight
         type: choice
-        options: [preflight, deploy]
+        options: [preflight, deploy, rollback]
 
 concurrency:
   group: production-deploy
@@ -59,7 +59,7 @@ jobs:
           chmod 600 ~/.ssh/deploy_key
           ssh-keygen -y -f ~/.ssh/deploy_key >/dev/null 2>&1 || { echo "Invalid deploy SSH key" >&2; exit 1; }
 
-      - name: Production preflight (no deploy, no KIE call)
+      - name: Production preflight (no deploy, no provider call)
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'preflight' }}
         env:
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
@@ -83,18 +83,35 @@ jobs:
           git cat-file -e "${DEPLOY_COMMIT}:scripts/deploy.sh" || fail "candidate deploy script unavailable"
           ok "candidate commit ${DEPLOY_COMMIT} is available"
           ok "current server commit $(git rev-parse HEAD)"
+
+          set -a
+          # shellcheck disable=SC1090
+          source "$ENV_FILE"
+          set +a
+
           for name in NEXT_PUBLIC_SUPABASE_URL KIE_API_KEY APP_URL; do
-            grep -Eq "^[[:space:]]*${name}=.+$" "$ENV_FILE" || fail "${name} missing or empty"
+            [[ -n "${!name:-}" ]] || fail "${name} missing or empty"
             ok "${name} configured"
           done
-          if grep -Eq '^[[:space:]]*(SUPABASE_SERVICE_ROLE_KEY|SUPABASE_SECRET_KEY)=.+$' "$ENV_FILE"; then
+          if [[ -n "${SUPABASE_SERVICE_ROLE_KEY:-}" || -n "${SUPABASE_SECRET_KEY:-}" ]]; then
             ok "Supabase server-side key configured"
           else
             fail "Supabase server-side key missing"
           fi
-          APP_URL_VALUE="$(grep -E '^[[:space:]]*APP_URL=' "$ENV_FILE" | tail -1 | cut -d= -f2- | tr -d '\r\"')"
-          [[ "$APP_URL_VALUE" == https://* ]] || fail "APP_URL must use public HTTPS"
-          [[ "$APP_URL_VALUE" != *localhost* && "$APP_URL_VALUE" != *127.0.0.1* ]] || fail "APP_URL cannot be localhost"
+
+          [[ "${GOOGLE_DRIVE_INTEGRATION_ENABLED:-false}" == "true" ]] || fail "Google Drive durable archive is disabled"
+          [[ -n "${GOOGLE_DRIVE_SHARED_FOLDER_ID:-}" ]] || fail "GOOGLE_DRIVE_SHARED_FOLDER_ID missing"
+          if [[ "${GOOGLE_DRIVE_AUTH_MODE:-service_account}" == "oauth_user" ]]; then
+            [[ -n "${GOOGLE_DRIVE_CLIENT_ID:-}" && -n "${GOOGLE_DRIVE_CLIENT_SECRET:-}" && -n "${GOOGLE_DRIVE_REFRESH_TOKEN:-}" ]] || fail "Drive OAuth credentials incomplete"
+            ok "Google Drive OAuth credentials configured"
+          else
+            [[ -n "${GOOGLE_DRIVE_CLIENT_EMAIL:-}" && -n "${GOOGLE_DRIVE_PRIVATE_KEY:-}" ]] || fail "Drive service-account credentials incomplete"
+            ok "Google Drive service-account credentials configured"
+          fi
+          ok "Google Drive archive root configured"
+
+          [[ "$APP_URL" == https://* ]] || fail "APP_URL must use public HTTPS"
+          [[ "$APP_URL" != *localhost* && "$APP_URL" != *127.0.0.1* ]] || fail "APP_URL cannot be localhost"
           ok "APP_URL is suitable for provider callbacks"
           if curl -fsS --max-time 10 http://127.0.0.1/api/health >/dev/null 2>&1 || curl -fsS --max-time 10 http://127.0.0.1:3000/api/health >/dev/null 2>&1; then
             ok "current app health responds"
@@ -128,4 +145,32 @@ jobs:
           git show "${DEPLOY_COMMIT}:scripts/deploy.sh" > "$tmp_deploy"
           chmod 700 "$tmp_deploy"
           "$tmp_deploy" "$DEPLOY_COMMIT"
+          REMOTE
+
+      - name: Roll back to recorded candidate
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'rollback' }}
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new -o BatchMode=yes \
+            "${DEPLOY_USER}@${DEPLOY_HOST}" bash -s <<'REMOTE'
+          set -euo pipefail
+          APP_DIR=/opt/ai-factory/app
+          DATA_ROOT=/srv/ai-factory
+          CANDIDATE_FILE="$DATA_ROOT/.deploy-rollback-candidate-commit"
+          [[ -f "$CANDIDATE_FILE" ]] || { echo "[rollback] candidate marker missing" >&2; exit 1; }
+          candidate="$(tr -d '\r\n[:space:]' < "$CANDIDATE_FILE")"
+          [[ -n "$candidate" ]] || { echo "[rollback] candidate marker empty" >&2; exit 1; }
+          cd "$APP_DIR"
+          git reset --hard HEAD
+          git fetch origin '+refs/heads/*:refs/remotes/origin/*' --quiet
+          git cat-file -e "${candidate}^{commit}" || { echo "[rollback] candidate commit unavailable: ${candidate}" >&2; exit 1; }
+          tmp_deploy="$(mktemp)"
+          trap 'rm -f "$tmp_deploy"' EXIT
+          git show "${candidate}:scripts/deploy.sh" > "$tmp_deploy"
+          chmod 700 "$tmp_deploy"
+          echo "[rollback] deploying recorded candidate ${candidate}"
+          "$tmp_deploy" "$candidate"
           REMOTE
