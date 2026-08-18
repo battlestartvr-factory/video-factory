@@ -78,8 +78,9 @@ jobs:
           [[ -f "$ENV_FILE" ]] || fail "production env missing"
           command -v git >/dev/null && command -v docker >/dev/null && command -v curl >/dev/null || fail "git/docker/curl required"
           cd "$APP_DIR"
-          git fetch origin stage3-durable-orchestrator main --quiet
+          git fetch origin '+refs/heads/*:refs/remotes/origin/*' --quiet
           git cat-file -e "${DEPLOY_COMMIT}^{commit}" || fail "candidate commit unavailable"
+          git cat-file -e "${DEPLOY_COMMIT}:scripts/deploy.sh" || fail "candidate deploy script unavailable"
           ok "candidate commit ${DEPLOY_COMMIT} is available"
           ok "current server commit $(git rev-parse HEAD)"
           for name in NEXT_PUBLIC_SUPABASE_URL KIE_API_KEY APP_URL; do
@@ -115,5 +116,16 @@ jobs:
         run: |
           set -euo pipefail
           ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new -o BatchMode=yes \
-            "${DEPLOY_USER}@${DEPLOY_HOST}" \
-            "cd /opt/ai-factory/app && git reset --hard HEAD && /opt/ai-factory/app/scripts/deploy.sh ${DEPLOY_COMMIT}"
+            "${DEPLOY_USER}@${DEPLOY_HOST}" "DEPLOY_COMMIT='${DEPLOY_COMMIT}' bash -s" <<'REMOTE'
+          set -euo pipefail
+          APP_DIR=/opt/ai-factory/app
+          cd "$APP_DIR"
+          git reset --hard HEAD
+          git fetch origin '+refs/heads/*:refs/remotes/origin/*' --quiet
+          git cat-file -e "${DEPLOY_COMMIT}^{commit}"
+          tmp_deploy="$(mktemp)"
+          trap 'rm -f "$tmp_deploy"' EXIT
+          git show "${DEPLOY_COMMIT}:scripts/deploy.sh" > "$tmp_deploy"
+          chmod 700 "$tmp_deploy"
+          "$tmp_deploy" "$DEPLOY_COMMIT"
+          REMOTE
