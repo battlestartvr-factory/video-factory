@@ -91,14 +91,11 @@ fi
 
 [[ "${GOOGLE_DRIVE_INTEGRATION_ENABLED:-false}" == "true" ]] || fail "GOOGLE_DRIVE_INTEGRATION_ENABLED=true is required for durable media archive"
 : "${GOOGLE_DRIVE_SHARED_FOLDER_ID:?GOOGLE_DRIVE_SHARED_FOLDER_ID is required for durable media archive}"
-if [[ "${GOOGLE_DRIVE_AUTH_MODE:-service_account}" == "oauth_user" ]]; then
-  : "${GOOGLE_DRIVE_CLIENT_ID:?GOOGLE_DRIVE_CLIENT_ID is required for Drive OAuth}"
-  : "${GOOGLE_DRIVE_CLIENT_SECRET:?GOOGLE_DRIVE_CLIENT_SECRET is required for Drive OAuth}"
-  : "${GOOGLE_DRIVE_REFRESH_TOKEN:?GOOGLE_DRIVE_REFRESH_TOKEN is required for Drive OAuth}"
-else
-  : "${GOOGLE_DRIVE_CLIENT_EMAIL:?GOOGLE_DRIVE_CLIENT_EMAIL is required for Drive service account}"
-  : "${GOOGLE_DRIVE_PRIVATE_KEY:?GOOGLE_DRIVE_PRIVATE_KEY is required for Drive service account}"
-fi
+: "${GOOGLE_DRIVE_CLIENT_ID:?GOOGLE_DRIVE_CLIENT_ID is required for owner Drive OAuth}"
+: "${GOOGLE_DRIVE_CLIENT_SECRET:?GOOGLE_DRIVE_CLIENT_SECRET is required for owner Drive OAuth}"
+: "${GOOGLE_DRIVE_REFRESH_TOKEN:?GOOGLE_DRIVE_REFRESH_TOKEN is required for owner Drive OAuth}"
+export GOOGLE_DRIVE_AUTH_MODE=oauth_user
+log "Google Drive auth mode: oauth_user (owner credentials)"
 
 log "Building Docker images"
 docker compose -f "$COMPOSE_FILE" build --pull
