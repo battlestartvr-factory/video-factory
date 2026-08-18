@@ -33,6 +33,36 @@ export async function POST(request: Request, { params }: Params) {
     .maybeSingle();
   if (!chat) return apiError("NOT_FOUND", "Чат не найден", 404, requestId);
 
+  const uploadToken = request.headers.get("x-upload-token")?.trim() ?? "";
+  if (uploadToken) {
+    const { data: existing, error: existingError } = await service
+      .from("chat_attachments")
+      .select("*")
+      .eq("chat_id", chatId)
+      .eq("user_id", user.id)
+      .eq("metadata->>upload_token", uploadToken)
+      .maybeSingle();
+
+    if (existingError) {
+      logger.error("chat.attachment.idempotency_lookup_failed", {
+        chat_id: chatId,
+        error: existingError.message,
+      });
+    } else if (existing) {
+      logger.info("chat.attachment.idempotent_reuse", {
+        chat_id: chatId,
+        attachment_id: existing.id,
+      });
+      return apiSuccess({
+        attachmentId: existing.id,
+        documentId: existing.metadata?.document_id ?? null,
+        filename: existing.filename,
+        status: existing.metadata?.knowledge_status ?? "ready",
+        reused: true,
+      }, 200);
+    }
+  }
+
   let formData: FormData;
   try {
     formData = await request.formData();
@@ -93,6 +123,7 @@ export async function POST(request: Request, { params }: Params) {
           checksum_sha256: doc.checksum_sha256,
           extracted_text: doc.extracted_text ?? "",
           source_role: "source_evidence",
+          ...(uploadToken ? { upload_token: uploadToken } : {}),
         },
       })
       .select("*")
@@ -112,6 +143,7 @@ export async function POST(request: Request, { params }: Params) {
       documentId: doc.id,
       filename: file.name,
       status: doc.status,
+      reused: false,
     }, 201);
   } catch (error) {
     logger.error("chat.attachment.failed", {
