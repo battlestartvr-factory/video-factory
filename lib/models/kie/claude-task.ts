@@ -1,3 +1,5 @@
+import { getKieModelById, resolveModelId } from "./registry";
+
 export interface KieClaudeUsage {
   inputTokens: number | null;
   outputTokens: number | null;
@@ -11,6 +13,10 @@ export interface KieClaudeGenerateResult {
   responsePayload: Record<string, unknown>;
 }
 
+/**
+ * Historical name kept for worker/API compatibility. The adapter is now provider-neutral
+ * for durable discovery LLM work and dispatches by the KIE model registry.
+ */
 export class KieClaudeTaskError extends Error {
   constructor(
     message: string,
@@ -38,14 +44,14 @@ async function parsePayload(response: Response): Promise<Record<string, unknown>
     return asObject(JSON.parse(text));
   } catch {
     throw new KieClaudeTaskError(
-      `KIE Claude returned invalid JSON (HTTP ${response.status})`,
+      `KIE LLM returned invalid JSON (HTTP ${response.status})`,
       retryableHttpStatus(response.status),
       response.status,
     );
   }
 }
 
-function extractText(payload: Record<string, unknown>): string {
+function extractClaudeText(payload: Record<string, unknown>): string {
   const content = Array.isArray(payload.content) ? payload.content : [];
   return content
     .filter(
@@ -60,6 +66,19 @@ function extractText(payload: Record<string, unknown>): string {
     .trim();
 }
 
+function extractOpenAiText(payload: Record<string, unknown>): string {
+  const choices = Array.isArray(payload.choices) ? payload.choices : [];
+  const first = asObject(choices[0]);
+  const message = asObject(first.message);
+  if (typeof message.content === "string") return message.content.trim();
+  if (!Array.isArray(message.content)) return "";
+  return message.content
+    .map((part) => asObject(part))
+    .map((part) => (typeof part.text === "string" ? part.text : ""))
+    .join("")
+    .trim();
+}
+
 function safeProviderErrorDetail(payload: Record<string, unknown>): string | null {
   const error = asObject(payload.error);
   const candidates = [error.message, payload.message, payload.detail, error.type];
@@ -67,14 +86,16 @@ function safeProviderErrorDetail(payload: Record<string, unknown>): string | nul
     if (typeof candidate !== "string") continue;
     const cleaned = candidate.replace(/\s+/g, " ").trim();
     if (!cleaned) continue;
-    // Provider diagnostics are persisted in durable workflow events. Bound them and
-    // strip obvious auth material while retaining the useful upstream reason.
     const redacted = cleaned
       .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer [redacted]")
       .replace(/(api[_ -]?key\s*[:=]\s*)[^\s,;]+/gi, "$1[redacted]");
     return redacted.slice(0, 500);
   }
   return null;
+}
+
+function joinUrl(baseUrl: string, endpoint: string): string {
+  return `${baseUrl.replace(/\/+$/, "")}${endpoint.startsWith("/") ? endpoint : `/${endpoint}`}`;
 }
 
 export class KieClaudeTaskAdapter {
@@ -92,7 +113,40 @@ export class KieClaudeTaskAdapter {
     thinking?: boolean;
     signal?: AbortSignal;
   }): Promise<KieClaudeGenerateResult> {
-    const endpoint = `${this.baseUrl.replace(/\/+$/, "")}/claude/v1/messages`;
+    const model = getKieModelById(resolveModelId(input.model));
+    if (!model || model.category !== "llm") {
+      throw new KieClaudeTaskError(`KIE LLM model is unavailable: ${input.model}`, false);
+    }
+
+    const isOpenAiChat = model.adapter === "openai_chat";
+    if (!isOpenAiChat && model.adapter !== "claude_messages" && model.adapter !== "claude_sonnet") {
+      throw new KieClaudeTaskError(
+        `KIE LLM adapter ${model.adapter} is not supported by durable discovery`,
+        false,
+      );
+    }
+
+    const endpoint = joinUrl(this.baseUrl, model.endpoint);
+    const body = isOpenAiChat
+      ? {
+          model: model.providerModel,
+          max_tokens: input.maxTokens ?? 8192,
+          stream: false,
+          messages: [
+            { role: "system", content: input.system },
+            { role: "user", content: input.prompt },
+          ],
+          temperature: 0.4,
+        }
+      : {
+          model: model.providerModel,
+          max_tokens: input.maxTokens ?? 8192,
+          stream: false,
+          system: input.system,
+          messages: [{ role: "user", content: input.prompt }],
+          ...(input.thinking ? { thinkingFlag: true } : {}),
+        };
+
     let response: Response;
     try {
       response = await this.fetchImpl(endpoint, {
@@ -100,22 +154,15 @@ export class KieClaudeTaskAdapter {
         headers: {
           Authorization: `Bearer ${this.apiKey}`,
           "Content-Type": "application/json",
-          "anthropic-version": "2023-06-01",
+          ...(isOpenAiChat ? {} : { "anthropic-version": "2023-06-01" }),
         },
-        body: JSON.stringify({
-          model: input.model,
-          max_tokens: input.maxTokens ?? 8192,
-          stream: false,
-          system: input.system,
-          messages: [{ role: "user", content: input.prompt }],
-          ...(input.thinking ? { thinkingFlag: true } : {}),
-        }),
+        body: JSON.stringify(body),
         signal: input.signal,
       });
     } catch (error) {
       if (input.signal?.aborted) throw error;
       throw new KieClaudeTaskError(
-        error instanceof Error ? error.message : "KIE Claude transport failure",
+        error instanceof Error ? error.message : "KIE LLM transport failure",
         true,
       );
     }
@@ -124,21 +171,46 @@ export class KieClaudeTaskAdapter {
     if (!response.ok) {
       const detail = safeProviderErrorDetail(payload);
       throw new KieClaudeTaskError(
-        `KIE Claude request failed (HTTP ${response.status})${detail ? `: ${detail}` : ""}`,
+        `KIE LLM request failed for ${model.id} (HTTP ${response.status})${detail ? `: ${detail}` : ""}`,
         retryableHttpStatus(response.status),
         response.status,
       );
     }
 
-    const text = extractText(payload);
+    const text = isOpenAiChat ? extractOpenAiText(payload) : extractClaudeText(payload);
     if (!text) {
-      throw new KieClaudeTaskError("KIE Claude returned no text content", false, response.status);
+      throw new KieClaudeTaskError(
+        `KIE LLM ${model.id} returned no text content`,
+        false,
+        response.status,
+      );
+    }
+
+    if (isOpenAiChat) {
+      const usage = asObject(payload.usage);
+      const inputTokens = typeof usage.prompt_tokens === "number" ? usage.prompt_tokens : null;
+      const outputTokens =
+        typeof usage.completion_tokens === "number" ? usage.completion_tokens : null;
+      const totalTokens = typeof usage.total_tokens === "number" ? usage.total_tokens : null;
+      const choices = Array.isArray(payload.choices) ? payload.choices : [];
+      const first = asObject(choices[0]);
+      return {
+        text,
+        usage: {
+          inputTokens,
+          outputTokens,
+          totalTokens:
+            totalTokens ??
+            (inputTokens !== null && outputTokens !== null ? inputTokens + outputTokens : null),
+        },
+        stopReason: typeof first.finish_reason === "string" ? first.finish_reason : null,
+        responsePayload: payload,
+      };
     }
 
     const usage = asObject(payload.usage);
     const inputTokens = typeof usage.input_tokens === "number" ? usage.input_tokens : null;
     const outputTokens = typeof usage.output_tokens === "number" ? usage.output_tokens : null;
-
     return {
       text,
       usage: {
