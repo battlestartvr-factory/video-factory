@@ -2,10 +2,8 @@ import { z } from "zod";
 import { getSessionUser } from "@/lib/auth/session";
 import { apiError, apiSuccess, readJsonBody } from "@/lib/api/response";
 import { generateRequestId } from "@/lib/logging/logger";
-import {
-  createGameDiscoveryBatch,
-  discoveryObjectiveSpecV1Schema,
-} from "@/lib/game-discovery";
+import { discoveryObjectiveSpecV1Schema } from "@/lib/game-discovery";
+import { createGameDiscoveryBatch } from "@/lib/game-discovery/service";
 
 const createDiscoveryBatchSchema = z
   .object({
