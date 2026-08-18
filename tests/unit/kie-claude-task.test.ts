@@ -41,21 +41,19 @@ describe("KIE Claude durable task adapter", () => {
     );
     const adapter = new KieClaudeTaskAdapter("https://api.kie.ai", "secret", fetchMock as typeof fetch);
 
-    await expect(
-      adapter.generate({ model: "claude-sonnet-5", system: "system", prompt: "prompt" }),
-    ).rejects.toEqual(
-      expect.objectContaining<KieClaudeTaskError>({
-        status: 500,
-        retryable: true,
-        message: expect.stringContaining("Gateway timeout while generating response"),
-      }),
-    );
-
+    let caught: unknown;
     try {
       await adapter.generate({ model: "claude-sonnet-5", system: "system", prompt: "prompt" });
     } catch (error) {
-      expect(String(error)).not.toContain("super-secret");
-      expect(String(error)).toContain("[redacted]");
+      caught = error;
     }
+
+    expect(caught).toBeInstanceOf(KieClaudeTaskError);
+    const providerError = caught as KieClaudeTaskError;
+    expect(providerError.status).toBe(500);
+    expect(providerError.retryable).toBe(true);
+    expect(providerError.message).toContain("Gateway timeout while generating response");
+    expect(providerError.message).not.toContain("super-secret");
+    expect(providerError.message).toContain("[redacted]");
   });
 });
