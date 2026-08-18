@@ -83,6 +83,7 @@ export function ChatPageClient({ chatId: chatIdProp, projectId }: ChatPageClient
   const fetchGenerationRef = useRef(0);
   const pendingChatAttemptRef = useRef<PendingChatAttempt | null>(null);
   const displayedChat = chat?.id === chatId ? chat : null;
+  const latestMessage = lastMessage(messages);
   const busy = sending || recoveringTurn;
 
   const scrollToBottom = useCallback(() => {
@@ -151,15 +152,10 @@ export function ChatPageClient({ chatId: chatIdProp, projectId }: ChatPageClient
   // user message without a following assistant message means the server-side turn is
   // still in flight (or its final message has not reached this browser yet).
   useEffect(() => {
-    if (!chatId || sending) return;
-    if (lastMessage(messages)?.role !== "user") {
-      setRecoveringTurn(false);
-      return;
-    }
+    if (!chatId || sending || latestMessage?.role !== "user") return;
 
     let cancelled = false;
     const controller = new AbortController();
-    setRecoveringTurn(true);
 
     const poll = async () => {
       try {
@@ -168,9 +164,7 @@ export function ChatPageClient({ chatId: chatIdProp, projectId }: ChatPageClient
         if (snapshot.chat) applyRemoteChat(snapshot.chat);
         if (snapshot.messages) {
           setMessagesByChat((prev) => ({ ...prev, [chatId]: snapshot.messages! }));
-          if (lastMessage(snapshot.messages)?.role !== "user") {
-            setRecoveringTurn(false);
-          }
+          setRecoveringTurn(lastMessage(snapshot.messages)?.role === "user");
         }
       } catch {
         if (!controller.signal.aborted) setRecoveringTurn(true);
@@ -184,7 +178,14 @@ export function ChatPageClient({ chatId: chatIdProp, projectId }: ChatPageClient
       controller.abort();
       window.clearInterval(timer);
     };
-  }, [chatId, sending, messages, applyRemoteChat, fetchChatSnapshot]);
+  }, [
+    chatId,
+    sending,
+    latestMessage?.id,
+    latestMessage?.role,
+    applyRemoteChat,
+    fetchChatSnapshot,
+  ]);
 
   useEffect(() => {
     scrollToBottom();
