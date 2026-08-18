@@ -38,7 +38,7 @@ export async function POST(request: Request) {
     !Array.isArray(body.inputVideoGenerationIds) ||
     body.inputVideoGenerationIds.length === 0 ||
     typeof body.sha256 !== "string" ||
-    body.sha256.length !== 64
+    !/^[0-9a-f]{64}$/.test(body.sha256)
   ) {
     return NextResponse.json({ ok: false, code: "INVALID_REQUEST" }, { status: 400 });
   }
@@ -49,6 +49,7 @@ export async function POST(request: Request) {
       conceptRunId: body.conceptRunId,
       conceptId: body.conceptId,
       artifactRelativePath: body.artifactRelativePath,
+      sha256: body.sha256,
     });
     return NextResponse.json(
       { ok: true, data: output },
