@@ -80,7 +80,6 @@ export function ChatPageClient({ chatId: chatIdProp, projectId }: ChatPageClient
   const [loadedChatIds, setLoadedChatIds] = useState<Record<string, boolean>>({});
   const loading = !!chatId && !loadedChatIds[chatId] && messages.length === 0;
   const recentChats = useRecentChatsOptional();
-  const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const autoScrollEnabledRef = useRef(true);
   const forceNextScrollRef = useRef(true);
@@ -91,7 +90,9 @@ export function ChatPageClient({ chatId: chatIdProp, projectId }: ChatPageClient
   const busy = sending || recoveringTurn;
 
   const scrollToBottom = useCallback((behavior: ScrollBehavior = "auto") => {
-    messagesEndRef.current?.scrollIntoView({ behavior, block: "end" });
+    const element = scrollContainerRef.current;
+    if (!element) return;
+    element.scrollTo({ top: element.scrollHeight, behavior });
   }, []);
 
   const handleMessagesScroll = useCallback(() => {
@@ -203,13 +204,13 @@ export function ChatPageClient({ chatId: chatIdProp, projectId }: ChatPageClient
     fetchChatSnapshot,
   ]);
 
-  // Live activity should follow the latest message only while the user is already near
-  // the bottom. If they scroll upward to read earlier context, never pull them back down.
+  // Follow only the dedicated message viewport. Never call scrollIntoView here: that can
+  // scroll the document/dashboard ancestors and was the cause of the page being pinned in
+  // the middle while a durable task emitted live updates.
   useEffect(() => {
     if (!autoScrollEnabledRef.current && !forceNextScrollRef.current) return;
-    const forced = forceNextScrollRef.current;
     forceNextScrollRef.current = false;
-    scrollToBottom(forced ? "smooth" : "auto");
+    scrollToBottom("auto");
   }, [messages, liveActivity, recoveringTurn, scrollToBottom]);
 
   const createChat = async () => {
@@ -472,8 +473,8 @@ export function ChatPageClient({ chatId: chatIdProp, projectId }: ChatPageClient
 
   if (!chatId) {
     return (
-      <div className="flex min-h-0 flex-1 flex-col">
-        <div className="flex flex-1 items-center justify-center px-2 pb-[14vh] pt-8 sm:px-4">
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+        <div className="flex min-h-0 flex-1 items-center justify-center overflow-y-auto px-2 pb-[14vh] pt-8 sm:px-4">
           <div className="w-full max-w-4xl">
             <div className="mx-auto mb-6 max-w-3xl px-4">
               <h1 className="text-center text-2xl font-semibold tracking-tight text-foreground sm:text-3xl">Над чем поработаем?</h1>
@@ -488,8 +489,8 @@ export function ChatPageClient({ chatId: chatIdProp, projectId }: ChatPageClient
   }
 
   return (
-    <div className="flex flex-1 flex-col">
-      <header className="flex items-center justify-between border-b border-border px-4 py-3">
+    <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+      <header className="flex shrink-0 items-center justify-between border-b border-border px-4 py-3">
         <h1 className="truncate text-sm font-medium text-foreground">{displayedChat?.title ?? t("chat.title")}</h1>
         <div className="flex items-center gap-1">
           {chatId && displayedChat ? (
@@ -509,7 +510,11 @@ export function ChatPageClient({ chatId: chatIdProp, projectId }: ChatPageClient
         </div>
       </header>
 
-      <div ref={scrollContainerRef} onScroll={handleMessagesScroll} className="flex-1 overflow-y-auto">
+      <div
+        ref={scrollContainerRef}
+        onScroll={handleMessagesScroll}
+        className="min-h-0 flex-1 overflow-y-auto overscroll-contain"
+      >
         {loading && messages.length === 0 ? (
           <div className="space-y-4 p-4"><Skeleton className="h-16 w-full" /><Skeleton className="h-16 w-full" /></div>
         ) : messages.length === 0 && !sendError ? (
@@ -532,21 +537,22 @@ export function ChatPageClient({ chatId: chatIdProp, projectId }: ChatPageClient
               </div>
             ) : null}
             {sendError ? <div className="px-4 py-4"><ErrorCard error={sendError} /></div> : null}
-            <div ref={messagesEndRef} />
           </div>
         )}
       </div>
 
-      <ChatComposer
-        key={`${chatId}-${displayedChat?.model_id ?? ""}-${String(displayedChat?.metadata?.reasoning_level ?? "")}`}
-        onSend={handleSend}
-        disabled={busy}
-        chatId={chatId}
-        defaultModelId={displayedChat?.model_id ?? undefined}
-        defaultReasoningLevel={
-          typeof displayedChat?.metadata?.reasoning_level === "string" ? displayedChat.metadata.reasoning_level : undefined
-        }
-      />
+      <div className="shrink-0">
+        <ChatComposer
+          key={`${chatId}-${displayedChat?.model_id ?? ""}-${String(displayedChat?.metadata?.reasoning_level ?? "")}`}
+          onSend={handleSend}
+          disabled={busy}
+          chatId={chatId}
+          defaultModelId={displayedChat?.model_id ?? undefined}
+          defaultReasoningLevel={
+            typeof displayedChat?.metadata?.reasoning_level === "string" ? displayedChat.metadata.reasoning_level : undefined
+          }
+        />
+      </div>
     </div>
   );
 }

@@ -5,9 +5,7 @@ import { ArrowUp, Paperclip, Plus, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { getAcceptString } from "@/lib/attachments/mime";
-import { DEFAULT_LLM_MODEL, DEFAULT_REASONING_LEVEL } from "@/lib/agent/config";
-import { ModelSelector } from "./model-selector";
-import { ReasoningSelector } from "./reasoning-selector";
+import { DEFAULT_LLM_MODEL } from "@/lib/agent/config";
 import { ContextInspector } from "./context-inspector";
 
 interface PendingFile {
@@ -34,42 +32,17 @@ export function ChatComposer({
   disabled,
   chatId,
   defaultModelId = DEFAULT_LLM_MODEL,
-  defaultReasoningLevel = DEFAULT_REASONING_LEVEL,
   variant = "default",
   autoFocus = false,
 }: ChatComposerProps) {
   const [content, setContent] = useState("");
   const [files, setFiles] = useState<PendingFile[]>([]);
-  const [modelId, setModelId] = useState(defaultModelId);
-  const [reasoningLevel, setReasoningLevel] = useState(defaultReasoningLevel);
   const [dragOver, setDragOver] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const isHero = variant === "hero";
   const effectiveDisabled = disabled || submitting;
-
-  const persistChatSettings = useCallback(
-    async (updates: { modelId?: string; reasoningLevel?: string }) => {
-      if (!chatId) return;
-      await fetch(`/api/chats/${chatId}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(updates),
-      });
-    },
-    [chatId],
-  );
-
-  const handleModelChange = (id: string) => {
-    setModelId(id);
-    void persistChatSettings({ modelId: id });
-  };
-
-  const handleReasoningChange = (level: string) => {
-    setReasoningLevel(level);
-    void persistChatSettings({ reasoningLevel: level });
-  };
 
   const addFiles = useCallback((newFiles: FileList | File[]) => {
     const arr = Array.from(newFiles);
@@ -90,8 +63,6 @@ export function ChatComposer({
     setSubmitting(true);
     try {
       const sent = await onSend(trimmed, {
-        modelId,
-        reasoningLevel,
         files: files.map((f) => f.file),
       });
       if (!sent) return;
@@ -213,16 +184,10 @@ export function ChatComposer({
                 onChange={(e) => e.target.files && addFiles(e.target.files)}
                 disabled={effectiveDisabled}
               />
-              <ModelSelector value={modelId} onChange={handleModelChange} type="chat" />
-              <ReasoningSelector
-                modelId={modelId}
-                value={reasoningLevel}
-                onChange={handleReasoningChange}
-              />
               {chatId ? (
                 <ContextInspector
                   chatId={chatId}
-                  modelId={modelId}
+                  modelId={defaultModelId}
                   draftContent={content}
                 />
               ) : null}

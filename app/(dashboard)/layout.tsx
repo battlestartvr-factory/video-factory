@@ -42,12 +42,12 @@ export default async function DashboardLayout({
         key={recentChats.map((chat) => chat.id).join(",")}
         initialChats={recentChats}
       >
-        <div className="gradient-bg flex min-h-dvh flex-col">
+        <div className="gradient-bg flex h-dvh min-h-0 flex-col overflow-hidden">
           {isMockWorkflowsEnabled() && <DemoBanner />}
-          <div className="flex min-h-0 flex-1">
+          <div className="flex min-h-0 flex-1 overflow-hidden">
             <Sidebar recentProjects={recentProjects} />
-            <div className="flex min-h-dvh min-w-0 flex-1 flex-col pb-16 md:pb-0">
-              <main className="flex min-h-0 flex-1 flex-col">{children}</main>
+            <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden pb-16 md:pb-0">
+              <main className="flex min-h-0 flex-1 flex-col overflow-hidden">{children}</main>
             </div>
           </div>
           <MobileNav />

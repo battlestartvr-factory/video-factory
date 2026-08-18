@@ -6,7 +6,6 @@ import { useCallback, useEffect, useState } from "react";
 import {
   LayoutDashboard,
   MessageSquare,
-  Search,
   ImageIcon,
   Video,
   FolderKanban,
@@ -31,7 +30,6 @@ import type { Project } from "@/lib/types/database";
 const mainNavItems = [
   { href: "/dashboard", label: t("nav.dashboard"), icon: LayoutDashboard },
   { href: "/chat", label: t("nav.chat"), icon: MessageSquare },
-  { href: "/discovery", label: t("nav.discovery"), icon: Search },
   { href: "/images", label: t("nav.images"), icon: ImageIcon },
   { href: "/video", label: t("nav.video"), icon: Video },
   { href: "/projects", label: t("nav.projects"), icon: FolderKanban },
