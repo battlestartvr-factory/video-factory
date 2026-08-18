@@ -1,12 +1,25 @@
 import { getSessionUser } from "@/lib/auth/session";
+import {
+  createDriveAuthClient,
+  getDriveAccessToken,
+} from "@/lib/storage/drive-provider";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { validateWebFetchUrl } from "@/lib/web/url-safety";
-import type { Generation } from "@/lib/types/workspace";
+import type { Generation, GenerationOutput } from "@/lib/types/workspace";
 
 const MAX_REDIRECTS = 4;
 const UPSTREAM_TIMEOUT_MS = 60_000;
 
-function outputExtension(contentType: string | null, rawUrl: string): string {
+function outputExtension(
+  contentType: string | null,
+  rawUrl: string,
+  filename?: string,
+): string {
+  if (filename) {
+    const filenameMatch = filename.match(/\.([a-zA-Z0-9]{2,5})$/);
+    if (filenameMatch?.[1]) return filenameMatch[1].toLowerCase();
+  }
+
   const normalized = (contentType ?? "").split(";", 1)[0]?.trim().toLowerCase();
   const byType: Record<string, string> = {
     "image/png": "png",
@@ -24,7 +37,7 @@ function outputExtension(contentType: string | null, rawUrl: string): string {
     const match = pathname.match(/\.([a-zA-Z0-9]{2,5})$/);
     if (match?.[1]) return match[1].toLowerCase();
   } catch {
-    // The URL was already validated before this helper is used.
+    // Provider URL validation happens before this helper is used.
   }
   return "bin";
 }
@@ -63,6 +76,54 @@ async function fetchProviderOutput(rawUrl: string, range: string | null): Promis
   throw new Error("generation_output_unavailable");
 }
 
+async function fetchDriveOutput(driveFileId: string, range: string | null): Promise<Response> {
+  const auth = createDriveAuthClient();
+  if (!auth) throw new Error("generation_output_drive_not_configured");
+  const token = await getDriveAccessToken(auth);
+  const url = new URL(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(driveFileId)}`);
+  url.searchParams.set("alt", "media");
+  url.searchParams.set("supportsAllDrives", "true");
+
+  return fetch(url, {
+    method: "GET",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: "*/*",
+      ...(range ? { Range: range } : {}),
+    },
+    cache: "no-store",
+    signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
+  });
+}
+
+async function resolveOutputResponse(
+  output: GenerationOutput,
+  range: string | null,
+): Promise<{ response: Response; sourceUrl: string }> {
+  if (output.storageProvider === "google_drive" && output.driveFileId) {
+    try {
+      const response = await fetchDriveOutput(output.driveFileId, range);
+      if (response.ok || response.status === 206) {
+        return { response, sourceUrl: output.driveWebUrl ?? output.url ?? "google-drive" };
+      }
+      console.warn("generation.output.drive_rejected", {
+        drive_file_id: output.driveFileId,
+        status: response.status,
+      });
+    } catch (error) {
+      console.warn("generation.output.drive_failed", {
+        drive_file_id: output.driveFileId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  const providerUrl = (output.providerUrl ?? output.url ?? "").trim();
+  if (!providerUrl) throw new Error("generation_output_missing_source");
+  const response = await fetchProviderOutput(providerUrl, range);
+  return { response, sourceUrl: providerUrl };
+}
+
 export async function GET(
   request: Request,
   context: { params: Promise<{ generationId: string; outputIndex: string }> },
@@ -88,11 +149,13 @@ export async function GET(
 
   const generation = data as Pick<Generation, "id" | "user_id" | "type" | "outputs">;
   const output = Array.isArray(generation.outputs) ? generation.outputs[index] : undefined;
-  const rawUrl = output && typeof output.url === "string" ? output.url.trim() : "";
-  if (!rawUrl) return new Response("Output not found", { status: 404 });
+  if (!output) return new Response("Output not found", { status: 404 });
 
   try {
-    const upstream = await fetchProviderOutput(rawUrl, request.headers.get("range"));
+    const { response: upstream, sourceUrl } = await resolveOutputResponse(
+      output,
+      request.headers.get("range"),
+    );
     if (!upstream.ok && upstream.status !== 206) {
       console.warn("generation.output.upstream_rejected", {
         generation_id: generationId,
@@ -116,17 +179,20 @@ export async function GET(
     }
 
     if (!headers.has("content-type")) {
-      headers.set("Content-Type", generation.type === "video" ? "video/mp4" : "image/png");
+      headers.set(
+        "Content-Type",
+        output.mimeType ?? (generation.type === "video" ? "video/mp4" : "image/png"),
+      );
     }
     headers.set("Cache-Control", "private, max-age=3600");
     headers.set("X-Content-Type-Options", "nosniff");
 
     const download = new URL(request.url).searchParams.get("download") === "1";
     if (download) {
-      const extension = outputExtension(headers.get("content-type"), rawUrl);
+      const extension = outputExtension(headers.get("content-type"), sourceUrl, output.filename);
       headers.set(
         "Content-Disposition",
-        `attachment; filename="generation-${generationId}-${index + 1}.${extension}"`,
+        `attachment; filename="${output.filename ?? `generation-${generationId}-${index + 1}.${extension}`}"`,
       );
     }
 
