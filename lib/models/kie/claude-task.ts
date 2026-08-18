@@ -142,7 +142,6 @@ export class KieClaudeTaskAdapter {
     const body = isOpenAiChat
       ? {
           model: model.providerModel,
-          max_tokens: input.maxTokens ?? 8192,
           stream: false,
           messages: [
             { role: "system", content: input.system },
