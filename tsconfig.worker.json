@@ -16,7 +16,12 @@
   "include": [
     "worker/**/*.ts",
     "lib/orchestrator/**/*.ts",
-    "lib/models/kie/market-task.ts"
+    "lib/models/kie/market-task.ts",
+    "lib/models/kie/claude-task.ts",
+    "lib/game-discovery/schemas.ts",
+    "lib/game-discovery/diversity.ts",
+    "lib/game-discovery/concept-explorer.ts",
+    "lib/game-discovery/worker-repository.ts"
   ],
   "exclude": ["node_modules", ".next"]
 }

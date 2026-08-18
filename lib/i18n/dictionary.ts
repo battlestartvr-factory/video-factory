@@ -4,6 +4,7 @@ export const ru = {
   nav: {
     dashboard: "Дашборд",
     chat: "Чат",
+    discovery: "Поиск игры",
     images: "Изображения",
     video: "Видео",
     projects: "Проекты",

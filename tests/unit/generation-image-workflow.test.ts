@@ -251,9 +251,10 @@ describe("generation_image@1 lifecycle", () => {
     expect(setup.mocks.complete).toHaveBeenCalledOnce();
   });
 
-  it("registers image and video durable generation workflows", () => {
+  it("registers all durable workflows", () => {
     expect(listRegisteredWorkflows()).toEqual([
       "core_smoke@1",
+      "game_discovery_batch@1",
       "generation_image@1",
       "generation_video@1",
     ]);

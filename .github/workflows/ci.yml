@@ -39,6 +39,11 @@ jobs:
       - name: Build durable worker image
         run: docker build --file Dockerfile.worker --tag video-factory-worker:ci .
 
+      - name: Verify FFmpeg assembly runtime
+        run: |
+          docker run --rm --entrypoint ffmpeg video-factory-worker:ci -version
+          docker run --rm --entrypoint ffprobe video-factory-worker:ci -version
+
       - run: pnpm test
 
       - run: pnpm build

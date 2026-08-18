@@ -1,0 +1,180 @@
+import { describe, expect, it } from "vitest";
+import { exploreConcepts, parseConceptBatch } from "../../lib/game-discovery/concept-explorer";
+import type {
+  CoopGameConceptSpecV1,
+  DiscoveryObjectiveSpecV1,
+} from "../../lib/game-discovery/schemas";
+
+const objective: DiscoveryObjectiveSpecV1 = {
+  schema: "discovery_objective",
+  version: 1,
+  objectiveId: "objective-test",
+  title: "Explore readable co-op dependency",
+  searchIntent: "Find mechanically necessary 2-player co-op ideas with visible social failure.",
+  playerCount: { min: 2, max: 4 },
+  platform: "pc_steam",
+  desiredNovelty: "explore",
+  conceptCount: 2,
+  maxConceptsToPrototype: 1,
+  constraints: {},
+};
+
+function concept(input: {
+  id: string;
+  core: string;
+  dependency: string;
+  social: string;
+  tempo: string;
+  camera: string;
+  failure: string;
+}): CoopGameConceptSpecV1 {
+  return {
+    schema: "coop_game_concept",
+    version: 1,
+    conceptId: input.id,
+    oneSentencePitch: `${input.id} pitch`,
+    coreMechanic: input.core,
+    coopDependency: `Players depend through ${input.dependency}.`,
+    playerRoles: [
+      { role: "left", responsibility: "Controls one necessary half of the system." },
+      { role: "right", responsibility: "Controls the other necessary half of the system." },
+    ],
+    playerCount: { min: 2, max: 2, ideal: 2 },
+    interactionModel: [input.dependency],
+    failureMode: input.failure,
+    socialMoment: input.social,
+    gameplayHook: "Both players visibly act on the same problem and one mistake immediately affects both.",
+    spectacle: "A readable physical consequence fills the frame.",
+    setting: "Minimal test arena",
+    artDirection: "Readable chunky shapes",
+    camera: input.camera,
+    readability: "Player responsibilities and the shared consequence are visible at once.",
+    noveltyAxes: [
+      { axis: "dependency_type", choice: input.dependency, whyDifferent: "Changes the required co-op dependency." },
+      { axis: "social_tension", choice: input.social, whyDifferent: "Changes the social reaction." },
+      { axis: "tempo", choice: input.tempo, whyDifferent: "Changes the cadence." },
+      { axis: "camera_scale", choice: input.camera, whyDifferent: "Changes how the mechanic reads." },
+      { axis: "failure_signature", choice: input.failure, whyDifferent: "Changes the visible failure." },
+      { axis: "buildability_shape", choice: `low-${input.id}`, whyDifferent: "Keeps a small but distinct implementation shape." },
+    ],
+    buildability: {
+      networking: "low",
+      physics: "low",
+      contentBurden: "low",
+      npcAiDependency: "none",
+      systemicInteractions: "low",
+      mainRisks: ["timing feel"],
+      mvpRead: "One arena, one shared system, two roles.",
+    },
+    referenceInfluences: [],
+  };
+}
+
+const first = concept({
+  id: "shared-crank",
+  core: "Both players rotate separate handles to steer one unstable machine.",
+  dependency: "shared-machine",
+  social: "blame",
+  tempo: "precision",
+  camera: "close-third-person",
+  failure: "instant-spinout",
+});
+
+const duplicate = concept({
+  id: "shared-crank-reskin",
+  core: first.coreMechanic,
+  dependency: "shared-machine",
+  social: "blame",
+  tempo: "precision",
+  camera: "close-third-person",
+  failure: "instant-spinout",
+});
+
+const replacement = concept({
+  id: "blind-bridge",
+  core: "One player walks a fragile bridge while the other rotates unseen supports using callouts.",
+  dependency: "information-asymmetry",
+  social: "trust",
+  tempo: "calm-escalation",
+  camera: "split-readability",
+  failure: "cascading-collapse",
+});
+
+function response(concepts: CoopGameConceptSpecV1[]) {
+  return {
+    text: JSON.stringify({ concepts }),
+    usage: { inputTokens: 10, outputTokens: 20, totalTokens: 30 },
+    stopReason: "end_turn",
+    responsePayload: {},
+  };
+}
+
+describe("Stage 4 Concept Explorer", () => {
+  it("parses strict concept JSON even when wrapped in a JSON code fence", () => {
+    const parsed = parseConceptBatch(`\`\`\`json\n${JSON.stringify({ concepts: [first] })}\n\`\`\``);
+    expect(parsed).toHaveLength(1);
+    expect(parsed[0]?.conceptId).toBe("shared-crank");
+  });
+
+  it("rejects a deterministic near-duplicate and uses a bounded replacement call", async () => {
+    const calls: Array<{ model: string; prompt: string }> = [];
+    const queued = [response([first, duplicate]), response([replacement])];
+    const llm = {
+      generate: async (input: { model: string; prompt: string }) => {
+        calls.push(input);
+        const next = queued.shift();
+        if (!next) throw new Error("unexpected extra LLM call");
+        return next;
+      },
+    };
+
+    const result = await exploreConcepts({
+      llm,
+      objective,
+      replacementBuffer: 0,
+      maxReplacementAttempts: 2,
+    });
+
+    expect(result.accepted.map((item) => item.conceptId)).toEqual([
+      "shared-crank",
+      "blind-bridge",
+    ]);
+    expect(result.rejected).toHaveLength(1);
+    expect(result.rejected[0]?.conceptId).toBe("shared-crank-reskin");
+    expect(result.rejected[0]?.reasons).toEqual(
+      expect.arrayContaining([expect.stringContaining("same_core_mechanic_and_dependency")]),
+    );
+    expect(result.replacementAttempts).toBe(1);
+    expect(result.generatedCount).toBe(3);
+    expect(result.usage.totalTokens).toBe(60);
+    expect(calls).toHaveLength(2);
+    expect(calls[1]?.prompt).toContain("EXACT REJECTION REASONS");
+  });
+
+  it("repairs malformed provider output once before accepting typed concepts", async () => {
+    let calls = 0;
+    const llm = {
+      generate: async () => {
+        calls += 1;
+        if (calls === 1) {
+          return {
+            ...response([first, replacement]),
+            text: "not-json",
+          };
+        }
+        return response([first, replacement]);
+      },
+    };
+
+    const result = await exploreConcepts({
+      llm,
+      objective,
+      replacementBuffer: 0,
+      maxReplacementAttempts: 0,
+    });
+
+    expect(result.accepted).toHaveLength(2);
+    expect(result.rawResponseHashes).toHaveLength(2);
+    expect(calls).toBe(2);
+  });
+});

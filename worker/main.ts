@@ -1,4 +1,6 @@
 import { setTimeout as sleep } from "node:timers/promises";
+import { GameDiscoveryWorkerRepository } from "../lib/game-discovery/worker-repository";
+import { GameDiscoveryVideoRepository } from "../lib/game-discovery/video-fanout-repository";
 import { GenerationImageRepository } from "../lib/orchestrator/generation-images";
 import { GenerationVideoRepository } from "../lib/orchestrator/generation-videos";
 import { ProviderTaskRepository } from "../lib/orchestrator/provider-tasks";
@@ -10,6 +12,7 @@ import {
   normalizeWorkflowError,
   shouldRetry,
 } from "../lib/orchestrator/retry";
+import { KieClaudeTaskAdapter } from "../lib/models/kie/claude-task";
 import { KieMarketTaskAdapter } from "../lib/models/kie/market-task";
 import { KieVeoTaskAdapter } from "../lib/models/kie/veo-task";
 import { loadWorkerConfig, type WorkerConfig } from "./config";
@@ -266,6 +269,11 @@ export async function runWorker(): Promise<void> {
     providerTasks: new ProviderTaskRepository(rpcClient),
     generationImages: new GenerationImageRepository(rpcClient),
     generationVideos: new GenerationVideoRepository(rpcClient),
+    gameDiscovery: new GameDiscoveryWorkerRepository(rpcClient),
+    gameDiscoveryVideo: new GameDiscoveryVideoRepository(rpcClient),
+    kieClaude: config.kieApiKey
+      ? new KieClaudeTaskAdapter(config.kieApiBaseUrl, config.kieApiKey)
+      : null,
     kieMarketTask: config.kieApiKey
       ? new KieMarketTaskAdapter(config.kieApiBaseUrl, config.kieApiKey)
       : null,
