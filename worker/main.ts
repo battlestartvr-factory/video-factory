@@ -1,5 +1,6 @@
 import { setTimeout as sleep } from "node:timers/promises";
 import { GenerationImageRepository } from "../lib/orchestrator/generation-images";
+import { GenerationVideoRepository } from "../lib/orchestrator/generation-videos";
 import { ProviderTaskRepository } from "../lib/orchestrator/provider-tasks";
 import { OrchestratorRepository, type ClaimedJob } from "../lib/orchestrator/repository";
 import { PgmqQueueAdapter } from "../lib/orchestrator/queue/pgmq";
@@ -10,6 +11,7 @@ import {
   shouldRetry,
 } from "../lib/orchestrator/retry";
 import { KieMarketTaskAdapter } from "../lib/models/kie/market-task";
+import { KieVeoTaskAdapter } from "../lib/models/kie/veo-task";
 import { loadWorkerConfig, type WorkerConfig } from "./config";
 import { workerLog } from "./log";
 import { createWorkerRpcClient } from "./rpc-client";
@@ -263,8 +265,12 @@ export async function runWorker(): Promise<void> {
   const services: WorkflowServices = {
     providerTasks: new ProviderTaskRepository(rpcClient),
     generationImages: new GenerationImageRepository(rpcClient),
+    generationVideos: new GenerationVideoRepository(rpcClient),
     kieMarketTask: config.kieApiKey
       ? new KieMarketTaskAdapter(config.kieApiBaseUrl, config.kieApiKey)
+      : null,
+    kieVeoTask: config.kieApiKey
+      ? new KieVeoTaskAdapter(config.kieApiBaseUrl, config.kieApiKey)
       : null,
     appUrl: config.appUrl,
   };
