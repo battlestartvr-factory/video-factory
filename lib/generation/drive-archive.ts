@@ -17,6 +17,7 @@ import { validateWebFetchUrl } from "@/lib/web/url-safety";
 const MAX_REDIRECTS = 4;
 const UPSTREAM_TIMEOUT_MS = 5 * 60_000;
 const STAGING_DIR = "generation-archive-staging";
+const DEFAULT_STAGING_ROOT = "/tmp/ai-factory";
 
 export interface ArchivedGenerationOutput {
   url: string;
@@ -59,6 +60,11 @@ function folderSegments(kind: "image" | "video", createdAt: string): string[] {
   const month = String(safeDate.getUTCMonth() + 1).padStart(2, "0");
   const day = String(safeDate.getUTCDate()).padStart(2, "0");
   return ["Generated", kind === "video" ? "Videos" : "Images", year, month, day];
+}
+
+function stagingDirectory(): string {
+  const root = (process.env.AI_FACTORY_STAGING_ROOT ?? DEFAULT_STAGING_ROOT).trim();
+  return join(root || DEFAULT_STAGING_ROOT, STAGING_DIR);
 }
 
 async function fetchProviderMedia(rawUrl: string): Promise<Response> {
@@ -177,8 +183,7 @@ export async function archiveGenerationOutput(input: {
     };
   }
 
-  const dataRoot = (process.env.AI_FACTORY_DATA_ROOT ?? "/srv/ai-factory").trim() || "/srv/ai-factory";
-  const stagingDir = join(dataRoot, STAGING_DIR);
+  const stagingDir = stagingDirectory();
   await mkdir(stagingDir, { recursive: true });
   const tempPath = join(stagingDir, `${input.generationId}-${input.outputIndex}-${crypto.randomUUID()}.part`);
 
