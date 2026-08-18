@@ -44,6 +44,33 @@ function extractJson(text: string): unknown {
   }
 }
 
+function clip(value: string, max: number): string {
+  const normalized = value.trim();
+  if (normalized.length <= max) return normalized;
+  return `${normalized.slice(0, Math.max(1, max - 1)).trimEnd()}…`;
+}
+
+/**
+ * Human review must never be lost just because the cheap structuring model is unavailable
+ * or emits invalid JSON. Preserve the user's criticism in a bounded schema-valid form so
+ * revision can continue without inventing extra preferences.
+ */
+export function fallbackGameplayReferenceFeedback(input: {
+  rawFeedback: string;
+  decision: "approve" | "reject" | "revise";
+}): GameplayReferenceFeedbackV1 {
+  const raw = clip(input.rawFeedback, 500);
+  return gameplayReferenceFeedbackV1Schema.parse({
+    schema: "gameplay_reference_feedback",
+    version: 1,
+    errorTags: [],
+    mustShow: input.decision === "revise" && raw ? [raw] : [],
+    mustAvoid: input.decision === "reject" && raw ? [raw] : [],
+    reusableScope: input.decision === "revise" ? "shot" : "concept",
+    summary: clip(input.rawFeedback, 2_000) || "Human review feedback was recorded.",
+  });
+}
+
 export async function structureGameplayReferenceFeedback(input: {
   llm: Pick<KieClaudeTaskAdapter, "generate">;
   rawFeedback: string;
