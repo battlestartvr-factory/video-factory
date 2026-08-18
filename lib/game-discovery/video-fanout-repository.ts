@@ -1,5 +1,6 @@
 import type { OrchestratorRpcClient } from "../orchestrator/rpc";
 import { requireRpcObject } from "../orchestrator/rpc";
+import type { GameplayPrototypeAssembly } from "./assembly";
 import type { AssetGraphV1 } from "./schemas";
 
 function object(value: unknown): Record<string, unknown> {
@@ -35,6 +36,11 @@ export interface GameplayVideoStage {
   requestCount: number;
   allTerminal: boolean;
   allCompleted: boolean;
+}
+
+export interface GameplayAssemblyStage {
+  items: GameplayPrototypeAssembly[];
+  assemblyCount: number;
 }
 
 function parseVideoItem(value: unknown): GameplayVideoStageItem | null {
@@ -74,6 +80,36 @@ function parseVideoItem(value: unknown): GameplayVideoStageItem | null {
     errorMessage: text(row.error_message),
     modelId: text(row.model_id),
   };
+}
+
+function parseAssembly(value: unknown): GameplayPrototypeAssembly | null {
+  const row = object(value);
+  const generationIds = array(row.inputVideoGenerationIds).filter(
+    (item): item is string => typeof item === "string" && item.length > 0,
+  );
+  if (
+    row.schema !== "gameplay_short_assembly" ||
+    row.version !== 1 ||
+    !text(row.rootCreativeRunId) ||
+    !text(row.conceptRunId) ||
+    !text(row.conceptId) ||
+    generationIds.length === 0 ||
+    !text(row.driveFileId) ||
+    !text(row.filename) ||
+    row.mimeType !== "video/mp4" ||
+    typeof row.sizeBytes !== "number" ||
+    !text(row.sha256) ||
+    typeof row.durationSeconds !== "number" ||
+    typeof row.width !== "number" ||
+    typeof row.height !== "number" ||
+    typeof row.fps !== "number" ||
+    !text(row.videoCodec) ||
+    row.audioIncluded !== false ||
+    !text(row.archivedAt)
+  ) {
+    return null;
+  }
+  return row as unknown as GameplayPrototypeAssembly;
 }
 
 export class GameDiscoveryVideoRepository {
@@ -142,5 +178,54 @@ export class GameDiscoveryVideoRepository {
       },
     });
     if (error) throw new Error(`Failed to persist gameplay asset graph: ${error.message}`);
+  }
+
+  async getAssemblyStage(input: { rootCreativeRunId: string }): Promise<GameplayAssemblyStage> {
+    const { data, error } = await this.client.rpc("orchestrator_get_gameplay_assembly_stage", {
+      payload: { root_creative_run_id: input.rootCreativeRunId },
+    });
+    if (error) throw new Error(`Failed to inspect gameplay assembly stage: ${error.message}`);
+    const row = requireRpcObject(data, "gameplay assembly stage");
+    const items = array(row.items)
+      .map(parseAssembly)
+      .filter((item): item is GameplayPrototypeAssembly => item !== null);
+    return {
+      items,
+      assemblyCount: typeof row.assembly_count === "number" ? row.assembly_count : items.length,
+    };
+  }
+
+  async persistAssembly(input: {
+    rootJobId: string;
+    rootCreativeRunId: string;
+    conceptRunId: string;
+    assembly: GameplayPrototypeAssembly;
+    assetGraph: AssetGraphV1;
+  }): Promise<void> {
+    const { error } = await this.client.rpc("orchestrator_persist_gameplay_assembly", {
+      payload: {
+        root_job_id: input.rootJobId,
+        root_creative_run_id: input.rootCreativeRunId,
+        concept_run_id: input.conceptRunId,
+        assembly: input.assembly,
+        asset_graph: input.assetGraph,
+      },
+    });
+    if (error) throw new Error(`Failed to persist gameplay assembly: ${error.message}`);
+  }
+
+  async finalizeDiscoveryBatch(input: {
+    rootJobId: string;
+    rootCreativeRunId: string;
+  }): Promise<Record<string, unknown>> {
+    const { data, error } = await this.client.rpc("orchestrator_finalize_gameplay_discovery_batch", {
+      payload: {
+        root_job_id: input.rootJobId,
+        root_creative_run_id: input.rootCreativeRunId,
+      },
+    });
+    if (error) throw new Error(`Failed to finalize gameplay discovery batch: ${error.message}`);
+    const row = requireRpcObject(data, "gameplay discovery finalization");
+    return object(row.result);
   }
 }
