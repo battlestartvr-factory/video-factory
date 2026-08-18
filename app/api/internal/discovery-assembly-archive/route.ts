@@ -36,7 +36,9 @@ export async function POST(request: Request) {
     typeof body.conceptId !== "string" ||
     typeof body.artifactRelativePath !== "string" ||
     !Array.isArray(body.inputVideoGenerationIds) ||
-    body.inputVideoGenerationIds.length === 0 ||
+    body.inputVideoGenerationIds.length !== 1 ||
+    typeof body.inputVideoGenerationIds[0] !== "string" ||
+    !body.inputVideoGenerationIds[0] ||
     typeof body.sha256 !== "string" ||
     !/^[0-9a-f]{64}$/.test(body.sha256)
   ) {
@@ -49,6 +51,7 @@ export async function POST(request: Request) {
       conceptRunId: body.conceptRunId,
       conceptId: body.conceptId,
       artifactRelativePath: body.artifactRelativePath,
+      inputVideoGenerationIds: body.inputVideoGenerationIds,
       sha256: body.sha256,
     });
     return NextResponse.json(
