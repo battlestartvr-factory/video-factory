@@ -3,7 +3,10 @@ import { getSessionUser } from "@/lib/auth/session";
 import { apiError, apiSuccess, readJsonBody } from "@/lib/api/response";
 import { generateRequestId } from "@/lib/logging/logger";
 import { discoveryObjectiveSpecV1Schema } from "@/lib/game-discovery";
-import { createGameDiscoveryBatch } from "@/lib/game-discovery/service";
+import {
+  createGameDiscoveryBatch,
+  listGameDiscoveryBatches,
+} from "@/lib/game-discovery/service";
 
 const createDiscoveryBatchSchema = z
   .object({
@@ -12,6 +15,31 @@ const createDiscoveryBatchSchema = z
     objective: discoveryObjectiveSpecV1Schema,
   })
   .strict();
+
+export async function GET(request: Request) {
+  const requestId = generateRequestId();
+  const user = await getSessionUser();
+  if (!user) return apiError("UNAUTHORIZED", "Требуется авторизация", 401, requestId);
+
+  const url = new URL(request.url);
+  const projectId = url.searchParams.get("projectId");
+  const limit = Math.min(Math.max(Number(url.searchParams.get("limit") ?? 20), 1), 100);
+
+  try {
+    const batches = await listGameDiscoveryBatches({
+      userId: user.id,
+      projectId: projectId || null,
+      limit: Number.isFinite(limit) ? limit : 20,
+    });
+    return apiSuccess({ batches });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "unknown";
+    if (message === "FORBIDDEN") {
+      return apiError("FORBIDDEN", "Нет доступа к проекту", 403, requestId);
+    }
+    return apiError("FETCH_FAILED", "Не удалось загрузить поисковые запуски", 500, requestId);
+  }
+}
 
 export async function POST(request: Request) {
   const requestId = generateRequestId();
