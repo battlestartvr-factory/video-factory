@@ -18,6 +18,10 @@ const conceptBatchSchema = z
 const DEFAULT_REPLACEMENT_BUFFER = 2;
 const MAX_REPLACEMENT_ATTEMPTS = 3;
 const MAX_HISTORY_IN_PROMPT = 40;
+// A full CoopGameConceptSpec is intentionally detailed. Asking Sonnet for 8 of them
+// in one response exceeded KIE's practical gateway window in production (~110s -> 500).
+// Keep each provider turn small while preserving the same total exploration target.
+export const MAX_CONCEPTS_PER_PROVIDER_CALL = 3;
 
 export interface ConceptExplorerLlm {
   generate: KieClaudeTaskAdapter["generate"];
@@ -229,52 +233,62 @@ export async function exploreConcepts(input: {
   const responseHashes: string[] = [];
   const usage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
   const initialTarget = Math.min(input.objective.conceptCount + replacementBuffer, 16);
-  const initial = await generateTypedBatch({
-    llm: input.llm,
-    model,
-    prompt: objectivePrompt(input.objective, initialTarget, history),
-    expectedCount: initialTarget,
-    signal: input.signal,
-    responseHashes,
-    usage,
-  });
+  const initial: CoopGameConceptSpecV1[] = [];
+
+  // Generate the same exploration pool as before, but in bounded provider turns. Each
+  // later turn sees the previous candidates as negative-space history so chunking does
+  // not collapse diversity or become several independent mini-batches.
+  while (initial.length < initialTarget) {
+    const remaining = initialTarget - initial.length;
+    const requested = Math.min(remaining, MAX_CONCEPTS_PER_PROVIDER_CALL);
+    const batch = await generateTypedBatch({
+      llm: input.llm,
+      model,
+      prompt: objectivePrompt(input.objective, requested, [...history, ...initial]),
+      expectedCount: requested,
+      signal: input.signal,
+      responseHashes,
+      usage,
+    });
+    initial.push(...batch.slice(0, requested));
+  }
 
   const accepted: CoopGameConceptSpecV1[] = [];
   const rejected: ConceptRejectionRecord[] = [];
   let generatedCount = initial.length;
 
   const assessAndMaybeAccept = (
-    concept: CoopGameConceptSpecV1,
+    candidate: CoopGameConceptSpecV1,
     source: "initial" | "replacement",
     attempt: number,
   ): ConceptRejectionRecord | null => {
-    if (accepted.some((item) => item.conceptId === concept.conceptId)) {
+    if (accepted.some((item) => item.conceptId === candidate.conceptId)) {
       const record: ConceptRejectionRecord = {
-        conceptId: concept.conceptId,
+        conceptId: candidate.conceptId,
         source,
         attempt,
-        reasons: [`duplicate_concept_id:${concept.conceptId}`],
-        nearestConceptId: concept.conceptId,
+        reasons: [`duplicate_concept_id:${candidate.conceptId}`],
+        nearestConceptId: candidate.conceptId,
         underexploredAxes: [],
-        concept,
+        concept: candidate,
       };
       rejected.push(record);
       return record;
     }
 
-    const assessment = assessConceptDiversity(concept, [...accepted, ...history]);
+    const assessment = assessConceptDiversity(candidate, [...accepted, ...history]);
     if (assessment.decision === "accept") {
-      accepted.push(concept);
+      accepted.push(candidate);
       return null;
     }
-    const record = rejectionRecord(concept, assessment, source, attempt);
+    const record = rejectionRecord(candidate, assessment, source, attempt);
     rejected.push(record);
     return record;
   };
 
-  for (const concept of initial) {
+  for (const candidate of initial) {
     if (accepted.length >= input.objective.conceptCount) break;
-    assessAndMaybeAccept(concept, "initial", 0);
+    assessAndMaybeAccept(candidate, "initial", 0);
   }
 
   let replacementAttempts = 0;

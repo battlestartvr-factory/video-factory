@@ -21,7 +21,11 @@ export const CONTEXT_BUDGET = {
 } as const;
 
 export const CONTENT_LIMITS = {
-  maxExtractedTextChars: 50_000,
+  // Research briefs used by the discovery factory can legitimately exceed the normal
+  // chat-context budget. Keep enough extracted source text to preserve complete market
+  // studies (including late visual-reference sections); per-turn agent context remains
+  // independently bounded by CONTEXT_BUDGET above.
+  maxExtractedTextChars: 120_000,
   knowledgeChunkSize: 1000,
   maxKnowledgeChunksPerDocument: 40,
   maxWebFetchBytes: 500_000,

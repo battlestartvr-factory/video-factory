@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { exploreConcepts, parseConceptBatch } from "../../lib/game-discovery/concept-explorer";
+import {
+  exploreConcepts,
+  MAX_CONCEPTS_PER_PROVIDER_CALL,
+  parseConceptBatch,
+} from "../../lib/game-discovery/concept-explorer";
 import type {
   CoopGameConceptSpecV1,
   DiscoveryObjectiveSpecV1,
@@ -100,6 +104,26 @@ const replacement = concept({
   failure: "cascading-collapse",
 });
 
+const relay = concept({
+  id: "pressure-relay",
+  core: "Players hand off pressure between remote valves before a visible tank ruptures.",
+  dependency: "timed-relay",
+  social: "anticipation",
+  tempo: "rhythmic-handoff",
+  camera: "fixed-overview",
+  failure: "tank-rupture",
+});
+
+const rescue = concept({
+  id: "counterweight-rescue",
+  core: "One player moves a suspended rescue cage while the other redistributes counterweights.",
+  dependency: "asymmetric-load-balancing",
+  social: "responsibility",
+  tempo: "slow-crisis",
+  camera: "wide-side-view",
+  failure: "visible-cage-drop",
+});
+
 function response(concepts: CoopGameConceptSpecV1[]) {
   return {
     text: JSON.stringify({ concepts }),
@@ -149,6 +173,41 @@ describe("Stage 4 Concept Explorer", () => {
     expect(result.usage.totalTokens).toBe(60);
     expect(calls).toHaveLength(2);
     expect(calls[1]?.prompt).toContain("EXACT REJECTION REASONS");
+  });
+
+  it("splits a larger initial pool into provider-safe batches and carries prior candidates forward", async () => {
+    expect(MAX_CONCEPTS_PER_PROVIDER_CALL).toBe(3);
+    const largerObjective: DiscoveryObjectiveSpecV1 = {
+      ...objective,
+      objectiveId: "objective-bounded-batches",
+      conceptCount: 4,
+      maxConceptsToPrototype: 2,
+    };
+    const calls: Array<{ prompt: string; thinking?: boolean }> = [];
+    const queued = [response([first, replacement, relay]), response([rescue])];
+    const llm = {
+      generate: async (input: { prompt: string; thinking?: boolean }) => {
+        calls.push(input);
+        const next = queued.shift();
+        if (!next) throw new Error("unexpected extra LLM call");
+        return next;
+      },
+    };
+
+    const result = await exploreConcepts({
+      llm,
+      objective: largerObjective,
+      replacementBuffer: 0,
+      maxReplacementAttempts: 0,
+    });
+
+    expect(result.accepted).toHaveLength(4);
+    expect(result.generatedCount).toBe(4);
+    expect(calls).toHaveLength(2);
+    expect(calls[0]?.prompt).toContain("Generate 3 substantially different");
+    expect(calls[1]?.prompt).toContain("Generate 1 substantially different");
+    expect(calls[1]?.prompt).toContain("shared-crank");
+    expect(calls.every((call) => call.thinking === false)).toBe(true);
   });
 
   it("repairs malformed provider output once before accepting typed concepts", async () => {
