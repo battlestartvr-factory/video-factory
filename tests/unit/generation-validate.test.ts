@@ -64,7 +64,6 @@ describe("canonical generation validation", () => {
       validateVideoGenerationRequest({
         modelId: "kling-3",
         mode: "reference-to-video",
-        referenceCount: 2,
         selectionSource: "ui",
       }),
     ).toThrow(GenerationValidationError);
