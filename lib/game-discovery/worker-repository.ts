@@ -62,6 +62,8 @@ export interface PersistedVisualStage {
   shotPlannerMetadata: Record<string, unknown>;
   promptCompilerMetadata: Record<string, unknown>;
   referenceApprovalRequired: boolean;
+  referenceRevisionNumber: number;
+  lastReferenceRevisionKey: string | null;
 }
 
 export interface ReferenceImageStageItem {
@@ -209,7 +211,30 @@ export class GameDiscoveryWorkerRepository {
       shotPlannerMetadata: object(row.shot_planner_metadata),
       promptCompilerMetadata: object(row.prompt_compiler_metadata),
       referenceApprovalRequired: row.reference_approval_required === true,
+      referenceRevisionNumber:
+        typeof row.reference_revision_number === "number" ? row.reference_revision_number : 0,
+      lastReferenceRevisionKey: text(row.last_reference_revision_key),
     };
+  }
+
+  async prepareReferenceRevision(input: {
+    rootCreativeRunId: string;
+    revisionKey: string;
+    shotIds: string[];
+  }): Promise<{ revisionNumber: number; duplicate: boolean }> {
+    const { data, error } = await this.client.rpc("orchestrator_prepare_gameplay_reference_revision", {
+      payload: {
+        root_creative_run_id: input.rootCreativeRunId,
+        revision_key: input.revisionKey,
+        shot_ids: input.shotIds,
+      },
+    });
+    if (error) throw new Error(`Failed to prepare gameplay reference revision: ${error.message}`);
+    const row = requireRpcObject(data, "prepare gameplay reference revision");
+    if (typeof row.revision_number !== "number") {
+      throw new Error("Invalid gameplay reference revision response");
+    }
+    return { revisionNumber: row.revision_number, duplicate: row.duplicate === true };
   }
 
   async createReferenceImage(input: {
