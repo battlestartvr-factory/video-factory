@@ -16,6 +16,13 @@ function requireConceptRuntime(context: WorkflowTickContext) {
       retryable: false,
     });
   }
+  if (!context.services.gameDiscovery) {
+    throw new DurableWorkflowError({
+      code: "DISCOVERY_REPOSITORY_MISSING",
+      message: "Stage 4 game discovery repository is not configured in the durable worker",
+      retryable: false,
+    });
+  }
   if (!context.services.kieClaude) {
     throw new DurableWorkflowError({
       code: "KIE_NOT_CONFIGURED",
@@ -38,10 +45,6 @@ function providerFailure(error: KieClaudeTaskError): DurableWorkflowError {
     details: { http_status: error.status },
     cause: error,
   });
-}
-
-function conceptIdsFromRuns(runs: Array<{ conceptId: string }>): string[] {
-  return runs.map((run) => run.conceptId);
 }
 
 export const gameDiscoveryBatchV1: WorkflowTickHandler = async (context) => {
@@ -218,7 +221,7 @@ export const gameDiscoveryBatchV1: WorkflowTickHandler = async (context) => {
         rejected_count: exploration.rejected.length,
         replacement_attempts: exploration.replacementAttempts,
         concept_ids: exploration.accepted.map((concept) => concept.conceptId),
-        concept_run_ids: conceptIdsFromRuns(conceptRuns),
+        concept_run_ids: conceptRuns.map((run) => run.runId),
         history_count: history.length,
         model: exploration.model,
         usage: exploration.usage,
