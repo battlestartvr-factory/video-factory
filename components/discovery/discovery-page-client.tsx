@@ -286,7 +286,7 @@ export function DiscoveryPageClient({ initialBatches }: { initialBatches: Discov
                             <p className="mt-2 text-sm leading-6 text-muted-foreground"><span className="font-medium text-foreground">Co-op dependency:</span> {str(concept.coopDependency)}</p>
                           )}
                         </div>
-                        {evaluation.coOpDependency && (
+                        {Boolean(evaluation.coOpDependency) && (
                           <Badge variant={preEvalPassed ? "success" : "warning"}>
                             pre-eval {preEvalPassed ? "pass" : "check"}
                           </Badge>
@@ -294,7 +294,7 @@ export function DiscoveryPageClient({ initialBatches }: { initialBatches: Discov
                       </div>
                     </div>
 
-                    {moment.momentId && (
+                    {Boolean(moment.momentId) && (
                       <div className="grid gap-3 border-b border-border p-4 md:grid-cols-2">
                         <div>
                           <p className="text-[11px] font-semibold uppercase tracking-wider text-muted">Gameplay moment</p>
@@ -371,10 +371,10 @@ export function DiscoveryPageClient({ initialBatches }: { initialBatches: Discov
                               </Button>
                             </div>
 
-                            {review?.structured_feedback && (
+                            {Boolean(review?.structured_feedback) && (
                               <div className="rounded-lg border border-border bg-background/40 p-3">
                                 <p className="text-[11px] font-semibold uppercase tracking-wider text-muted">Память из feedback</p>
-                                <p className="mt-1 text-xs leading-5 text-muted-foreground">{str(object(review.structured_feedback).summary)}</p>
+                                <p className="mt-1 text-xs leading-5 text-muted-foreground">{str(object(review?.structured_feedback).summary)}</p>
                               </div>
                             )}
                           </div>
