@@ -117,16 +117,16 @@ while (( SECONDS < deadline )); do
       deployed_commit="$(git rev-parse HEAD)"
 
       log "Backfilling recent completed media into Google Drive"
-      if archive_result="$(docker compose -f "$COMPOSE_FILE" exec -T app sh -lc '
+      archive_result=""
+      if ! archive_result="$(docker compose -f "$COMPOSE_FILE" exec -T app sh -lc '
         token="${SUPABASE_SERVICE_ROLE_KEY:-${SUPABASE_SECRET_KEY:-}}"
-        curl -sS --max-time 300 -X POST http://127.0.0.1:3000/api/internal/generation-archive/backfill \
+        curl -sS --fail-with-body --max-time 300 -X POST http://127.0.0.1:3000/api/internal/generation-archive/backfill \
           -H "Authorization: Bearer ${token}" \
           -H "Accept: application/json"
       ' 2>&1)"; then
-        log "Media archive backfill: $archive_result"
-      else
-        log "WARNING: media archive backfill could not be completed: $archive_result"
+        fail "Media archive backfill failed: $archive_result"
       fi
+      log "Media archive backfill: $archive_result"
 
       mkdir -p "$(dirname "$LAST_GOOD_FILE")" "$(dirname "$ROLLBACK_CANDIDATE_FILE")"
       printf '%s\n' "$ROLLBACK_CANDIDATE" > "$ROLLBACK_CANDIDATE_FILE"
