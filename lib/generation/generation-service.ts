@@ -11,6 +11,7 @@ import {
 } from "./validate";
 
 const DURABLE_IMAGE_MODELS = new Set(["gpt-image-2", "nano-banana-2", "nano-banana-pro"]);
+const DURABLE_VIDEO_MODELS = new Set(["kling-3", "veo-3-1", "seedance-2-5", "wan-2-7"]);
 
 type GenerationReferenceAsset = {
   id?: string;
@@ -137,9 +138,7 @@ async function createQueuedGeneration(input: {
     .select()
     .single();
 
-  if (error || !data) {
-    throw new Error("Failed to create generation");
-  }
+  if (error || !data) throw new Error("Failed to create generation");
 
   const generation = data as Generation;
   const action = await createAgentAction({
@@ -169,8 +168,9 @@ function rpcObject(value: unknown): Record<string, unknown> {
     : {};
 }
 
-async function createDurableImageGeneration(input: {
+async function createDurableGeneration(input: {
   requestId: string;
+  type: "image" | "video";
   userId: string;
   mode: string;
   prompt: string;
@@ -194,8 +194,11 @@ async function createDurableImageGeneration(input: {
     settings: input.settings,
     assetIds: input.referenceAssets.map((asset) => asset.id).filter(Boolean),
   });
+  const rpcName = input.type === "image"
+    ? "orchestrator_create_image_generation"
+    : "orchestrator_create_video_generation";
 
-  const { data, error } = await service.rpc("orchestrator_create_image_generation", {
+  const { data, error } = await service.rpc(rpcName, {
     payload: {
       request_id: input.requestId,
       user_id: input.userId,
@@ -214,13 +217,13 @@ async function createDurableImageGeneration(input: {
   });
 
   if (error) {
-    throw new Error(`Failed to create durable image generation: ${error.message}`);
+    throw new Error(`Failed to create durable ${input.type} generation: ${error.message}`);
   }
   const row = rpcObject(data);
   const generation = rpcObject(row.generation);
   const action = rpcObject(row.action);
   if (typeof generation.id !== "string" || typeof action.id !== "string") {
-    throw new Error("Invalid orchestrator_create_image_generation response");
+    throw new Error(`Invalid ${rpcName} response`);
   }
 
   return {
@@ -266,8 +269,9 @@ export async function createImageGeneration(
   };
 
   if (DURABLE_IMAGE_MODELS.has(validated.model.id)) {
-    return createDurableImageGeneration({
+    return createDurableGeneration({
       requestId: input.requestId ?? crypto.randomUUID(),
+      type: "image",
       userId: input.userId,
       mode: validated.mode,
       prompt: input.prompt,
@@ -344,7 +348,7 @@ export async function createVideoGeneration(
   const assets = assetIds.length
     ? await resolveOwnedAssets(input.userId, assetIds)
     : (input.referenceAssets ?? []);
-  const withRoles = assets.map((asset) => ({
+  const withRoles: GenerationReferenceAsset[] = assets.map((asset) => ({
     ...asset,
     role:
       asset.id === startFrameAssetId
@@ -353,6 +357,34 @@ export async function createVideoGeneration(
           ? "end_frame"
           : asset.role ?? "reference",
   }));
+  const settings = {
+    ...settingsIn,
+    ...validated.settings,
+    start_frame_asset_id: startFrameAssetId,
+    end_frame_asset_id: endFrameAssetId,
+    model_id: validated.model.id,
+    requested_quality: validated.settings.quality,
+    effective_quality: validated.settings.effectiveQuality,
+    selection_source: validated.settings.selectionSource ?? "default",
+  };
+
+  if (DURABLE_VIDEO_MODELS.has(validated.model.id)) {
+    return createDurableGeneration({
+      requestId: input.requestId ?? crypto.randomUUID(),
+      type: "video",
+      userId: input.userId,
+      mode: validated.mode,
+      prompt: input.prompt,
+      modelId: validated.model.id,
+      presetId: input.presetId,
+      settings,
+      referenceAssets: withRoles,
+      projectId: input.projectId,
+      chatId: input.chatId,
+      sourceMessageId: input.sourceMessageId,
+      agentRunId: input.agentRunId,
+    });
+  }
 
   return createQueuedGeneration({
     userId: input.userId,
@@ -361,16 +393,7 @@ export async function createVideoGeneration(
     prompt: input.prompt,
     modelId: validated.model.id,
     presetId: input.presetId,
-    settings: {
-      ...settingsIn,
-      ...validated.settings,
-      start_frame_asset_id: startFrameAssetId,
-      end_frame_asset_id: endFrameAssetId,
-      model_id: validated.model.id,
-      requested_quality: validated.settings.quality,
-      effective_quality: validated.settings.effectiveQuality,
-      selection_source: validated.settings.selectionSource ?? "default",
-    },
+    settings,
     referenceAssets: withRoles,
     projectId: input.projectId,
     chatId: input.chatId,
