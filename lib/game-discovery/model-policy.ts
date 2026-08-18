@@ -19,70 +19,71 @@ export interface DiscoveryLlmPolicy {
   automaticEscalation: boolean;
 }
 
+/**
+ * Stage 4 owns its internal model routing. The chat model only launches the durable job;
+ * it must not silently become the worker model. KIE Sonnet has repeatedly returned HTTP
+ * 500 for the large structured discovery turns, so the durable path currently uses the
+ * proven Gemini OpenAI-compatible endpoints instead.
+ */
 const POLICIES: Record<DiscoveryLlmTask, DiscoveryLlmPolicy> = {
   concept_exploration: {
     task: "concept_exploration",
-    primaryModel: "claude-sonnet-5",
+    primaryModel: "gemini-3-pro",
     tier: "creative",
-    // Stage 4 asks for large, strict JSON payloads. KIE's extended-thinking path can
-    // hold these requests long enough for the upstream gateway to return HTTP 500.
-    // Standard Sonnet is the production-safe path and is also what the chat UI uses.
     thinking: false,
     maxOutputTokens: 8192,
     maxCallsPerBatch: 4,
-    fallbackModels: [],
+    fallbackModels: ["gemini-3-6-flash"],
     automaticEscalation: false,
   },
   schema_repair: {
     task: "schema_repair",
-    primaryModel: "claude-haiku-4-5",
+    primaryModel: "gemini-3-6-flash",
     tier: "cheap",
     thinking: false,
     maxOutputTokens: 4096,
     maxCallsPerBatch: 6,
-    fallbackModels: ["gemini-3-6-flash"],
+    fallbackModels: [],
     automaticEscalation: false,
   },
   concept_pre_evaluation: {
     task: "concept_pre_evaluation",
-    primaryModel: "claude-haiku-4-5",
+    primaryModel: "gemini-3-6-flash",
     tier: "cheap",
     thinking: false,
     maxOutputTokens: 4096,
-    maxCallsPerBatch: 2,
-    fallbackModels: ["gemini-3-6-flash"],
-    automaticEscalation: false,
-  },
-  gameplay_moment_planning: {
-    task: "gameplay_moment_planning",
-    primaryModel: "claude-sonnet-5",
-    tier: "creative",
-    // Keep the durable pipeline on the same proven KIE Claude request mode as chat.
-    // The structured planning prompt already provides the required deliberation frame.
-    thinking: false,
-    maxOutputTokens: 6144,
     maxCallsPerBatch: 2,
     fallbackModels: [],
     automaticEscalation: false,
   },
+  gameplay_moment_planning: {
+    task: "gameplay_moment_planning",
+    primaryModel: "gemini-3-pro",
+    tier: "creative",
+    thinking: false,
+    maxOutputTokens: 6144,
+    maxCallsPerBatch: 2,
+    fallbackModels: ["gemini-3-6-flash"],
+    automaticEscalation: false,
+  },
   shot_planning: {
     task: "shot_planning",
-    primaryModel: "claude-haiku-4-5",
+    primaryModel: "gemini-3-6-flash",
     tier: "cheap",
     thinking: false,
     maxOutputTokens: 4096,
     maxCallsPerBatch: 2,
-    fallbackModels: ["claude-sonnet-5"],
+    fallbackModels: ["gemini-3-pro"],
     automaticEscalation: true,
   },
   feedback_structuring: {
     task: "feedback_structuring",
-    primaryModel: "claude-haiku-4-5",
+    primaryModel: "gemini-3-6-flash",
     tier: "cheap",
     thinking: false,
     maxOutputTokens: 3072,
     maxCallsPerBatch: 2,
-    fallbackModels: ["gemini-3-6-flash"],
+    fallbackModels: [],
     automaticEscalation: false,
   },
 };
