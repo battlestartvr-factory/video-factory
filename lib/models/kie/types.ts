@@ -18,6 +18,7 @@ export type FutureModelCategory =
 export type KieAdapterKind =
   | "openai_chat"
   | "responses"
+  | "claude_messages"
   | "claude_sonnet"
   | "market_task"
   | "veo";
