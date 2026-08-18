@@ -1,4 +1,4 @@
-import type { KieModelEntry } from "../types";
+import type { KieModelEntry, ReasoningConfig } from "../types";
 
 const EFFORT_REASONING = {
   control: "effort" as const,
@@ -12,10 +12,10 @@ const EFFORT_REASONING = {
   },
 };
 
-const KIE_CLAUDE_REASONING = {
-  control: "binary" as const,
-  levels: ["standard", "thinking"] as const,
-  default: "standard" as const,
+const KIE_CLAUDE_REASONING: ReasoningConfig = {
+  control: "binary",
+  levels: ["standard", "thinking"],
+  default: "standard",
   mapping: { standard: "disabled", thinking: "enabled" },
 };
 
