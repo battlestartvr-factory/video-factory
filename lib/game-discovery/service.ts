@@ -4,6 +4,12 @@ import { randomUUID } from "node:crypto";
 import { assertProjectAccess } from "@/lib/projects/access";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import type { CreativeRun } from "@/lib/creative/types";
+import { getKieConfig } from "@/lib/env/env.server";
+import { KieClaudeTaskAdapter } from "@/lib/models/kie/claude-task";
+import {
+  gameplayReferenceFeedbackV1Schema,
+  structureGameplayReferenceFeedback,
+} from "./feedback-memory";
 import {
   discoveryObjectiveSpecV1Schema,
   type DiscoveryObjectiveSpecV1,
@@ -23,6 +29,27 @@ export interface CreateGameDiscoveryBatchResult {
   duplicate: boolean;
   queueMsgId: number | null;
   traceId: string | null;
+}
+
+export interface GameplayReferenceReview {
+  id: string;
+  root_creative_run_id: string;
+  concept_run_id: string;
+  generation_id: string | null;
+  user_id: string | null;
+  concept_id: string;
+  moment_id: string;
+  shot_id: string;
+  decision: "approve" | "reject" | "revise";
+  raw_feedback: string | null;
+  structured_feedback: Record<string, unknown>;
+  error_tags: unknown[];
+  must_show: unknown[];
+  must_avoid: unknown[];
+  reusable_scope: "shot" | "concept" | "project";
+  model: string | null;
+  usage: Record<string, unknown>;
+  created_at: string;
 }
 
 function rpcObject(value: unknown): Record<string, unknown> {
@@ -111,4 +138,109 @@ export async function getGameDiscoveryBatch(input: {
   if (!run.project_id) return null;
   await assertProjectAccess(input.userId, run.project_id);
   return run;
+}
+
+export async function listGameplayReferenceReviews(input: {
+  userId: string;
+  rootRunId: string;
+}): Promise<GameplayReferenceReview[]> {
+  const root = await getGameDiscoveryBatch({ userId: input.userId, runId: input.rootRunId });
+  if (!root) throw new Error("FORBIDDEN");
+
+  const service = createSupabaseServiceClient();
+  const { data, error } = await service
+    .from("gameplay_reference_reviews")
+    .select("*")
+    .eq("root_creative_run_id", input.rootRunId)
+    .order("created_at", { ascending: true });
+  if (error) throw new Error(`Failed to list gameplay reference reviews: ${error.message}`);
+  return (data ?? []) as GameplayReferenceReview[];
+}
+
+export async function recordGameplayReferenceReview(input: {
+  userId: string;
+  rootRunId: string;
+  conceptRunId: string;
+  generationId?: string | null;
+  conceptId: string;
+  momentId: string;
+  shotId: string;
+  decision: "approve" | "reject" | "revise";
+  rawFeedback?: string | null;
+}): Promise<GameplayReferenceReview> {
+  const root = await getGameDiscoveryBatch({ userId: input.userId, runId: input.rootRunId });
+  if (!root) throw new Error("FORBIDDEN");
+
+  const service = createSupabaseServiceClient();
+  const { data: conceptRun, error: conceptError } = await service
+    .from("creative_runs")
+    .select("id,parent_run_id,metadata,outputs")
+    .eq("id", input.conceptRunId)
+    .eq("parent_run_id", input.rootRunId)
+    .maybeSingle();
+  if (conceptError) throw new Error(`Failed to load concept run: ${conceptError.message}`);
+  if (!conceptRun || conceptRun.metadata?.domain_kind !== "coop_game_concept") {
+    throw new Error("CONCEPT_RUN_NOT_FOUND");
+  }
+
+  const rawFeedback = input.rawFeedback?.trim() ?? "";
+  let structured;
+  let model: string | null = null;
+  let usage: Record<string, unknown> = {};
+
+  if (rawFeedback) {
+    const config = getKieConfig();
+    if (!config.configured) throw new Error("KIE_NOT_CONFIGURED");
+    const llm = new KieClaudeTaskAdapter(config.baseUrl, config.apiKey);
+    const result = await structureGameplayReferenceFeedback({
+      llm,
+      rawFeedback,
+      decision: input.decision,
+      conceptSummary:
+        typeof conceptRun.outputs?.coop_game_concept?.oneSentencePitch === "string"
+          ? conceptRun.outputs.coop_game_concept.oneSentencePitch
+          : input.conceptId,
+      shotSummary:
+        typeof conceptRun.outputs?.gameplay_shot?.action === "string"
+          ? conceptRun.outputs.gameplay_shot.action
+          : input.shotId,
+    });
+    structured = result.feedback;
+    model = result.model;
+    usage = result.usage;
+  } else {
+    structured = gameplayReferenceFeedbackV1Schema.parse({
+      schema: "gameplay_reference_feedback",
+      version: 1,
+      errorTags: [],
+      mustShow: [],
+      mustAvoid: [],
+      reusableScope: "shot",
+      summary:
+        input.decision === "approve"
+          ? "Reference approved without additional feedback."
+          : "Review decision recorded without additional written feedback.",
+    });
+  }
+
+  const { data, error } = await service.rpc("orchestrator_record_gameplay_reference_review", {
+    payload: {
+      root_creative_run_id: input.rootRunId,
+      concept_run_id: input.conceptRunId,
+      generation_id: input.generationId ?? null,
+      user_id: input.userId,
+      concept_id: input.conceptId,
+      moment_id: input.momentId,
+      shot_id: input.shotId,
+      decision: input.decision,
+      raw_feedback: rawFeedback || null,
+      structured_feedback: structured,
+      model,
+      usage,
+    },
+  });
+  if (error) throw new Error(`Failed to record gameplay reference review: ${error.message}`);
+  const review = rpcObject(rpcObject(data).review);
+  if (typeof review.id !== "string") throw new Error("Invalid gameplay reference review response");
+  return review as unknown as GameplayReferenceReview;
 }
