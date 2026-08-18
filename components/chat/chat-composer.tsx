@@ -17,7 +17,10 @@ interface PendingFile {
 }
 
 interface ChatComposerProps {
-  onSend: (content: string, options: { modelId?: string; reasoningLevel?: string; files: File[] }) => void;
+  onSend: (
+    content: string,
+    options: { modelId?: string; reasoningLevel?: string; files: File[] },
+  ) => Promise<boolean> | boolean;
   disabled?: boolean;
   chatId?: string;
   defaultModelId?: string;
@@ -40,9 +43,11 @@ export function ChatComposer({
   const [modelId, setModelId] = useState(defaultModelId);
   const [reasoningLevel, setReasoningLevel] = useState(defaultReasoningLevel);
   const [dragOver, setDragOver] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const isHero = variant === "hero";
+  const effectiveDisabled = disabled || submitting;
 
   const persistChatSettings = useCallback(
     async (updates: { modelId?: string; reasoningLevel?: string }) => {
@@ -78,19 +83,35 @@ export function ChatComposer({
     ]);
   }, []);
 
-  const handleSend = () => {
+  const handleSend = async () => {
     const trimmed = content.trim();
-    if (!trimmed && files.length === 0) return;
-    onSend(trimmed, { modelId, reasoningLevel, files: files.map((f) => f.file) });
-    setContent("");
-    setFiles([]);
-    if (textareaRef.current) textareaRef.current.style.height = "auto";
+    if (effectiveDisabled || (!trimmed && files.length === 0)) return;
+
+    setSubmitting(true);
+    try {
+      const sent = await onSend(trimmed, {
+        modelId,
+        reasoningLevel,
+        files: files.map((f) => f.file),
+      });
+      if (!sent) return;
+
+      for (const pending of files) {
+        if (pending.preview) URL.revokeObjectURL(pending.preview);
+      }
+      setContent("");
+      setFiles([]);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+      if (textareaRef.current) textareaRef.current.style.height = "auto";
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
-      handleSend();
+      void handleSend();
     }
   };
 
@@ -124,6 +145,7 @@ export function ChatComposer({
                   type="button"
                   onClick={() => setFiles((prev) => prev.filter((x) => x.id !== f.id))}
                   className="text-muted-foreground hover:text-foreground"
+                  disabled={effectiveDisabled}
                 >
                   <X className="h-3 w-3" />
                 </button>
@@ -145,7 +167,7 @@ export function ChatComposer({
           onDrop={(e) => {
             e.preventDefault();
             setDragOver(false);
-            if (e.dataTransfer.files.length) addFiles(e.dataTransfer.files);
+            if (!effectiveDisabled && e.dataTransfer.files.length) addFiles(e.dataTransfer.files);
           }}
         >
           <textarea
@@ -156,7 +178,7 @@ export function ChatComposer({
             placeholder={isHero ? "Спросите что угодно" : "Напишите сообщение…"}
             rows={isHero ? 2 : 1}
             autoFocus={autoFocus}
-            disabled={disabled}
+            disabled={effectiveDisabled}
             className={cn(
               "w-full resize-none bg-transparent text-foreground placeholder:text-muted focus:outline-none",
               isHero
@@ -178,6 +200,7 @@ export function ChatComposer({
                 className={cn("shrink-0", isHero ? "h-9 w-9 rounded-full" : "h-8 w-8")}
                 onClick={() => fileInputRef.current?.click()}
                 aria-label="Добавить файл"
+                disabled={effectiveDisabled}
               >
                 {isHero ? <Plus className="h-5 w-5" /> : <Paperclip className="h-4 w-4" />}
               </Button>
@@ -188,6 +211,7 @@ export function ChatComposer({
                 accept={getAcceptString()}
                 className="hidden"
                 onChange={(e) => e.target.files && addFiles(e.target.files)}
+                disabled={effectiveDisabled}
               />
               <ModelSelector value={modelId} onChange={handleModelChange} type="chat" />
               <ReasoningSelector
@@ -206,8 +230,8 @@ export function ChatComposer({
             <Button
               size="icon"
               className={cn("shrink-0 rounded-full", isHero ? "h-9 w-9" : "h-8 w-8")}
-              disabled={disabled || (!content.trim() && files.length === 0)}
-              onClick={handleSend}
+              disabled={effectiveDisabled || (!content.trim() && files.length === 0)}
+              onClick={() => void handleSend()}
               aria-label="Отправить"
             >
               <ArrowUp className={isHero ? "h-5 w-5" : "h-4 w-4"} />
