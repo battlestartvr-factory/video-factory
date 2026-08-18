@@ -13,6 +13,7 @@ import {
 } from "./projects";
 import { extractDocumentTool, inspectAttachmentTool } from "./files";
 import { webFetchTool, webSearchTool } from "./web";
+import { startGameDiscoveryTool } from "./game-discovery";
 
 const TOOLS: AnyAgentTool[] = [
   answerUserTool,
@@ -32,6 +33,7 @@ const TOOLS: AnyAgentTool[] = [
   extractDocumentTool,
   webSearchTool,
   webFetchTool,
+  startGameDiscoveryTool,
 ] as unknown as AnyAgentTool[];
 
 const TOOL_MAP = new Map(TOOLS.map((tool) => [tool.name, tool]));
