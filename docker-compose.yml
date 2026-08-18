@@ -1,4 +1,24 @@
 services:
+  data-init:
+    image: alpine:3.22
+    user: "0:0"
+    volumes:
+      - ${AI_FACTORY_DATA_ROOT:-/srv/ai-factory}:/srv/ai-factory
+    command:
+      - /bin/sh
+      - -ec
+      - |
+        mkdir -p \
+          /srv/ai-factory/discovery-assembly-staging \
+          /srv/ai-factory/discovery-assembly-output
+        chown 1001:1001 \
+          /srv/ai-factory/discovery-assembly-staging \
+          /srv/ai-factory/discovery-assembly-output
+        chmod 0770 \
+          /srv/ai-factory/discovery-assembly-staging \
+          /srv/ai-factory/discovery-assembly-output
+    restart: "no"
+
   app:
     build:
       context: .
@@ -17,6 +37,9 @@ services:
       GOOGLE_DRIVE_AUTH_MODE: oauth_user
     volumes:
       - ${AI_FACTORY_DATA_ROOT:-/srv/ai-factory}:/srv/ai-factory
+    depends_on:
+      data-init:
+        condition: service_completed_successfully
     expose:
       - "3000"
     healthcheck:
@@ -41,6 +64,9 @@ services:
       GOOGLE_DRIVE_AUTH_MODE: oauth_user
     volumes:
       - ${AI_FACTORY_DATA_ROOT:-/srv/ai-factory}:/srv/ai-factory
+    depends_on:
+      data-init:
+        condition: service_completed_successfully
     restart: unless-stopped
 
   caddy:

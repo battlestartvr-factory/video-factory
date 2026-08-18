@@ -103,6 +103,25 @@ docker compose -f "$COMPOSE_FILE" build --pull
 log "Starting services"
 docker compose -f "$COMPOSE_FILE" up -d --remove-orphans
 
+log "Verifying shared assembly workspace permissions"
+if ! docker compose -f "$COMPOSE_FILE" exec -T worker sh -lc '
+  set -eu
+  for dir in /srv/ai-factory/discovery-assembly-staging /srv/ai-factory/discovery-assembly-output; do
+    mkdir -p "$dir"
+    test -d "$dir"
+    test -w "$dir"
+  done
+'; then
+  fail "Durable worker cannot write to the shared discovery assembly workspace"
+fi
+if ! docker compose -f "$COMPOSE_FILE" exec -T app sh -lc '
+  set -eu
+  test -r /srv/ai-factory/discovery-assembly-staging
+'; then
+  fail "App cannot read the shared discovery assembly staging workspace"
+fi
+log "Shared assembly workspace is writable by worker and readable by app"
+
 log "Waiting for app health and durable worker (timeout ${HEALTH_TIMEOUT_SECONDS}s)"
 deadline=$((SECONDS + HEALTH_TIMEOUT_SECONDS))
 while (( SECONDS < deadline )); do
