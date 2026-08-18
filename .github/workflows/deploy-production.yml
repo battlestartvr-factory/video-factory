@@ -6,6 +6,13 @@ on:
     types: [completed]
     branches: [main]
   workflow_dispatch:
+    inputs:
+      mode:
+        description: "Manual production action"
+        required: true
+        default: preflight
+        type: choice
+        options: [preflight, deploy, rollback]
 
 concurrency:
   group: production-deploy
@@ -33,43 +40,134 @@ jobs:
             echo "sha=${MANUAL_SHA}" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Deploy over SSH
+      - name: Prepare SSH key
         env:
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
           DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
           DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
           DEPLOY_SSH_KEY_B64: ${{ secrets.DEPLOY_SSH_KEY_B64 }}
-          DEPLOY_COMMIT: ${{ steps.commit.outputs.sha }}
         run: |
           set -euo pipefail
-
-          if [[ -z "${DEPLOY_HOST:-}" || -z "${DEPLOY_USER:-}" ]]; then
-            echo "DEPLOY_HOST and DEPLOY_USER secrets are required." >&2
-            exit 1
-          fi
-
-          if [[ -z "${DEPLOY_SSH_KEY_B64:-}" && -z "${DEPLOY_SSH_KEY:-}" ]]; then
-            echo "Set DEPLOY_SSH_KEY_B64 (recommended) or DEPLOY_SSH_KEY." >&2
-            exit 1
-          fi
-
+          [[ -n "${DEPLOY_HOST:-}" && -n "${DEPLOY_USER:-}" ]] || { echo "DEPLOY_HOST and DEPLOY_USER are required" >&2; exit 1; }
+          [[ -n "${DEPLOY_SSH_KEY_B64:-}" || -n "${DEPLOY_SSH_KEY:-}" ]] || { echo "Deploy SSH key is required" >&2; exit 1; }
           install -m 700 -d ~/.ssh
-
           if [[ -n "${DEPLOY_SSH_KEY_B64:-}" ]]; then
             printf '%s' "$DEPLOY_SSH_KEY_B64" | base64 --decode > ~/.ssh/deploy_key
           else
             printf '%s\n' "$DEPLOY_SSH_KEY" | tr -d '\r' > ~/.ssh/deploy_key
           fi
           chmod 600 ~/.ssh/deploy_key
+          ssh-keygen -y -f ~/.ssh/deploy_key >/dev/null 2>&1 || { echo "Invalid deploy SSH key" >&2; exit 1; }
 
-          if ! ssh-keygen -y -f ~/.ssh/deploy_key >/dev/null 2>&1; then
-            echo "The deploy SSH secret is not a valid OpenSSH private key." >&2
-            echo "Use DEPLOY_SSH_KEY_B64 to preserve the key exactly." >&2
-            exit 1
+      - name: Production preflight (no deploy, no provider call)
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'preflight' }}
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_COMMIT: ${{ steps.commit.outputs.sha }}
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new -o BatchMode=yes \
+            "${DEPLOY_USER}@${DEPLOY_HOST}" "DEPLOY_COMMIT='${DEPLOY_COMMIT}' bash -s" <<'REMOTE'
+          set -euo pipefail
+          APP_DIR=/opt/ai-factory/app
+          ENV_FILE=/opt/ai-factory/.env
+          fail(){ echo "[preflight] ERROR: $*" >&2; exit 1; }
+          ok(){ echo "[preflight] OK: $*"; }
+          [[ -d "$APP_DIR/.git" ]] || fail "app checkout missing"
+          [[ -f "$ENV_FILE" ]] || fail "production env missing"
+          command -v git >/dev/null && command -v docker >/dev/null && command -v curl >/dev/null || fail "git/docker/curl required"
+          cd "$APP_DIR"
+          git fetch origin '+refs/heads/*:refs/remotes/origin/*' --quiet
+          git cat-file -e "${DEPLOY_COMMIT}^{commit}" || fail "candidate commit unavailable"
+          git cat-file -e "${DEPLOY_COMMIT}:scripts/deploy.sh" || fail "candidate deploy script unavailable"
+          ok "candidate commit ${DEPLOY_COMMIT} is available"
+          ok "current server commit $(git rev-parse HEAD)"
+
+          set -a
+          # shellcheck disable=SC1090
+          source "$ENV_FILE"
+          set +a
+
+          for name in NEXT_PUBLIC_SUPABASE_URL KIE_API_KEY APP_URL; do
+            [[ -n "${!name:-}" ]] || fail "${name} missing or empty"
+            ok "${name} configured"
+          done
+          if [[ -n "${SUPABASE_SERVICE_ROLE_KEY:-}" || -n "${SUPABASE_SECRET_KEY:-}" ]]; then
+            ok "Supabase server-side key configured"
+          else
+            fail "Supabase server-side key missing"
           fi
 
-          ssh -i ~/.ssh/deploy_key \
-            -o StrictHostKeyChecking=accept-new \
-            -o BatchMode=yes \
-            "${DEPLOY_USER}@${DEPLOY_HOST}" \
-            "cd /opt/ai-factory/app && git reset --hard HEAD && /opt/ai-factory/app/scripts/deploy.sh ${DEPLOY_COMMIT}"
+          [[ "${GOOGLE_DRIVE_INTEGRATION_ENABLED:-false}" == "true" ]] || fail "Google Drive durable archive is disabled"
+          [[ -n "${GOOGLE_DRIVE_SHARED_FOLDER_ID:-}" ]] || fail "GOOGLE_DRIVE_SHARED_FOLDER_ID missing"
+          [[ -n "${GOOGLE_DRIVE_CLIENT_ID:-}" ]] || fail "GOOGLE_DRIVE_CLIENT_ID missing"
+          [[ -n "${GOOGLE_DRIVE_CLIENT_SECRET:-}" ]] || fail "GOOGLE_DRIVE_CLIENT_SECRET missing"
+          [[ -n "${GOOGLE_DRIVE_REFRESH_TOKEN:-}" ]] || fail "GOOGLE_DRIVE_REFRESH_TOKEN missing"
+          ok "Google Drive owner OAuth credentials configured; runtime auth mode will be oauth_user"
+          ok "Google Drive archive root configured"
+
+          [[ "$APP_URL" == https://* ]] || fail "APP_URL must use public HTTPS"
+          [[ "$APP_URL" != *localhost* && "$APP_URL" != *127.0.0.1* ]] || fail "APP_URL cannot be localhost"
+          ok "APP_URL is suitable for provider callbacks"
+          if curl -fsS --max-time 10 http://127.0.0.1/api/health >/dev/null 2>&1 || curl -fsS --max-time 10 http://127.0.0.1:3000/api/health >/dev/null 2>&1; then
+            ok "current app health responds"
+          else
+            fail "current app health unavailable"
+          fi
+          docker compose ps || true
+          ok "preflight completed without deployment or provider request"
+          REMOTE
+
+      - name: Deploy over SSH
+        if: >-
+          ${{ github.event_name == 'workflow_run' ||
+              (github.event_name == 'workflow_dispatch' && inputs.mode == 'deploy') }}
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_COMMIT: ${{ steps.commit.outputs.sha }}
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new -o BatchMode=yes \
+            "${DEPLOY_USER}@${DEPLOY_HOST}" "DEPLOY_COMMIT='${DEPLOY_COMMIT}' bash -s" <<'REMOTE'
+          set -euo pipefail
+          APP_DIR=/opt/ai-factory/app
+          cd "$APP_DIR"
+          git reset --hard HEAD
+          git fetch origin '+refs/heads/*:refs/remotes/origin/*' --quiet
+          git cat-file -e "${DEPLOY_COMMIT}^{commit}"
+          tmp_deploy="$(mktemp)"
+          trap 'rm -f "$tmp_deploy"' EXIT
+          git show "${DEPLOY_COMMIT}:scripts/deploy.sh" > "$tmp_deploy"
+          chmod 700 "$tmp_deploy"
+          "$tmp_deploy" "$DEPLOY_COMMIT"
+          REMOTE
+
+      - name: Roll back to recorded candidate
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'rollback' }}
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new -o BatchMode=yes \
+            "${DEPLOY_USER}@${DEPLOY_HOST}" bash -s <<'REMOTE'
+          set -euo pipefail
+          APP_DIR=/opt/ai-factory/app
+          DATA_ROOT=/srv/ai-factory
+          CANDIDATE_FILE="$DATA_ROOT/.deploy-rollback-candidate-commit"
+          [[ -f "$CANDIDATE_FILE" ]] || { echo "[rollback] candidate marker missing" >&2; exit 1; }
+          candidate="$(tr -d '\r\n[:space:]' < "$CANDIDATE_FILE")"
+          [[ -n "$candidate" ]] || { echo "[rollback] candidate marker empty" >&2; exit 1; }
+          cd "$APP_DIR"
+          git reset --hard HEAD
+          git fetch origin '+refs/heads/*:refs/remotes/origin/*' --quiet
+          git cat-file -e "${candidate}^{commit}" || { echo "[rollback] candidate commit unavailable: ${candidate}" >&2; exit 1; }
+          tmp_deploy="$(mktemp)"
+          trap 'rm -f "$tmp_deploy"' EXIT
+          git show "${candidate}:scripts/deploy.sh" > "$tmp_deploy"
+          chmod 700 "$tmp_deploy"
+          echo "[rollback] deploying recorded candidate ${candidate}"
+          "$tmp_deploy" "$candidate"
+          REMOTE

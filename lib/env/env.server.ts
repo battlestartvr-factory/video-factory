@@ -31,7 +31,7 @@ const serverEnvSchema = z.object({
   B2_BUCKET: z.string().optional().or(z.literal("")),
   KIE_API_KEY: z.string().optional().or(z.literal("")),
   KIE_API_BASE_URL: z.string().optional().or(z.literal("")),
-  AGENT_LLM_BASE_URL: z.string().optional().or(z.literal("")),
+  AGENT_LLM_BASE_URL: z.string().url().optional().or(z.literal("")),
   AGENT_LLM_API_KEY: z.string().optional().or(z.literal("")),
   AGENT_LLM_DEFAULT_MODEL: z.string().optional().or(z.literal("")),
   AGENT_LLM_ALLOWED_MODELS: z.string().optional().or(z.literal("")),
@@ -57,15 +57,16 @@ export function isFactoryN8nConfigured(): boolean {
 export function isGoogleDriveConfigured(): boolean {
   if (!serverEnv.GOOGLE_DRIVE_INTEGRATION_ENABLED) return false;
 
+  const oauthConfigured = Boolean(
+    serverEnv.GOOGLE_DRIVE_CLIENT_ID &&
+      serverEnv.GOOGLE_DRIVE_CLIENT_SECRET &&
+      serverEnv.GOOGLE_DRIVE_REFRESH_TOKEN &&
+      serverEnv.GOOGLE_DRIVE_SHARED_FOLDER_ID,
+  );
+  if (oauthConfigured) return true;
+
   const authMode = (serverEnv.GOOGLE_DRIVE_AUTH_MODE ?? "service_account").trim();
-  if (authMode === "oauth_user") {
-    return Boolean(
-      serverEnv.GOOGLE_DRIVE_CLIENT_ID &&
-        serverEnv.GOOGLE_DRIVE_CLIENT_SECRET &&
-        serverEnv.GOOGLE_DRIVE_REFRESH_TOKEN &&
-        serverEnv.GOOGLE_DRIVE_SHARED_FOLDER_ID,
-    );
-  }
+  if (authMode === "oauth_user") return false;
 
   return Boolean(
     serverEnv.GOOGLE_DRIVE_CLIENT_EMAIL &&

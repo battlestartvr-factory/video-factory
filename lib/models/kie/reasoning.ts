@@ -77,7 +77,7 @@ function buildReasoningParam(model: KieModelEntry, effective: string): Record<st
     return { reasoning: { effort: effective } };
   }
 
-  if (model.adapter === "claude_sonnet") {
+  if (model.adapter === "claude_messages" || model.adapter === "claude_sonnet") {
     if (effective === "enabled" || effective === "thinking" || effective === "on") {
       return { thinkingFlag: true };
     }

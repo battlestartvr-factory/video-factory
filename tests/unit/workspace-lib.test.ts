@@ -11,7 +11,7 @@ describe("model registry", () => {
 
   it("modelSupports checks capabilities", () => {
     expect(modelSupports("kling-3", "endFrame")).toBe(true);
-    expect(modelSupports("seedance-2-5", "endFrame")).toBe(false);
+    expect(modelSupports("seedance-2-5", "endFrame")).toBe(true);
     expect(modelSupports("gemini-3-6-flash", "toolCalling")).toBe(true);
   });
 

@@ -5,11 +5,11 @@ import { knowledgeUploadSchema, knowledgeQuerySchema } from "@/lib/validation/wo
 import { isAllowedMime } from "@/lib/attachments/mime";
 import {
   addKnowledgeDocument,
-  deleteKnowledgeDocument,
   getOrCreateKnowledgeBase,
   listKnowledgeDocuments,
   searchKnowledge,
 } from "@/lib/knowledge";
+import { deleteKnowledgeDocumentWithVerifiedDriveRemoval } from "@/lib/knowledge/drive-delete-v2";
 
 export async function GET() {
   const requestId = generateRequestId();
@@ -54,6 +54,60 @@ export async function POST(request: Request) {
   }
 }
 
+function knowledgeDeleteError(error: unknown, requestId: string) {
+  const code = error instanceof Error ? error.message : "DELETE_FAILED";
+
+  switch (code) {
+    case "DOCUMENT_NOT_FOUND":
+      return apiError("NOT_FOUND", "Документ не найден", 404, requestId);
+    case "GOOGLE_DRIVE_NOT_CONFIGURED":
+      return apiError(
+        code,
+        "Google Drive недоступен: документ оставлен в базе, чтобы не потерять ссылку на оригинал",
+        503,
+        requestId,
+      );
+    case "DRIVE_FILE_ID_MISSING":
+      return apiError(
+        code,
+        "Не удалось определить файл Google Drive. Документ не удалён из базы, чтобы не оставить файл-сироту",
+        409,
+        requestId,
+      );
+    case "DRIVE_DELETE_PERMISSION_DENIED":
+      return apiError(
+        code,
+        "Текущая серверная учётная запись Google Drive не владеет файлом и не может удалить его. Запись в базе сохранена",
+        403,
+        requestId,
+      );
+    case "DRIVE_DELETE_NOT_VERIFIABLE":
+      return apiError(
+        code,
+        "Google Drive не позволяет подтвердить состояние оригинала этой учётной записью. Запись в базе сохранена",
+        409,
+        requestId,
+      );
+    case "DRIVE_DELETE_NOT_CONFIRMED":
+    case "DRIVE_DUPLICATE_DELETE_NOT_CONFIRMED":
+      return apiError(
+        code,
+        "Google Drive не подтвердил удаление оригинала. Запись в базе сохранена",
+        409,
+        requestId,
+      );
+    case "DRIVE_DELETE_FAILED":
+      return apiError(
+        code,
+        "Не удалось удалить оригинал из Google Drive. Запись в базе сохранена",
+        502,
+        requestId,
+      );
+    default:
+      return apiError("DELETE_FAILED", "Не удалось удалить документ из базы знаний и Google Drive", 500, requestId);
+  }
+}
+
 export async function DELETE(request: Request) {
   const requestId = generateRequestId();
   const user = await getSessionUser();
@@ -64,10 +118,10 @@ export async function DELETE(request: Request) {
   if (!id) return apiError("VALIDATION_ERROR", "id обязателен", 400, requestId);
 
   try {
-    await deleteKnowledgeDocument(user.id, id);
-    return apiSuccess({ deleted: true });
-  } catch {
-    return apiError("DELETE_FAILED", "Не удалось удалить документ", 500, requestId);
+    const result = await deleteKnowledgeDocumentWithVerifiedDriveRemoval(user.id, id);
+    return apiSuccess({ deleted: true, ...result });
+  } catch (error) {
+    return knowledgeDeleteError(error, requestId);
   }
 }
 

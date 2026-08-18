@@ -14,6 +14,7 @@ services:
       PORT: "3000"
       NODE_ENV: production
       AI_FACTORY_DATA_ROOT: /srv/ai-factory
+      GOOGLE_DRIVE_AUTH_MODE: oauth_user
     volumes:
       - ${AI_FACTORY_DATA_ROOT:-/srv/ai-factory}:/srv/ai-factory
     expose:
@@ -24,6 +25,22 @@ services:
       timeout: 5s
       retries: 5
       start_period: 40s
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    image: video-factory-worker:latest
+    env_file:
+      - ${AI_FACTORY_ENV_FILE:-/opt/ai-factory/.env}
+    environment:
+      NODE_ENV: production
+      AI_FACTORY_DATA_ROOT: /srv/ai-factory
+      BUILD_SHA: ${DEPLOY_COMMIT:-local}
+      GOOGLE_DRIVE_AUTH_MODE: oauth_user
+    volumes:
+      - ${AI_FACTORY_DATA_ROOT:-/srv/ai-factory}:/srv/ai-factory
     restart: unless-stopped
 
   caddy:

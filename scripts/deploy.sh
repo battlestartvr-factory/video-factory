@@ -12,6 +12,8 @@ DATA_ROOT="${AI_FACTORY_DATA_ROOT:-/srv/ai-factory}"
 COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.yml}"
 HEALTH_TIMEOUT_SECONDS="${HEALTH_TIMEOUT_SECONDS:-180}"
 HEALTH_POLL_SECONDS="${HEALTH_POLL_SECONDS:-3}"
+LAST_GOOD_FILE="${LAST_GOOD_FILE:-$DATA_ROOT/.deploy-last-good-commit}"
+ROLLBACK_CANDIDATE_FILE="${ROLLBACK_CANDIDATE_FILE:-$DATA_ROOT/.deploy-rollback-candidate-commit}"
 
 log() {
   printf '[deploy] %s\n' "$*"
@@ -37,12 +39,28 @@ mkdir -p "$DATA_ROOT"
 
 cd "$APP_DIR"
 
+CURRENT_COMMIT="$(git rev-parse HEAD)"
+ROLLBACK_CANDIDATE="$CURRENT_COMMIT"
+if [[ -f "$LAST_GOOD_FILE" ]]; then
+  recorded_last_good="$(tr -d '\r\n[:space:]' < "$LAST_GOOD_FILE")"
+  if [[ -n "$recorded_last_good" ]] && git cat-file -e "${recorded_last_good}^{commit}" 2>/dev/null; then
+    ROLLBACK_CANDIDATE="$recorded_last_good"
+  fi
+fi
+log "Current checkout: $CURRENT_COMMIT"
+log "Rollback candidate: $ROLLBACK_CANDIDATE"
+
 log "Fetching origin/main"
 git fetch origin main
 
-# Production working tree is deployment-only. Discard tracked manual edits so
-# checkout of the CI-approved commit is deterministic. Secrets and persistent
-# data live outside the repository and are not affected by this reset.
+if [[ -n "$COMMIT" ]] && ! git cat-file -e "${COMMIT}^{commit}" 2>/dev/null; then
+  log "Target commit is not local; fetching advertised origin branches"
+  git fetch origin '+refs/heads/*:refs/remotes/origin/*'
+fi
+if [[ -n "$COMMIT" ]]; then
+  git cat-file -e "${COMMIT}^{commit}" 2>/dev/null || fail "Target commit is unavailable after fetch: $COMMIT"
+fi
+
 log "Resetting tracked local changes"
 git reset --hard HEAD
 
@@ -63,9 +81,21 @@ set +a
 
 export AI_FACTORY_ENV_FILE="$ENV_FILE"
 export AI_FACTORY_DATA_ROOT="$DATA_ROOT"
+export DEPLOY_COMMIT="$(git rev-parse HEAD)"
 
 : "${NEXT_PUBLIC_SUPABASE_URL:?NEXT_PUBLIC_SUPABASE_URL is required in $ENV_FILE}"
 : "${NEXT_PUBLIC_SUPABASE_ANON_KEY:?NEXT_PUBLIC_SUPABASE_ANON_KEY is required in $ENV_FILE}"
+if [[ -z "${SUPABASE_SERVICE_ROLE_KEY:-}" && -z "${SUPABASE_SECRET_KEY:-}" ]]; then
+  fail "SUPABASE_SERVICE_ROLE_KEY or SUPABASE_SECRET_KEY is required for the durable worker"
+fi
+
+[[ "${GOOGLE_DRIVE_INTEGRATION_ENABLED:-false}" == "true" ]] || fail "GOOGLE_DRIVE_INTEGRATION_ENABLED=true is required for durable media archive"
+: "${GOOGLE_DRIVE_SHARED_FOLDER_ID:?GOOGLE_DRIVE_SHARED_FOLDER_ID is required for durable media archive}"
+: "${GOOGLE_DRIVE_CLIENT_ID:?GOOGLE_DRIVE_CLIENT_ID is required for owner Drive OAuth}"
+: "${GOOGLE_DRIVE_CLIENT_SECRET:?GOOGLE_DRIVE_CLIENT_SECRET is required for owner Drive OAuth}"
+: "${GOOGLE_DRIVE_REFRESH_TOKEN:?GOOGLE_DRIVE_REFRESH_TOKEN is required for owner Drive OAuth}"
+export GOOGLE_DRIVE_AUTH_MODE=oauth_user
+log "Google Drive auth mode: oauth_user (owner credentials)"
 
 log "Building Docker images"
 docker compose -f "$COMPOSE_FILE" build --pull
@@ -73,18 +103,34 @@ docker compose -f "$COMPOSE_FILE" build --pull
 log "Starting services"
 docker compose -f "$COMPOSE_FILE" up -d --remove-orphans
 
-log "Waiting for app health (timeout ${HEALTH_TIMEOUT_SECONDS}s)"
+log "Waiting for app health and durable worker (timeout ${HEALTH_TIMEOUT_SECONDS}s)"
 deadline=$((SECONDS + HEALTH_TIMEOUT_SECONDS))
 while (( SECONDS < deadline )); do
   health_status="$(docker compose -f "$COMPOSE_FILE" ps app --format '{{.Health}}' 2>/dev/null || true)"
-  if [[ "$health_status" == "healthy" ]]; then
-    if curl -fsS "http://127.0.0.1/api/health" >/dev/null 2>&1; then
-      log "Deployment healthy via Caddy"
-      docker compose -f "$COMPOSE_FILE" ps
-      exit 0
-    fi
-    if curl -fsS "http://127.0.0.1:3000/api/health" >/dev/null 2>&1; then
-      log "Deployment healthy on app port"
+  worker_running="$(docker compose -f "$COMPOSE_FILE" ps worker --status running --services 2>/dev/null || true)"
+  if [[ "$health_status" == "healthy" && "$worker_running" == "worker" ]]; then
+    if curl -fsS "http://127.0.0.1/api/health" >/dev/null 2>&1 || \
+       curl -fsS "http://127.0.0.1:3000/api/health" >/dev/null 2>&1; then
+      deployed_commit="$(git rev-parse HEAD)"
+
+      log "Backfilling recent completed media into Google Drive"
+      archive_result=""
+      if ! archive_result="$(docker compose -f "$COMPOSE_FILE" exec -T app sh -lc '
+        token="${SUPABASE_SERVICE_ROLE_KEY:-${SUPABASE_SECRET_KEY:-}}"
+        curl -sS --fail-with-body --max-time 300 -X POST http://127.0.0.1:3000/api/internal/generation-archive/backfill \
+          -H "Authorization: Bearer ${token}" \
+          -H "Accept: application/json"
+      ' 2>&1)"; then
+        fail "Media archive backfill failed: $archive_result"
+      fi
+      log "Media archive backfill: $archive_result"
+
+      mkdir -p "$(dirname "$LAST_GOOD_FILE")" "$(dirname "$ROLLBACK_CANDIDATE_FILE")"
+      printf '%s\n' "$ROLLBACK_CANDIDATE" > "$ROLLBACK_CANDIDATE_FILE"
+      printf '%s\n' "$deployed_commit" > "$LAST_GOOD_FILE"
+      log "Deployment healthy; durable worker running"
+      log "Recorded last-good commit: $deployed_commit"
+      log "Recorded rollback candidate: $ROLLBACK_CANDIDATE"
       docker compose -f "$COMPOSE_FILE" ps
       exit 0
     fi
@@ -94,4 +140,7 @@ done
 
 log "Health check failed — recent app logs:"
 docker compose -f "$COMPOSE_FILE" logs --tail=80 app || true
+log "Recent worker logs:"
+docker compose -f "$COMPOSE_FILE" logs --tail=80 worker || true
+log "Rollback candidate remains: $ROLLBACK_CANDIDATE"
 fail "Deployment failed health check within ${HEALTH_TIMEOUT_SECONDS}s"

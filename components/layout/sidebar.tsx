@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useCallback, useEffect, useState } from "react";
 import {
   LayoutDashboard,
   MessageSquare,
@@ -16,6 +17,8 @@ import {
   PanelLeft,
   Plus,
   X,
+  Coins,
+  RefreshCw,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { t } from "@/lib/i18n/dictionary";
@@ -72,6 +75,84 @@ function NavLink({
       <Icon className={cn("h-4 w-4 shrink-0", active && "text-accent")} aria-hidden />
       {!collapsed && <span className="truncate">{label}</span>}
     </Link>
+  );
+}
+
+function KieCreditsBadge({ collapsed }: { collapsed: boolean }) {
+  const [credits, setCredits] = useState<number | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [available, setAvailable] = useState(true);
+
+  const refresh = useCallback(async () => {
+    try {
+      const response = await fetch("/api/integrations/kie/credits", { cache: "no-store" });
+      const payload = await response.json();
+      const value = payload?.ok ? payload?.data?.credits : null;
+      if (!response.ok || typeof value !== "number") {
+        setAvailable(false);
+        return;
+      }
+      setCredits(value);
+      setAvailable(true);
+    } catch {
+      setAvailable(false);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    const initial = window.setTimeout(() => void refresh(), 0);
+    const interval = window.setInterval(() => void refresh(), 60_000);
+    return () => {
+      window.clearTimeout(initial);
+      window.clearInterval(interval);
+    };
+  }, [refresh]);
+
+  const formatted = credits === null
+    ? "—"
+    : new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 2 }).format(credits);
+  const title = available ? `KIE: ${formatted} credits` : "Баланс KIE временно недоступен";
+
+  if (collapsed) {
+    return (
+      <button
+        type="button"
+        onClick={() => void refresh()}
+        title={title}
+        aria-label={title}
+        className="mb-1 flex w-full justify-center rounded-lg p-2 text-muted-foreground transition-colors hover:bg-surface-hover hover:text-foreground"
+      >
+        <Coins className={cn("h-4 w-4", !available && "opacity-45")} />
+      </button>
+    );
+  }
+
+  return (
+    <div className="mb-2 rounded-xl border border-border bg-surface-elevated/55 px-3 py-2.5">
+      <div className="flex items-center justify-between gap-2">
+        <div className="min-w-0">
+          <p className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted">
+            <Coins className="h-3.5 w-3.5" />
+            KIE баланс
+          </p>
+          <p className={cn("mt-1 text-sm font-semibold tabular-nums", available ? "text-foreground" : "text-muted-foreground")}>
+            {loading ? "Проверяем…" : available ? `${formatted} credits` : "Недоступен"}
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => void refresh()}
+          disabled={loading}
+          className="rounded-lg p-1.5 text-muted-foreground transition-colors hover:bg-surface-hover hover:text-foreground disabled:opacity-40"
+          aria-label="Обновить баланс KIE"
+          title="Обновить баланс KIE"
+        >
+          <RefreshCw className={cn("h-3.5 w-3.5", loading && "animate-spin")} />
+        </button>
+      </div>
+    </div>
   );
 }
 
@@ -167,6 +248,7 @@ export function Sidebar({ recentProjects = [] }: SidebarProps) {
       </nav>
 
       <div className="border-t border-border p-3">
+        <KieCreditsBadge collapsed={sidebarCollapsed} />
         <form action="/api/auth/logout" method="POST">
           <button
             type="submit"
@@ -185,7 +267,6 @@ export function Sidebar({ recentProjects = [] }: SidebarProps) {
 
   return (
     <>
-      {/* Desktop sidebar */}
       <aside
         className={cn(
           "hidden shrink-0 flex-col border-r border-border bg-surface/90 backdrop-blur-md transition-all duration-200 md:flex",
@@ -195,7 +276,6 @@ export function Sidebar({ recentProjects = [] }: SidebarProps) {
         {sidebarContent}
       </aside>
 
-      {/* Mobile drawer overlay */}
       {mobileSidebarOpen && (
         <div className="fixed inset-0 z-50 md:hidden">
           <div

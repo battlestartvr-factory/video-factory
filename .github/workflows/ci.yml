@@ -28,9 +28,16 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
+      - run: bash -n scripts/deploy.sh
+
       - run: pnpm lint
 
       - run: pnpm typecheck
+
+      - run: pnpm exec tsc -p tsconfig.worker.json
+
+      - name: Build durable worker image
+        run: docker build --file Dockerfile.worker --tag video-factory-worker:ci .
 
       - run: pnpm test
 

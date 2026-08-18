@@ -175,6 +175,7 @@ export function getKieLlmAdapter(kind: KieAdapterContext["model"]["adapter"]): K
       return kieOpenAIChatAdapter;
     case "responses":
       return kieResponsesAdapter;
+    case "claude_messages":
     case "claude_sonnet":
       return kieAnthropicProvider;
     default:

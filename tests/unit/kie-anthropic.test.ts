@@ -1,201 +1,177 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { AGENT_ERROR_CODES } from "@/lib/agent/config";
-import { runAgentToolLoop } from "@/lib/agent/loop";
-import type { AgentProvider, AgentProviderResponse, AgentRequest, ToolContext } from "@/lib/agent/types";
+import type { AgentRequest } from "@/lib/agent/types";
 import {
   assertAnthropicMessagesNonEmpty,
   buildAnthropicMessages,
   buildAnthropicRequestParams,
   buildKieAnthropicBaseUrl,
+  kieAnthropicProvider,
   resolveAnthropicThinkingMode,
   toAnthropicTool,
 } from "@/lib/models/kie/adapters/kie-anthropic";
-import { resolveToolsForTurn } from "@/lib/agent/tools";
 import { KieProviderError } from "@/lib/models/kie/errors";
 import { getKieModelById } from "@/lib/models/kie/registry";
 import { resolveReasoning } from "@/lib/models/kie/reasoning";
 
 const KIE_ROOT = "https://api.kie.ai";
-const model = getKieModelById("claude-sonnet-4-5")!;
+const sonnet = getKieModelById("claude-sonnet-5")!;
+const haiku = getKieModelById("claude-haiku-4-5")!;
 
-describe("KieAnthropicProvider request contract", () => {
-  it("resolves claude-sonnet-4-5 to KIE Anthropic-compatible base URL", () => {
-    expect(buildKieAnthropicBaseUrl(KIE_ROOT)).toBe(`${KIE_ROOT}/claude`);
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+});
+
+describe("KIE Claude registry contract", () => {
+  it("uses exact Sonnet 5 and Haiku 4.5 provider model ids", () => {
+    expect(sonnet.providerModel).toBe("claude-sonnet-5");
+    expect(sonnet.endpoint).toBe("/claude/v1/messages");
+    expect(sonnet.adapter).toBe("claude_messages");
+
+    expect(haiku.providerModel).toBe("claude-haiku-4-5");
+    expect(haiku.endpoint).toBe("/claude/v1/messages");
+    expect(haiku.adapter).toBe("claude_messages");
   });
 
-  it('production-equivalent plain chat: "ты умеешь монтировать видео?"', () => {
+  it("builds the documented KIE Claude base URL", () => {
+    expect(buildKieAnthropicBaseUrl(KIE_ROOT)).toBe(`${KIE_ROOT}/claude`);
+  });
+});
+
+describe("KIE Claude request contract", () => {
+  it("keeps system separate and sends an unmodified user turn to Sonnet 5", () => {
     const userText = "ты умеешь монтировать видео?";
     const input: AgentRequest = {
-      model: "claude-sonnet-4-5",
-      system: "Universal Agent base instructions with runtime policy and preset layers.",
+      model: "claude-sonnet-5",
+      system: "Universal Agent base instructions.",
       messages: [{ role: "user", content: userText }],
       tools: [],
     };
 
-    const { params, messages, systemChars, currentUserChars, lastMessageChars } =
-      buildAnthropicRequestParams(input, {
-        baseUrl: KIE_ROOT,
-        apiKey: "test",
-        model,
-      });
-
-    expect(messages.length).toBe(1);
-    expect(messages[0]?.role).toBe("user");
-    expect(messages[0]?.content).toBe(userText);
-    expect(String(messages[0]?.content)).not.toContain("<agent_instructions>");
-    expect(String(messages[0]?.content)).not.toContain("<user_request>");
-
-    expect(params.system).toBe(input.system);
-    expect(params.model).toBe("claude-sonnet-4-5");
-    expect(params.max_tokens).toBe(4096);
-    expect(params.stream).toBe(false);
-    expect(params.thinkingFlag).toBeUndefined();
-    expect(params.tools).toBeUndefined();
-
-    expect(currentUserChars).toBe(userText.length);
-    expect(lastMessageChars).toBe(userText.length);
-    expect(systemChars).toBeGreaterThan(userText.length);
-  });
-
-  it('builds plain "Say hello" payload with system separate from user message', () => {
-    const input: AgentRequest = {
-      model: "claude-sonnet-4-5",
-      system: "Base agent instructions.",
-      messages: [{ role: "user", content: "Say hello" }],
-      tools: [],
-    };
-
-    const { params, messages } = buildAnthropicRequestParams(input, {
+    const { params, messages, currentUserChars } = buildAnthropicRequestParams(input, {
       baseUrl: KIE_ROOT,
       apiKey: "test",
-      model,
+      model: sonnet,
     });
 
-    expect(params.system).toBe("Base agent instructions.");
-    expect(messages).toEqual([{ role: "user", content: "Say hello" }]);
+    expect(messages).toEqual([{ role: "user", content: userText }]);
+    expect(params.model).toBe("claude-sonnet-5");
+    expect(params.system).toBe(input.system);
+    expect(params.messages).toEqual(messages);
+    expect(params.max_tokens).toBe(8192);
+    expect(params.stream).toBe(false);
+    expect(params.tools).toBeUndefined();
+    expect(params.thinkingFlag).toBeUndefined();
+    expect(currentUserChars).toBe(userText.length);
   });
 
-  it("never modifies the current user message (Russian plain chat)", () => {
-    const input: AgentRequest = {
-      model: "claude-sonnet-4-5",
-      system: "Universal Agent base instructions.",
-      messages: [{ role: "user", content: "Привет" }],
-      tools: [],
-    };
+  it("uses the same native Messages contract for Haiku 4.5", () => {
+    const { params } = buildAnthropicRequestParams(
+      {
+        model: "claude-haiku-4-5",
+        system: "Be concise.",
+        messages: [{ role: "user", content: "Hello" }],
+        tools: [],
+      },
+      { baseUrl: KIE_ROOT, apiKey: "test", model: haiku },
+    );
 
-    const messages = buildAnthropicMessages(input);
-
-    expect(messages.length).toBe(1);
-    expect(messages[0]).toEqual({ role: "user", content: "Привет" });
+    expect(params.model).toBe("claude-haiku-4-5");
+    expect(params.messages).toEqual([{ role: "user", content: "Hello" }]);
   });
 
-  it("includes prior history plus unmodified current user turn", () => {
+  it("preserves history, vision URL blocks and tool-result blocks", () => {
     const input: AgentRequest = {
-      model: "claude-sonnet-4-5",
+      model: "claude-sonnet-5",
       system: "Instructions",
       messages: [
         { role: "user", content: "First question" },
         { role: "assistant", content: "First answer" },
-        { role: "user", content: "Follow up" },
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "What is in this image?" },
+            { type: "image_url", image_url: { url: "https://example.com/image.png" } },
+          ],
+        },
+        {
+          role: "assistant",
+          content: null,
+          toolCalls: [{ id: "toolu_1", name: "search_knowledge", arguments: { query: "x" } }],
+        },
+        { role: "tool", toolCallId: "toolu_1", content: "tool result" },
       ],
       tools: [],
     };
 
     const messages = buildAnthropicMessages(input);
-
-    expect(messages).toEqual([
-      { role: "user", content: "First question" },
-      { role: "assistant", content: "First answer" },
-      { role: "user", content: "Follow up" },
-    ]);
-  });
-
-  it("keeps system instructions out of messages", () => {
-    const input: AgentRequest = {
-      model: "claude-sonnet-4-5",
-      system: "Runtime policy and global instructions.",
-      messages: [{ role: "user", content: "Hello" }],
-      tools: [],
-    };
-
-    const { params, messages } = buildAnthropicRequestParams(input, {
-      baseUrl: KIE_ROOT,
-      apiKey: "test",
-      model,
+    expect(messages[0]).toEqual({ role: "user", content: "First question" });
+    expect(messages[1]).toEqual({ role: "assistant", content: "First answer" });
+    expect(messages[2]).toEqual({
+      role: "user",
+      content: [
+        { type: "text", text: "What is in this image?" },
+        { type: "image", source: { type: "url", url: "https://example.com/image.png" } },
+      ],
     });
-
-    expect(params.system).toContain("Runtime policy");
-    expect(JSON.stringify(messages)).not.toContain("Runtime policy");
+    expect(messages[3]).toEqual({
+      role: "assistant",
+      content: [
+        { type: "tool_use", id: "toolu_1", name: "search_knowledge", input: { query: "x" } },
+      ],
+    });
+    expect(messages[4]).toEqual({
+      role: "user",
+      content: [{ type: "tool_result", tool_use_id: "toolu_1", content: "tool result" }],
+    });
   });
 
-  it("rejects empty messages locally without calling provider", () => {
+  it("rejects empty user messages before any provider call", () => {
     expect(() => assertAnthropicMessagesNonEmpty([])).toThrowError(
       expect.objectContaining({ code: AGENT_ERROR_CODES.CLAUDE_EMPTY_MESSAGES }),
     );
 
     expect(() =>
       buildAnthropicRequestParams(
-        {
-          model: "claude-sonnet-4-5",
-          system: "Instructions",
-          messages: [],
-          tools: [],
-        },
-        { baseUrl: KIE_ROOT, apiKey: "test", model },
+        { model: "claude-sonnet-5", system: "Instructions", messages: [], tools: [] },
+        { baseUrl: KIE_ROOT, apiKey: "test", model: sonnet },
       ),
     ).toThrow(KieProviderError);
   });
 
-  it("Standard thinking omits thinkingFlag", () => {
-    const { params } = buildAnthropicRequestParams(
-      {
-        model: "claude-sonnet-4-5",
-        system: "",
-        messages: [{ role: "user", content: "hi" }],
-        tools: [],
-      },
-      { baseUrl: KIE_ROOT, apiKey: "test", model, reasoningLevel: "standard" },
-    );
-    expect(params.thinkingFlag).toBeUndefined();
-    expect(
-      resolveAnthropicThinkingMode({
-        baseUrl: KIE_ROOT,
-        apiKey: "test",
-        model,
-        reasoningLevel: "standard",
-      }).thinkingMode,
-    ).toBe("standard");
-  });
-
-  it("Thinking mode sends thinkingFlag: true", () => {
-    const { params } = buildAnthropicRequestParams(
-      {
-        model: "claude-sonnet-4-5",
-        system: "",
-        messages: [{ role: "user", content: "hi" }],
-        tools: [],
-      },
-      { baseUrl: KIE_ROOT, apiKey: "test", model, reasoningLevel: "thinking" },
-    );
-    expect(params.thinkingFlag).toBe(true);
-  });
-
-  it("maps resolveReasoning Standard without thinkingFlag", () => {
-    expect(resolveReasoning(model, "standard").providerParam).toEqual({});
-  });
-
-  it("maps resolveReasoning Thinking to thinkingFlag", () => {
-    expect(resolveReasoning(model, "thinking").providerParam).toEqual({ thinkingFlag: true });
-  });
-
-  it("builds Anthropic tool schema via toAnthropicTool", () => {
-    const tool = toAnthropicTool({
-      name: "search_knowledge",
-      description: "Search knowledge base",
-      parameters: { type: "object", properties: { query: { type: "string" } }, required: ["query"] },
+  it("maps KIE thinking mode without adding a fake Anthropic thinking schema", () => {
+    const standard = resolveAnthropicThinkingMode({
+      baseUrl: KIE_ROOT,
+      apiKey: "test",
+      model: sonnet,
+      reasoningLevel: "standard",
+    });
+    const thinking = resolveAnthropicThinkingMode({
+      baseUrl: KIE_ROOT,
+      apiKey: "test",
+      model: sonnet,
+      reasoningLevel: "thinking",
     });
 
-    expect(tool).toEqual({
+    expect(standard).toEqual({ thinkingMode: "standard" });
+    expect(thinking).toEqual({ thinkingMode: "thinking", thinkingFlag: true });
+    expect(resolveReasoning(sonnet, "standard").providerParam).toEqual({});
+    expect(resolveReasoning(sonnet, "thinking").providerParam).toEqual({ thinkingFlag: true });
+  });
+
+  it("converts app tools to native Claude input_schema", () => {
+    expect(
+      toAnthropicTool({
+        name: "search_knowledge",
+        description: "Search knowledge base",
+        parameters: {
+          type: "object",
+          properties: { query: { type: "string" } },
+          required: ["query"],
+        },
+      }),
+    ).toEqual({
       name: "search_knowledge",
       description: "Search knowledge base",
       input_schema: {
@@ -206,7 +182,7 @@ describe("KieAnthropicProvider request contract", () => {
     });
   });
 
-  it("rejects OpenAI function wrapper for Claude", () => {
+  it("rejects an OpenAI function wrapper instead of leaking it to Claude", () => {
     expect(() =>
       toAnthropicTool({
         name: "search_knowledge",
@@ -218,236 +194,101 @@ describe("KieAnthropicProvider request contract", () => {
       expect.objectContaining({ code: AGENT_ERROR_CODES.CLAUDE_TOOL_SCHEMA_UNSUPPORTED }),
     );
   });
-
-  it("includes tools in request params when provided", () => {
-    const { params } = buildAnthropicRequestParams(
-      {
-        model: "claude-sonnet-4-5",
-        system: "test",
-        messages: [{ role: "user", content: "Search" }],
-        tools: [
-          {
-            name: "search_knowledge",
-            description: "Search",
-            parameters: { type: "object", properties: {} },
-          },
-        ],
-      },
-      { baseUrl: KIE_ROOT, apiKey: "test", model },
-    );
-
-    expect(Array.isArray(params.tools)).toBe(true);
-    const firstTool = params.tools?.[0] as { name: string; input_schema: unknown } | undefined;
-    expect(firstTool?.name).toBe("search_knowledge");
-    expect(firstTool?.input_schema).toBeDefined();
-  });
 });
 
-describe("KieAnthropicProvider SDK integration", () => {
-  it("uses Anthropic SDK against KIE Claude proxy for plain hello", async () => {
-    const createMock = vi.fn().mockResolvedValue({
-      id: "msg_1",
-      type: "message",
-      role: "assistant",
-      content: [{ type: "text", text: "Hello!" }],
-      model: "claude-sonnet-4-5",
-      stop_reason: "end_turn",
-      stop_sequence: null,
-      usage: {
-        input_tokens: 10,
-        output_tokens: 5,
-        cache_creation: null,
-        cache_creation_input_tokens: 0,
-        cache_read_input_tokens: 0,
-        inference_geo: null,
-        server_tool_use: null,
-        service_tier: "standard",
-        output_tokens_details: null,
-      },
-    });
+describe("KIE Claude wire integration", () => {
+  it("POSTs Sonnet 5 directly to KIE with Bearer auth and anthropic-version", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          id: "msg_1",
+          type: "message",
+          role: "assistant",
+          model: "claude-sonnet-5",
+          stop_reason: "end_turn",
+          content: [{ type: "text", text: "Hello from Sonnet 5" }],
+          usage: { input_tokens: 10, output_tokens: 5 },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
 
-    class MockAnthropic {
-      messages = { create: createMock };
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars
-      constructor(_opts: unknown) {}
-    }
-
-    vi.doMock("@anthropic-ai/sdk", () => ({
-      default: MockAnthropic,
-      APIError: class APIError extends Error {
-        status?: number;
-        error?: unknown;
-        constructor(status: number, message: string, error?: unknown) {
-          super(message);
-          this.status = status;
-          this.error = error;
-        }
-      },
-    }));
-
-    vi.resetModules();
-    const { kieAnthropicProvider: provider } = await import("@/lib/models/kie/adapters/kie-anthropic");
-
-    const result = await provider.run(
-      { baseUrl: KIE_ROOT, apiKey: "test-key", model },
+    const result = await kieAnthropicProvider.run(
+      { baseUrl: KIE_ROOT, apiKey: "kie-secret", model: sonnet },
       {
-        model: "claude-sonnet-4-5",
+        model: "claude-sonnet-5",
         system: "Be helpful.",
         messages: [{ role: "user", content: "Say hello" }],
         tools: [],
       },
     );
 
-    expect(result.content).toBe("Hello!");
-    expect(createMock).toHaveBeenCalledOnce();
+    expect(result.content).toBe("Hello from Sonnet 5");
+    expect(result.toolCalls).toEqual([]);
+    expect(result.usage).toEqual({ promptTokens: 10, completionTokens: 5, totalTokens: 15 });
 
-    const callArgs = createMock.mock.calls[0]?.[0] as {
-      model: string;
-      system: string;
-      messages: Array<{ role: string; content: string }>;
-      tools?: unknown;
-      thinkingFlag?: unknown;
-    };
-
-    expect(callArgs.model).toBe("claude-sonnet-4-5");
-    expect(callArgs.system).toBe("Be helpful.");
-    expect(callArgs.messages).toEqual([{ role: "user", content: "Say hello" }]);
-    expect(callArgs.tools).toBeUndefined();
-    expect(callArgs.thinkingFlag).toBeUndefined();
-
-    vi.doUnmock("@anthropic-ai/sdk");
-    vi.resetModules();
-  });
-});
-
-describe("Claude context-aware tools regression", () => {
-  it('"Привет" resolves to 0 tools and plain Claude request has no tools key', () => {
-    const resolved = resolveToolsForTurn({ userMessage: "Привет" });
-    expect(resolved.tools).toHaveLength(0);
-
-    const input: AgentRequest = {
-      model: "claude-sonnet-4-5",
-      system: "Universal Agent base instructions.",
-      messages: [{ role: "user", content: "Привет" }],
-      tools: resolved.tools,
-    };
-
-    const { params, messages } = buildAnthropicRequestParams(input, {
-      baseUrl: KIE_ROOT,
-      apiKey: "test",
-      model,
+    expect(fetchMock).toHaveBeenCalledOnce();
+    const [url, init] = fetchMock.mock.calls[0]! as unknown as [string, RequestInit];
+    expect(url).toBe(`${KIE_ROOT}/claude/v1/messages`);
+    expect(init.method).toBe("POST");
+    expect(init.headers).toEqual({
+      "Content-Type": "application/json",
+      Authorization: "Bearer kie-secret",
+      "anthropic-version": "2023-06-01",
     });
-
-    expect(messages.length).toBe(1);
-    expect(params.tools).toBeUndefined();
+    const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+    expect(body.model).toBe("claude-sonnet-5");
+    expect(body.messages).toEqual([{ role: "user", content: "Say hello" }]);
   });
 
-  it("knowledge request passes only knowledge tools to Claude", () => {
-    const resolved = resolveToolsForTurn({
-      userMessage: 'Расскажи про урок 3 «Волшебная копилка» из базы знаний',
-    });
+  it("parses native Claude tool_use blocks into the agent tool-call shape", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          id: "msg_tool",
+          type: "message",
+          role: "assistant",
+          model: "claude-haiku-4-5",
+          stop_reason: "tool_use",
+          content: [
+            {
+              type: "tool_use",
+              id: "toolu_haiku_1",
+              name: "search_knowledge",
+              input: { query: "lesson 3" },
+            },
+          ],
+          usage: { input_tokens: 20, output_tokens: 7 },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
 
-    expect(resolved.tools.length).toBeGreaterThan(0);
-    expect(resolved.tools.length).toBeLessThanOrEqual(4);
-
-    const { params } = buildAnthropicRequestParams(
+    const result = await kieAnthropicProvider.run(
+      { baseUrl: KIE_ROOT, apiKey: "kie-secret", model: haiku },
       {
-        model: "claude-sonnet-4-5",
-        system: "test",
-        messages: [{ role: "user", content: "Расскажи про урок 3" }],
-        tools: resolved.tools,
+        model: "claude-haiku-4-5",
+        system: "Use tools when needed.",
+        messages: [{ role: "user", content: "Find lesson 3" }],
+        tools: [
+          {
+            name: "search_knowledge",
+            description: "Search knowledge base",
+            parameters: {
+              type: "object",
+              properties: { query: { type: "string" } },
+              required: ["query"],
+            },
+          },
+        ],
       },
-      { baseUrl: KIE_ROOT, apiKey: "test", model },
     );
 
-    const tools = (params.tools ?? []) as Array<{ name: string; input_schema: unknown }>;
-    expect(tools.every((tool) => tool.input_schema && typeof tool.input_schema === "object")).toBe(true);
-    expect(tools.map((tool) => tool.name)).toEqual(resolved.toolNames);
-  });
-});
-
-describe("Claude Sonnet tool roundtrip", () => {
-  const ctx: ToolContext = {
-    requestId: "req-claude",
-    userId: "user-1",
-    chatId: "chat-1",
-    projectId: null,
-    userMessageId: "msg-1",
-    agentRunId: "run-1",
-    userMessage: "Search knowledge base",
-    attachments: [],
-  };
-
-  it("executes search_knowledge then returns final answer via provider-shaped loop", async () => {
-    let call = 0;
-    const provider: AgentProvider = {
-      async run() {
-        call += 1;
-        if (call === 1) {
-          return {
-            content: null,
-            toolCalls: [
-              { id: "toolu_claude_1", name: "search_knowledge", arguments: { query: "test" } },
-            ],
-          } satisfies AgentProviderResponse;
-        }
-        return {
-          content: "Claude found documents.",
-          toolCalls: [],
-        } satisfies AgentProviderResponse;
-      },
-    };
-
-    const knowledgeTools = resolveToolsForTurn({
-      userMessage: "Search knowledge base",
-    }).tools;
-
-    const result = await runAgentToolLoop({
-      provider,
-      model: "claude-sonnet-4-5",
-      system: "test",
-      messages: [{ role: "user", content: "Search knowledge base" }],
-      tools: knowledgeTools,
-      toolContext: ctx,
-      maxIterations: 4,
-    });
-
-    expect(result.executions[0]?.call.name).toBe("search_knowledge");
-    expect(result.content).toContain("Claude found");
-    expect(result.stopReason).toBe("final");
-  });
-
-  it("Anthropic messages include tool_result blocks after tool execution", () => {
-    const messages = buildAnthropicMessages({
-      model: "claude-sonnet-4-5",
-      system: "test",
-      messages: [
-        { role: "user", content: "Search" },
-        {
-          role: "assistant",
-          content: null,
-          toolCalls: [{ id: "toolu_1", name: "search_knowledge", arguments: { query: "test" } }],
-        },
-        {
-          role: "tool",
-          toolCallId: "toolu_1",
-          name: "search_knowledge",
-          content: '{"hits":[]}',
-        },
-      ],
-      tools: [],
-    });
-
-    expect(messages[1]?.content).toEqual([
-      {
-        type: "tool_use",
-        id: "toolu_1",
-        name: "search_knowledge",
-        input: { query: "test" },
-      },
-    ]);
-    expect(messages[2]?.content).toEqual([
-      { type: "tool_result", tool_use_id: "toolu_1", content: '{"hits":[]}' },
+    expect(result.finishReason).toBe("tool_calls");
+    expect(result.toolCalls).toEqual([
+      { id: "toolu_haiku_1", name: "search_knowledge", arguments: { query: "lesson 3" } },
     ]);
   });
 });

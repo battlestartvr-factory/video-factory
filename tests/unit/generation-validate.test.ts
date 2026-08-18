@@ -33,13 +33,16 @@ describe("canonical generation validation", () => {
     expect(result.settings.effectiveQuality).toBe("2K");
   });
 
-  it("rejects end frame on models without the capability", () => {
-    expect(() =>
-      validateVideoGenerationRequest({
-        modelId: "seedance-2-5",
-        endFrameAssetId: "11111111-1111-4111-8111-111111111111",
-      }),
-    ).toThrow(GenerationValidationError);
+  it("accepts first and last frames on Seedance 2.5", () => {
+    const result = validateVideoGenerationRequest({
+      modelId: "seedance-2-5",
+      startFrameAssetId: "11111111-1111-4111-8111-111111111111",
+      endFrameAssetId: "22222222-2222-4222-8222-222222222222",
+      durationSec: 10,
+      aspectRatio: "16:9",
+    });
+    expect(result.mode).toBe("start-end-frames");
+    expect(result.model.id).toBe("seedance-2-5");
   });
 
   it("accepts start and end frames on kling-3", () => {
@@ -56,7 +59,7 @@ describe("canonical generation validation", () => {
     expect(result.settings.effectiveQuality).toBe("pro");
   });
 
-  it("reports capability mismatch without silent model swap", () => {
+  it("rejects generic Kling reference mode until element metadata is supported", () => {
     expect(() =>
       validateVideoGenerationRequest({
         modelId: "kling-3",

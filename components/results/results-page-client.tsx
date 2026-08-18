@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import Link from "next/link";
+import { Download, ExternalLink, Film, ImageIcon } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { EmptyState, Skeleton } from "@/components/ui/states";
 import { formatDate } from "@/lib/utils";
@@ -22,10 +23,16 @@ interface ResultItem {
   id: string;
   kind: string;
   title: string;
-  url?: string | null;
+  previewUrl?: string | null;
+  downloadUrl?: string | null;
   createdAt: string;
   source?: { type: string; href?: string; label?: string };
   status?: string;
+}
+
+function generationOutputPath(generationId: string, index = 0, download = false): string {
+  const base = `/api/generations/${encodeURIComponent(generationId)}/outputs/${index}`;
+  return download ? `${base}?download=1` : base;
 }
 
 function assetToResult(a: Asset): ResultItem {
@@ -33,17 +40,21 @@ function assetToResult(a: Asset): ResultItem {
     id: a.id,
     kind: a.kind,
     title: a.kind,
-    url: a.url,
+    previewUrl: a.url,
+    downloadUrl: a.url,
     createdAt: a.created_at,
     source: { type: "job", href: `/jobs/${a.job_id}`, label: "Задача" },
   };
 }
 
 function generationToResult(g: Generation): ResultItem {
+  const hasOutput = Array.isArray(g.outputs) && g.outputs.some((output) => Boolean(output?.url));
   return {
     id: g.id,
     kind: g.type,
-    title: g.prompt.slice(0, 60),
+    title: g.prompt.slice(0, 80),
+    previewUrl: hasOutput ? generationOutputPath(g.id) : null,
+    downloadUrl: hasOutput ? generationOutputPath(g.id, 0, true) : null,
     createdAt: g.created_at,
     status: g.status,
     source: g.chat_id
@@ -52,18 +63,56 @@ function generationToResult(g: Generation): ResultItem {
   };
 }
 
+function ResultPreview({ item }: { item: ResultItem }) {
+  if (item.kind === "video" && item.previewUrl) {
+    return (
+      <div className="aspect-video overflow-hidden rounded-xl bg-black/40">
+        <video
+          src={item.previewUrl}
+          controls
+          playsInline
+          preload="metadata"
+          className="h-full w-full object-contain"
+        />
+      </div>
+    );
+  }
+
+  if ((item.kind === "image" || item.kind === "thumbnail") && item.previewUrl) {
+    return (
+      <a
+        href={item.previewUrl}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="block aspect-video overflow-hidden rounded-xl bg-surface-elevated"
+        title="Открыть изображение"
+      >
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src={item.previewUrl} alt={item.title} className="h-full w-full object-cover" />
+      </a>
+    );
+  }
+
+  return (
+    <div className="reference-placeholder flex aspect-video items-center justify-center rounded-xl text-muted-foreground">
+      {item.kind === "video" ? <Film className="h-7 w-7" /> : <ImageIcon className="h-7 w-7" />}
+    </div>
+  );
+}
+
 export function ResultsPageClient({ initialAssets }: { initialAssets: Asset[] }) {
   const [filter, setFilter] = useState<FilterKind>("all");
   const [generations, setGenerations] = useState<Generation[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetch("/api/generations")
+    fetch("/api/generations?limit=50", { cache: "no-store" })
       .then((r) => r.json())
       .then((d) => {
         if (d.ok) setGenerations(d.data.generations);
         setLoading(false);
-      });
+      })
+      .catch(() => setLoading(false));
   }, []);
 
   const results: ResultItem[] = [
@@ -109,33 +158,41 @@ export function ResultsPageClient({ initialAssets }: { initialAssets: Asset[] })
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {filtered.map((item) => (
               <Card key={item.id} className="overflow-hidden transition-colors hover:border-border">
-                <CardContent className="p-4">
-                  <div className="reference-placeholder mb-3 flex h-32 items-center justify-center rounded-lg text-xs text-muted-foreground">
-                    {item.kind}
+                <CardContent className="space-y-3 p-3">
+                  <ResultPreview item={item} />
+                  <div className="px-1 pb-1">
+                    <p className="line-clamp-2 text-sm font-medium">{item.title}</p>
+                    <p className="mt-1 text-xs text-muted-foreground">{formatDate(item.createdAt)}</p>
+                    {item.status && <p className="mt-1 text-xs text-accent">{item.status}</p>}
+
+                    <div className="mt-3 flex flex-wrap items-center gap-3 text-xs">
+                      {item.previewUrl && (
+                        <a
+                          href={item.previewUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1.5 text-foreground hover:text-accent"
+                        >
+                          <ExternalLink className="h-3.5 w-3.5" />
+                          Открыть
+                        </a>
+                      )}
+                      {item.downloadUrl && (
+                        <a
+                          href={item.downloadUrl}
+                          className="inline-flex items-center gap-1.5 text-foreground hover:text-accent"
+                        >
+                          <Download className="h-3.5 w-3.5" />
+                          Скачать
+                        </a>
+                      )}
+                      {item.source?.href && (
+                        <Link href={item.source.href} className="text-accent hover:underline">
+                          → {item.source.label}
+                        </Link>
+                      )}
+                    </div>
                   </div>
-                  <p className="line-clamp-2 font-medium text-sm">{item.title}</p>
-                  <p className="mt-1 text-xs text-muted-foreground">{formatDate(item.createdAt)}</p>
-                  {item.status && (
-                    <p className="mt-1 text-xs text-accent">{item.status}</p>
-                  )}
-                  {item.source?.href && (
-                    <Link
-                      href={item.source.href}
-                      className="mt-2 inline-block text-xs text-accent hover:underline"
-                    >
-                      → {item.source.label}
-                    </Link>
-                  )}
-                  {item.url && (
-                    <a
-                      href={item.url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="mt-1 block text-xs text-muted-foreground hover:text-accent"
-                    >
-                      {t("assets.openDrive")}
-                    </a>
-                  )}
                 </CardContent>
               </Card>
             ))}

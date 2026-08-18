@@ -47,6 +47,7 @@ export async function POST(request: Request) {
 
   try {
     const common = {
+      requestId,
       userId: user.id,
       projectId: parsed.data.projectId,
       chatId: parsed.data.chatId,
