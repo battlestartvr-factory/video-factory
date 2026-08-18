@@ -119,18 +119,18 @@ function validShotResponse() {
 
 describe("Stage 4 token economy and visual approval planning", () => {
   it("routes simple tasks to cheap models and blocks automatic top-tier use", () => {
-    expect(getDiscoveryLlmPolicy("concept_pre_evaluation").primaryModel).toBe("claude-haiku-4-5");
-    expect(getDiscoveryLlmPolicy("schema_repair").primaryModel).toBe("claude-haiku-4-5");
-    expect(getDiscoveryLlmPolicy("feedback_structuring").primaryModel).toBe("claude-haiku-4-5");
-    expect(getDiscoveryLlmPolicy("concept_exploration").primaryModel).toBe("claude-sonnet-5");
+    expect(getDiscoveryLlmPolicy("concept_pre_evaluation").primaryModel).toBe("gemini-3-6-flash");
+    expect(getDiscoveryLlmPolicy("schema_repair").primaryModel).toBe("gemini-3-6-flash");
+    expect(getDiscoveryLlmPolicy("feedback_structuring").primaryModel).toBe("gemini-3-6-flash");
+    expect(getDiscoveryLlmPolicy("concept_exploration").primaryModel).toBe("gemini-3-pro");
     expect(getDiscoveryLlmPolicy("shot_planning")).toMatchObject({
-      primaryModel: "claude-haiku-4-5",
-      fallbackModels: ["claude-sonnet-5"],
+      primaryModel: "gemini-3-6-flash",
+      fallbackModels: ["gemini-3-pro"],
       automaticEscalation: true,
     });
   });
 
-  it("uses Haiku for a valid first shot and keeps required evidence auditable", async () => {
+  it("uses the cheap Gemini model for a valid first shot and keeps required evidence auditable", async () => {
     const calls: Array<{ model: string; thinking?: boolean | null }> = [];
     const result = await planGameplayShots({
       llm: {
@@ -139,7 +139,7 @@ describe("Stage 4 token economy and visual approval planning", () => {
           return {
             text: validShotResponse(),
             usage: { inputTokens: 100, outputTokens: 80, totalTokens: 180 },
-            stopReason: "end_turn",
+            stopReason: "stop",
             responsePayload: {},
           };
         },
@@ -154,7 +154,7 @@ describe("Stage 4 token economy and visual approval planning", () => {
       },
     });
 
-    expect(calls).toEqual([{ model: "claude-haiku-4-5", thinking: false }]);
+    expect(calls).toEqual([{ model: "gemini-3-6-flash", thinking: false }]);
     expect(result.escalated).toBe(false);
     expect(result.shots[0]?.expectedEvidence).toEqual(moment.requiredVisualEvidence);
   });
