@@ -1,3 +1,4 @@
+import { getDefaultMediaArchiveService } from "./media-archive";
 import { requireRpcObject, type OrchestratorRpcClient } from "./rpc";
 
 export interface DurableImageGeneration {
@@ -14,6 +15,19 @@ export interface DurableImageGeneration {
     role?: string;
   }>;
   status: string;
+}
+
+export interface DurableImageOutput {
+  url: string;
+  kind: "image";
+  mimeType?: string;
+  providerUrl?: string;
+  storageProvider?: "google_drive";
+  driveFileId?: string;
+  driveWebUrl?: string | null;
+  filename?: string;
+  sizeBytes?: number | null;
+  archivedAt?: string;
 }
 
 function objectValue(value: unknown): Record<string, unknown> {
@@ -71,14 +85,38 @@ export class GenerationImageRepository {
   async complete(input: {
     jobId: string;
     providerTaskId: string;
-    outputs: Array<{ url: string; kind: "image"; mimeType?: string }>;
+    outputs: DurableImageOutput[];
   }): Promise<void> {
+    let persistedOutputs: DurableImageOutput[] = input.outputs;
+    const archive = getDefaultMediaArchiveService();
+    if (archive) {
+      const archived: DurableImageOutput[] = [];
+      for (let index = 0; index < input.outputs.length; index += 1) {
+        const output = input.outputs[index]!;
+        archived.push(
+          await archive.archive({
+            generationId: await this.generationIdForJob(input.jobId),
+            outputIndex: index,
+            sourceUrl: output.providerUrl ?? output.url,
+            kind: "image",
+          }),
+        );
+      }
+      persistedOutputs = archived;
+    }
+
     const { error } = await this.rpcClient.rpc("orchestrator_complete_image_generation", {
       p_job_id: input.jobId,
       p_provider_task_id: input.providerTaskId,
-      p_outputs: input.outputs,
+      p_outputs: persistedOutputs,
     });
     if (error) throw new Error(`Failed to complete image generation: ${error.message}`);
+  }
+
+  private async generationIdForJob(jobId: string): Promise<string> {
+    const generation = await this.get(jobId);
+    if (!generation) throw new Error("Image generation not found while archiving output");
+    return generation.id;
   }
 
   async fail(input: {
