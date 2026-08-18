@@ -1,5 +1,6 @@
 import { setTimeout as sleep } from "node:timers/promises";
 import { GameDiscoveryWorkerRepository } from "../lib/game-discovery/worker-repository";
+import { GameDiscoveryVideoRepository } from "../lib/game-discovery/video-fanout-repository";
 import { GenerationImageRepository } from "../lib/orchestrator/generation-images";
 import { GenerationVideoRepository } from "../lib/orchestrator/generation-videos";
 import { ProviderTaskRepository } from "../lib/orchestrator/provider-tasks";
@@ -269,6 +270,7 @@ export async function runWorker(): Promise<void> {
     generationImages: new GenerationImageRepository(rpcClient),
     generationVideos: new GenerationVideoRepository(rpcClient),
     gameDiscovery: new GameDiscoveryWorkerRepository(rpcClient),
+    gameDiscoveryVideo: new GameDiscoveryVideoRepository(rpcClient),
     kieClaude: config.kieApiKey
       ? new KieClaudeTaskAdapter(config.kieApiBaseUrl, config.kieApiKey)
       : null,
