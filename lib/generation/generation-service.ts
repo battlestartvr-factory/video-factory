@@ -10,7 +10,16 @@ import {
   validateVideoGenerationRequest,
 } from "./validate";
 
-const DURABLE_IMAGE_MODELS = new Set(["gpt-image-2", "nano-banana-2"]);
+const DURABLE_IMAGE_MODELS = new Set(["gpt-image-2", "nano-banana-2", "nano-banana-pro"]);
+
+type GenerationReferenceAsset = {
+  id?: string;
+  url?: string;
+  storagePath?: string;
+  mimeType?: string;
+  filename?: string;
+  role?: string;
+};
 
 export interface CanonicalGenerationInput {
   requestId?: string;
@@ -27,13 +36,7 @@ export interface CanonicalGenerationInput {
   inputAssetIds?: string[];
   startFrameAssetId?: string;
   endFrameAssetId?: string;
-  referenceAssets?: Array<{
-    id?: string;
-    url?: string;
-    mimeType?: string;
-    filename?: string;
-    role?: string;
-  }>;
+  referenceAssets?: GenerationReferenceAsset[];
   settings?: Record<string, unknown>;
   mode?: string;
 }
@@ -73,7 +76,7 @@ async function assertChatOwner(userId: string, chatId: string) {
 }
 
 async function resolveOwnedAssets(userId: string, ids: string[]) {
-  if (!ids.length) return [] as Array<{ id: string; url?: string; mimeType?: string; filename?: string; role?: string }>;
+  if (!ids.length) return [] as GenerationReferenceAsset[];
   const unique = [...new Set(ids)];
   const service = createSupabaseServiceClient();
   const { data } = await service
@@ -101,7 +104,7 @@ async function createQueuedGeneration(input: {
   modelId: string;
   presetId?: string | null;
   settings: Record<string, unknown>;
-  referenceAssets: Array<{ id?: string; url?: string; mimeType?: string; filename?: string; role?: string }>;
+  referenceAssets: GenerationReferenceAsset[];
   projectId?: string | null;
   chatId?: string | null;
   sourceMessageId?: string | null;
@@ -171,7 +174,7 @@ async function createDurableImageGeneration(input: {
   modelId: string;
   presetId?: string | null;
   settings: Record<string, unknown>;
-  referenceAssets: Array<{ id?: string; url?: string; mimeType?: string; filename?: string; role?: string }>;
+  referenceAssets: GenerationReferenceAsset[];
   projectId?: string | null;
   chatId?: string | null;
   sourceMessageId?: string | null;
@@ -345,7 +348,7 @@ export async function createVideoGeneration(
         ? "start_frame"
         : asset.id === endFrameAssetId
           ? "end_frame"
-          : "reference",
+          : asset.role ?? "reference",
   }));
 
   return createQueuedGeneration({

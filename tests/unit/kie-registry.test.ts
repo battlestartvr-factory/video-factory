@@ -14,9 +14,13 @@ import { analyzeProductionIntent, PRODUCTION_INTENT_CLARIFICATION } from "@/lib/
 import { selectImageModel, selectVideoModel } from "@/lib/models/kie/selection";
 
 describe("KIE Model Registry", () => {
-  it("contains llm, image, and video models", () => {
+  it("contains llm, the approved image surface, and video models", () => {
     expect(KIE_MODEL_REGISTRY.filter((m) => m.category === "llm").length).toBeGreaterThanOrEqual(4);
-    expect(KIE_MODEL_REGISTRY.filter((m) => m.category === "image").length).toBeGreaterThanOrEqual(5);
+    expect(KIE_MODEL_REGISTRY.filter((m) => m.category === "image").map((m) => m.id)).toEqual([
+      "gpt-image-2",
+      "nano-banana-2",
+      "nano-banana-pro",
+    ]);
     expect(KIE_MODEL_REGISTRY.filter((m) => m.category === "video").length).toBeGreaterThanOrEqual(4);
   });
 
@@ -26,9 +30,10 @@ describe("KIE Model Registry", () => {
     expect(getDefaultVideoModel().id).toBe("kling-3");
   });
 
-  it("resolves legacy aliases", () => {
+  it("resolves supported legacy aliases without exposing Nano Banana 2 Lite", () => {
     expect(resolveModelId("gemini-3-flash")).toBe("gemini-3-6-flash");
-    expect(resolveModelId("nano-banana-2-lite")).toBe("nano-banana-2");
+    expect(resolveModelId("nano-banana-2-lite")).toBe("nano-banana-2-lite");
+    expect(getKieModelById("nano-banana-2-lite")).toBeUndefined();
     expect(resolveModelId("claude-sonnet-5")).toBe("claude-sonnet-4-5");
     expect(getKieModelById("gemini-3-flash")?.id).toBe("gemini-3-6-flash");
     expect(getKieModelById("claude-sonnet-5")?.id).toBe("claude-sonnet-4-5");
@@ -82,16 +87,20 @@ describe("quality mapping", () => {
     expect(resolveQuality(model, "high").effectiveQuality).toBe("quality");
   });
 
-  it("maps GPT Image resolution", () => {
-    const model = getKieModelById("gpt-image-2")!;
-    expect(resolveQuality(model, "medium").effectiveQuality).toBe("2K");
+  it("maps all approved image model quality levels to explicit resolutions", () => {
+    for (const id of ["gpt-image-2", "nano-banana-2", "nano-banana-pro"]) {
+      const model = getKieModelById(id)!;
+      expect(resolveQuality(model, "low").effectiveQuality).toBe("1K");
+      expect(resolveQuality(model, "medium").effectiveQuality).toBe("2K");
+      expect(resolveQuality(model, "high").effectiveQuality).toBe("4K");
+    }
   });
 });
 
 describe("agent model selection", () => {
-  it("selects typography model for poster requests", () => {
+  it("keeps automatic poster requests on the approved image surface", () => {
     const result = selectImageModel({ needsTypography: true });
-    expect(result.model.id).toBe("ideogram-v3");
+    expect(["gpt-image-2", "nano-banana-2", "nano-banana-pro"]).toContain(result.model.id);
     expect(result.selectionSource).toBe("agent");
   });
 

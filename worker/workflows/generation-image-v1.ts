@@ -9,6 +9,7 @@ import type { WorkflowTickContext, WorkflowTickHandler, WorkflowTickOutcome } fr
 
 const NORMAL_POLL_MS = 4_000;
 const AMBIGUOUS_SUBMIT_RECHECK_MS = 60_000;
+const MAX_DOCUMENT_CONTEXT_CHARS = 24_000;
 
 export interface ImageProviderRequest {
   model: string;
@@ -37,11 +38,22 @@ function usableReferenceUrls(generation: DurableImageGeneration): string[] {
     .filter((url): url is string => Boolean(url));
 }
 
+function generationPrompt(generation: DurableImageGeneration): string {
+  const documentContext = stringSetting(
+    generation.settings,
+    "documentContext",
+    "document_context",
+  );
+  if (!documentContext) return generation.prompt;
+  return `${generation.prompt}\n\nContext from attached brief documents. Use it as supporting creative direction; do not render it verbatim unless the prompt asks for text:\n${documentContext.slice(0, MAX_DOCUMENT_CONTEXT_CHARS)}`;
+}
+
 export function buildImageProviderRequest(
   generation: DurableImageGeneration,
 ): ImageProviderRequest {
   const aspectRatio = stringSetting(generation.settings, "aspectRatio", "aspect_ratio") ?? "auto";
   const referenceUrls = usableReferenceUrls(generation);
+  const prompt = generationPrompt(generation);
 
   if (generation.modelId === "gpt-image-2") {
     if (referenceUrls.length > 4) {
@@ -52,9 +64,6 @@ export function buildImageProviderRequest(
       });
     }
 
-    // Validation resolves GPT Image 2 low/medium/high quality to the provider's
-    // 1K/2K/4K tiers. Preserve that durable choice in the actual provider request so
-    // execution semantics and the persisted pricing evidence describe the same task.
     const resolution = stringSetting(
       generation.settings,
       "effectiveQuality",
@@ -66,7 +75,7 @@ export function buildImageProviderRequest(
       return {
         model: "gpt-image-2-image-to-image",
         input: {
-          prompt: generation.prompt,
+          prompt,
           input_urls: referenceUrls,
           aspect_ratio: aspectRatio,
           ...(resolution ? { resolution } : {}),
@@ -77,18 +86,19 @@ export function buildImageProviderRequest(
     return {
       model: "gpt-image-2-text-to-image",
       input: {
-        prompt: generation.prompt,
+        prompt,
         aspect_ratio: aspectRatio,
         ...(resolution ? { resolution } : {}),
       },
     };
   }
 
-  if (generation.modelId === "nano-banana-2") {
-    if (referenceUrls.length > 8) {
+  if (generation.modelId === "nano-banana-2" || generation.modelId === "nano-banana-pro") {
+    const maxReferences = generation.modelId === "nano-banana-2" ? 8 : 4;
+    if (referenceUrls.length > maxReferences) {
       throw new DurableWorkflowError({
         code: "IMAGE_REFERENCE_LIMIT",
-        message: "Nano Banana 2 accepts at most 8 reference images",
+        message: `${generation.modelId === "nano-banana-pro" ? "Nano Banana Pro" : "Nano Banana 2"} accepts at most ${maxReferences} reference images in this workflow`,
         retryable: false,
       });
     }
@@ -96,9 +106,9 @@ export function buildImageProviderRequest(
       stringSetting(generation.settings, "effectiveQuality", "effective_quality", "resolution") ??
       "2K";
     return {
-      model: "nano-banana-2",
+      model: generation.modelId,
       input: {
-        prompt: generation.prompt,
+        prompt,
         image_input: referenceUrls,
         aspect_ratio: aspectRatio,
         resolution,
@@ -412,9 +422,6 @@ export const generationImageV1: WorkflowTickHandler = async (context) => {
     }
 
     if (!externalTaskId) {
-      // Existing durable row + no task id means a prior createTask was ambiguous. The single
-      // automatic submit permit has already been consumed; only callback/manual reconcile can
-      // supply the task id now.
       return waitingOutcome({
         context,
         generationId: generation.id,
@@ -428,7 +435,6 @@ export const generationImageV1: WorkflowTickHandler = async (context) => {
   }
 
   if (!externalTaskId) {
-    // Same invariant for a state restored after an ambiguous submission.
     return waitingOutcome({
       context,
       generationId: generation.id,
