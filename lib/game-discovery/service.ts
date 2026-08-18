@@ -52,6 +52,14 @@ export interface GameplayReferenceReview {
   created_at: string;
 }
 
+export interface GameDiscoveryBatchDetail {
+  root: CreativeRun;
+  factoryJob: Record<string, unknown> | null;
+  conceptRuns: Array<Record<string, unknown>>;
+  referenceGenerations: Array<Record<string, unknown>>;
+  reviews: GameplayReferenceReview[];
+}
+
 function rpcObject(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -138,6 +146,53 @@ export async function getGameDiscoveryBatch(input: {
   if (!run.project_id) return null;
   await assertProjectAccess(input.userId, run.project_id);
   return run;
+}
+
+export async function getGameDiscoveryBatchDetail(input: {
+  userId: string;
+  runId: string;
+}): Promise<GameDiscoveryBatchDetail | null> {
+  const root = await getGameDiscoveryBatch(input);
+  if (!root) return null;
+  const service = createSupabaseServiceClient();
+
+  const referenceRequests = rpcObject(rpcObject(root.outputs).reference_image_requests);
+  const generationIds = Object.values(referenceRequests)
+    .map((value) => rpcObject(value).generation_id)
+    .filter((value): value is string => typeof value === "string" && value.length > 0);
+
+  const [jobResult, conceptsResult, generationsResult, reviewsResult] = await Promise.all([
+    root.factory_job_id
+      ? service.from("factory_jobs").select("*").eq("id", root.factory_job_id).maybeSingle()
+      : Promise.resolve({ data: null, error: null }),
+    service
+      .from("creative_runs")
+      .select("*")
+      .eq("parent_run_id", root.id)
+      .contains("metadata", { domain_kind: "coop_game_concept" })
+      .order("created_at", { ascending: true }),
+    generationIds.length
+      ? service.from("generations").select("*").in("id", generationIds)
+      : Promise.resolve({ data: [], error: null }),
+    service
+      .from("gameplay_reference_reviews")
+      .select("*")
+      .eq("root_creative_run_id", root.id)
+      .order("created_at", { ascending: true }),
+  ]);
+
+  if (jobResult.error) throw new Error(`Failed to load discovery factory job: ${jobResult.error.message}`);
+  if (conceptsResult.error) throw new Error(`Failed to load discovery concepts: ${conceptsResult.error.message}`);
+  if (generationsResult.error) throw new Error(`Failed to load reference generations: ${generationsResult.error.message}`);
+  if (reviewsResult.error) throw new Error(`Failed to load reference reviews: ${reviewsResult.error.message}`);
+
+  return {
+    root,
+    factoryJob: jobResult.data as Record<string, unknown> | null,
+    conceptRuns: (conceptsResult.data ?? []) as Array<Record<string, unknown>>,
+    referenceGenerations: (generationsResult.data ?? []) as Array<Record<string, unknown>>,
+    reviews: (reviewsResult.data ?? []) as GameplayReferenceReview[],
+  };
 }
 
 export async function listGameplayReferenceReviews(input: {
