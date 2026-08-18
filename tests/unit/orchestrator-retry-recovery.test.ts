@@ -29,6 +29,39 @@ describe("stage3 durable retry policy", () => {
     expect(shouldRetry({ retryable: true, retryCount: 4, maxAttempts: 5 })).toBe(false);
   });
 
+  it("suppresses retries for deterministic persistence contract failures after paid work", () => {
+    const error = normalizeWorkflowError(
+      new DurableWorkflowError({
+        code: "CONCEPT_EXPLORATION_PERSIST_FAILED",
+        message:
+          "Failed to persist concept exploration: there is no unique or exclusion constraint matching the ON CONFLICT specification",
+        retryable: true,
+        retryAfterMs: 5_000,
+      }),
+    );
+
+    expect(error.retryable).toBe(false);
+    expect(error.retryAfterMs).toBeUndefined();
+    expect(error.details).toMatchObject({
+      retry_suppressed: "deterministic_persistence_contract",
+    });
+    expect(shouldRetry({ retryable: error.retryable, retryCount: 0, maxAttempts: 5 })).toBe(false);
+  });
+
+  it("keeps transient persistence transport failures retryable", () => {
+    const error = normalizeWorkflowError(
+      new DurableWorkflowError({
+        code: "CONCEPT_EXPLORATION_PERSIST_FAILED",
+        message: "Failed to persist concept exploration: fetch failed",
+        retryable: true,
+        retryAfterMs: 5_000,
+      }),
+    );
+
+    expect(error.retryable).toBe(true);
+    expect(error.retryAfterMs).toBe(5_000);
+  });
+
   it("uses retry-after when supplied", () => {
     expect(computeRetryDelayMs({ retryCount: 0, retryAfterMs: 12_345 })).toBe(12_345);
   });
