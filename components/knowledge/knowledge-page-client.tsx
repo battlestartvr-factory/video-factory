@@ -20,6 +20,16 @@ function formatBytes(bytes: number | null) {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+function isDriveBackedDocument(document: KnowledgeDocument | undefined): boolean {
+  if (!document) return false;
+  return (
+    document.storage_provider === "google_drive" ||
+    Boolean(document.drive_file_id?.trim()) ||
+    Boolean(document.drive_web_url?.trim()) ||
+    (document.storage_provider === "google_drive" && Boolean(document.storage_path?.trim()))
+  );
+}
+
 const STATUS_LABELS: Record<string, string> = {
   pending: "Ожидание",
   uploading: "Загрузка",
@@ -40,6 +50,7 @@ export function KnowledgePageClient() {
   const [answer, setAnswer] = useState("");
   const [sources, setSources] = useState<SourceCitation[]>([]);
   const [asking, setAsking] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const loadDocuments = () => {
@@ -93,15 +104,30 @@ export function KnowledgePageClient() {
 
   const handleDelete = async (id: string) => {
     const doc = documents.find((d) => d.id === id);
-    const confirmMessage =
-      doc?.drive_file_id != null && doc.drive_file_id !== ""
-        ? t("knowledge.deleteConfirm")
-        : t("knowledge.deleteConfirmLocal");
+    const confirmMessage = isDriveBackedDocument(doc)
+      ? t("knowledge.deleteConfirm")
+      : t("knowledge.deleteConfirmLocal");
     if (!window.confirm(confirmMessage)) return;
 
-    const res = await fetch(`/api/knowledge?id=${id}`, { method: "DELETE" });
-    if (res.ok) {
+    setDeletingId(id);
+    try {
+      const res = await fetch(`/api/knowledge?id=${encodeURIComponent(id)}`, { method: "DELETE" });
+      const payload = await res.json().catch(() => null);
+      if (!res.ok || !payload?.ok) {
+        window.alert(
+          payload?.error?.message ??
+            "Не удалось удалить документ. Оригинал в Google Drive и запись в базе оставлены без изменений.",
+        );
+        return;
+      }
+
       setDocuments((prev) => prev.filter((d) => d.id !== id));
+    } catch {
+      window.alert(
+        "Не удалось подтвердить удаление документа. Обновите страницу перед повторной попыткой.",
+      );
+    } finally {
+      setDeletingId(null);
     }
   };
 
@@ -208,7 +234,13 @@ export function KnowledgePageClient() {
                       </p>
                     </div>
                   </div>
-                  <Button variant="ghost" size="icon" onClick={() => handleDelete(doc.id)}>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    disabled={deletingId === doc.id}
+                    onClick={() => handleDelete(doc.id)}
+                    aria-label={`Удалить ${doc.filename}`}
+                  >
                     <Trash2 className="h-4 w-4" />
                   </Button>
                 </div>
