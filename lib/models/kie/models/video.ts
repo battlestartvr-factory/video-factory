@@ -17,7 +17,6 @@ export const VIDEO_MODELS: KieModelEntry[] = [
       endFrame: true,
       multiShot: true,
       elementReferences: true,
-      referenceImages: true,
       sound: true,
       audio: true,
       aspectRatios: ["16:9", "9:16", "1:1"],
