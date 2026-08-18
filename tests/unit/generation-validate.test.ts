@@ -56,13 +56,14 @@ describe("canonical generation validation", () => {
     expect(result.settings.effectiveQuality).toBe("pro");
   });
 
-  it("reports capability mismatch without silent model swap", () => {
-    expect(() =>
-      validateVideoGenerationRequest({
-        modelId: "kling-3",
-        mode: "reference-to-video",
-        selectionSource: "ui",
-      }),
-    ).toThrow(GenerationValidationError);
+  it("accepts Kling reference mode through its generic reference-image capability", () => {
+    const result = validateVideoGenerationRequest({
+      modelId: "kling-3",
+      mode: "reference-to-video",
+      referenceCount: 2,
+      selectionSource: "ui",
+    });
+    expect(result.model.id).toBe("kling-3");
+    expect(result.mode).toBe("reference-to-video");
   });
 });
