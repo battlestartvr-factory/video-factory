@@ -249,7 +249,7 @@ export function normalizeKieError(
     );
   }
   if (category === "INVALID_PROVIDER_REQUEST") {
-    if (adapter === "claude_sonnet") {
+    if (adapter === "claude_messages" || adapter === "claude_sonnet") {
       return new KieProviderError(
         PROVIDER_ERROR_CODES.CLAUDE_REQUEST_INVALID,
         "Некорректный запрос к Claude API.",

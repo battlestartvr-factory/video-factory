@@ -114,6 +114,14 @@ export const webFetchSchema = z.object({
   url: z.string().url().max(2000),
 });
 
+export const startGameDiscoverySchema = z.object({
+  title: z.string().trim().min(1).max(240).optional(),
+  search_intent: z.string().trim().min(1).max(4000).optional(),
+  desired_novelty: z.enum(["explore", "balanced", "exploit"]).optional(),
+  concept_count: z.number().int().min(2).max(12).optional(),
+  max_concepts_to_prototype: z.number().int().min(1).max(4).optional(),
+});
+
 export function zodToFunctionParameters(schema: z.ZodType): Record<string, unknown> {
   const json = z.toJSONSchema(schema) as Record<string, unknown>;
   delete json.$schema;

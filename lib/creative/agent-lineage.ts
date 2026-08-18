@@ -68,6 +68,7 @@ export function inferCreativeRunType(input: {
     case "video":
       return "video";
     case "general":
+    case "game_discovery":
       return "concept";
     case "memory":
     case "projects":
@@ -160,6 +161,10 @@ async function findExistingCreativeRunId(agentRunId?: string | null): Promise<st
 export async function recordAgentCreativeRunBestEffort(
   input: AgentCreativeLineageInput,
 ): Promise<string | null> {
+  // Durable Game Discovery already owns a richer root/child lineage and AssetGraph.
+  // Writing the generic chat lineage as well would create a duplicate parallel run.
+  if (input.turnIntent === "game_discovery") return null;
+
   const logger = createLogger({
     request_id: input.requestId,
     event: "creative.agent_lineage",

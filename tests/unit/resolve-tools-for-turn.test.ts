@@ -11,6 +11,16 @@ describe("resolveToolsForTurn", () => {
     expect(result.toolNames).toEqual([]);
   });
 
+  it("Stage 4 research brief → durable discovery tool only", () => {
+    const result = resolveToolsForTurn({
+      userMessage:
+        "Изучи приложенный Steam research и запусти discovery pipeline: найди новую PC/Steam co-op игру, сделай gameplay reference images и остановись для Approve / Revise / Reject.",
+      attachmentIds: ["00000000-0000-4000-8000-000000000001"],
+    });
+    expect(result.intent).toBe("game_discovery");
+    expect(result.toolNames).toEqual(["start_game_discovery"]);
+  });
+
   it("knowledge request → only knowledge tools", () => {
     const result = resolveToolsForTurn({
       userMessage: 'Расскажи про урок 3 «Волшебная копилка» из базы знаний',
@@ -73,6 +83,7 @@ describe("resolveToolsForTurn", () => {
       "Запомни это",
       "Найди в интернете",
       "Покажи файлы проекта",
+      "Запусти discovery pipeline для новой Steam co-op игры",
     ];
     for (const userMessage of samples) {
       expect(resolveToolsForTurn({ userMessage }).tools.length).toBeLessThanOrEqual(MAX_TOOLS_PER_REQUEST);

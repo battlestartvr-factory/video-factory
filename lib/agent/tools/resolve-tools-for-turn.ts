@@ -9,6 +9,7 @@ export const TARGET_TOOLS_PER_REQUEST = 4;
 
 export type TurnIntent =
   | "general"
+  | "game_discovery"
   | "knowledge"
   | "image"
   | "video"
@@ -18,6 +19,7 @@ export type TurnIntent =
 
 /** Explicit tool groups — never send the full registry. */
 export const TOOL_GROUPS: Record<Exclude<TurnIntent, "general">, readonly string[]> = {
+  game_discovery: ["start_game_discovery"],
   knowledge: [
     "search_knowledge",
     "list_knowledge_documents",
@@ -54,6 +56,16 @@ const GENERAL_PATTERNS: RegExp[] = [
   /придумай\s+(?:идеи|идею)/i,
   /^спасибо(?:[!?.…,\s]|$)/i,
   /^thanks(?:[!?.…,\s]|$)/i,
+];
+
+const GAME_DISCOVERY_PATTERNS: RegExp[] = [
+  /discovery\s+pipeline/i,
+  /stage\s*4.*(?:discovery|co-?op|game)/i,
+  /(?:поиск|найд[иь]|придумай|предложи).*(?:нов(?:ую|ые)\s+)?(?:pc\/?steam|steam).*(?:co-?op|кооп|игр)/i,
+  /(?:нов(?:ую|ые)|перспективн(?:ую|ые)).*(?:co-?op|кооп).*(?:игр|game)/i,
+  /gameplay\s+reference\s+images?/i,
+  /reference\s+(?:image|изображ).*(?:approve|revise|reject|утверд)/i,
+  /(?:concept|концепт).*(?:diversity|pre-?evaluation|gameplay\s+moment)/i,
 ];
 
 const KNOWLEDGE_PATTERNS: RegExp[] = [
@@ -131,6 +143,10 @@ export function detectTurnIntent(input: ResolveToolsForTurnInput): TurnIntent {
   const text = input.userMessage.trim();
   if (!text) return "general";
 
+  // Stage 4 discovery is a durable product workflow, not a generic document-analysis turn.
+  // Detect it before knowledge/image/video patterns because a real discovery brief often
+  // contains all of those words at once.
+  if (matchesAny(text, GAME_DISCOVERY_PATTERNS)) return "game_discovery";
   if (matchesAny(text, MEMORY_PATTERNS)) return "memory";
   if (matchesAny(text, WEB_PATTERNS)) return "web";
   if (matchesAny(text, KNOWLEDGE_PATTERNS)) return "knowledge";
@@ -143,6 +159,7 @@ export function detectTurnIntent(input: ResolveToolsForTurnInput): TurnIntent {
 
   const hasAttachments = (input.attachmentIds?.length ?? 0) > 0;
   if (hasAttachments) {
+    if (matchesAny(text, GAME_DISCOVERY_PATTERNS)) return "game_discovery";
     if (matchesAny(text, IMAGE_PATTERNS)) return "image";
     if (matchesAny(text, VIDEO_PATTERNS)) return "video";
     if (/pdf|документ|document|extract|извлеч|research|report|срез\s+рынка/i.test(text)) return "knowledge";

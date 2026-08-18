@@ -33,6 +33,7 @@ interface PendingChatAttempt {
 }
 
 const EMPTY_MESSAGES: ChatMessage[] = [];
+const RECOVERY_POLL_MS = 1_500;
 
 function optimisticUserMessage(chatId: string, content: string): ChatMessage {
   return {
@@ -49,6 +50,16 @@ function getFilesKey(files: File[]): string {
   return files.map((file) => `${file.name}:${file.size}:${file.lastModified}:${file.type}`).join("|");
 }
 
+function autoTitle(content: string): string {
+  const cleaned = content.trim().replace(/\s+/g, " ");
+  if (!cleaned) return "Новый чат";
+  return cleaned.length <= 50 ? cleaned : `${cleaned.slice(0, 47)}…`;
+}
+
+function lastMessage(messages: ChatMessage[]): ChatMessage | undefined {
+  return messages[messages.length - 1];
+}
+
 export function ChatPageClient({ chatId: chatIdProp, projectId }: ChatPageClientProps) {
   const router = useRouter();
   const params = useParams();
@@ -62,6 +73,7 @@ export function ChatPageClient({ chatId: chatIdProp, projectId }: ChatPageClient
     [chatId, messagesByChat],
   );
   const [sending, setSending] = useState(false);
+  const [recoveringTurn, setRecoveringTurn] = useState(false);
   const [liveActivity, setLiveActivity] = useState<AgentUiEvent[]>([]);
   const [sendError, setSendError] = useState<ErrorCardData | null>(null);
   const [loadedChatIds, setLoadedChatIds] = useState<Record<string, boolean>>({});
@@ -71,9 +83,30 @@ export function ChatPageClient({ chatId: chatIdProp, projectId }: ChatPageClient
   const fetchGenerationRef = useRef(0);
   const pendingChatAttemptRef = useRef<PendingChatAttempt | null>(null);
   const displayedChat = chat?.id === chatId ? chat : null;
+  const latestMessage = lastMessage(messages);
+  const busy = sending || recoveringTurn;
 
   const scrollToBottom = useCallback(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, []);
+
+  const applyRemoteChat = useCallback((remoteChat: Chat) => {
+    setChat(remoteChat);
+    recentChats?.updateChatTitle(remoteChat.id, remoteChat.title);
+  }, [recentChats]);
+
+  const fetchChatSnapshot = useCallback(async (
+    activeChatId: string,
+    signal?: AbortSignal,
+  ): Promise<{ chat: Chat | null; messages: ChatMessage[] | null }> => {
+    const [chatRes, msgRes] = await Promise.all([
+      fetch(`/api/chats/${activeChatId}`, { cache: "no-store", signal }).then((r) => r.json()),
+      fetch(`/api/chats/${activeChatId}/messages`, { cache: "no-store", signal }).then((r) => r.json()),
+    ]);
+    return {
+      chat: chatRes.ok ? (chatRes.data as Chat) : null,
+      messages: msgRes.ok ? (msgRes.data.messages as ChatMessage[]) : null,
+    };
   }, []);
 
   useEffect(() => {
@@ -84,23 +117,21 @@ export function ChatPageClient({ chatId: chatIdProp, projectId }: ChatPageClient
 
     void (async () => {
       try {
-        const [chatRes, msgRes] = await Promise.all([
-          fetch(`/api/chats/${chatId}`, { cache: "no-store", signal: controller.signal }).then((r) => r.json()),
-          fetch(`/api/chats/${chatId}/messages`, { cache: "no-store", signal: controller.signal }).then((r) => r.json()),
-        ]);
+        const snapshot = await fetchChatSnapshot(chatId, controller.signal);
         if (cancelled) return;
-        if (chatRes.ok) setChat(chatRes.data);
-        if (msgRes.ok) {
+        if (snapshot.chat) applyRemoteChat(snapshot.chat);
+        if (snapshot.messages) {
           setMessagesByChat((prev) => ({
             ...prev,
             [chatId]: applyFetchedMessages({
-              fetched: msgRes.data.messages as ChatMessage[],
+              fetched: snapshot.messages!,
               local: prev[chatId] ?? [],
               requestGeneration,
               latestGeneration: fetchGenerationRef.current,
               chatId,
             }),
           }));
+          setRecoveringTurn(lastMessage(snapshot.messages)?.role === "user");
         }
       } catch {
         if (controller.signal.aborted) return;
@@ -115,11 +146,50 @@ export function ChatPageClient({ chatId: chatIdProp, projectId }: ChatPageClient
       cancelled = true;
       controller.abort();
     };
-  }, [chatId]);
+  }, [chatId, applyRemoteChat, fetchChatSnapshot]);
+
+  // Recovery path for reloads, route remounts and interrupted SSE streams. A persisted
+  // user message without a following assistant message means the server-side turn is
+  // still in flight (or its final message has not reached this browser yet).
+  useEffect(() => {
+    if (!chatId || sending || latestMessage?.role !== "user") return;
+
+    let cancelled = false;
+    const controller = new AbortController();
+
+    const poll = async () => {
+      try {
+        const snapshot = await fetchChatSnapshot(chatId, controller.signal);
+        if (cancelled) return;
+        if (snapshot.chat) applyRemoteChat(snapshot.chat);
+        if (snapshot.messages) {
+          setMessagesByChat((prev) => ({ ...prev, [chatId]: snapshot.messages! }));
+          setRecoveringTurn(lastMessage(snapshot.messages)?.role === "user");
+        }
+      } catch {
+        if (!controller.signal.aborted) setRecoveringTurn(true);
+      }
+    };
+
+    void poll();
+    const timer = window.setInterval(() => void poll(), RECOVERY_POLL_MS);
+    return () => {
+      cancelled = true;
+      controller.abort();
+      window.clearInterval(timer);
+    };
+  }, [
+    chatId,
+    sending,
+    latestMessage?.id,
+    latestMessage?.role,
+    applyRemoteChat,
+    fetchChatSnapshot,
+  ]);
 
   useEffect(() => {
     scrollToBottom();
-  }, [messages, scrollToBottom]);
+  }, [messages, liveActivity, recoveringTurn, scrollToBottom]);
 
   const createChat = async () => {
     const res = await fetch("/api/chats", {
@@ -165,8 +235,9 @@ export function ChatPageClient({ chatId: chatIdProp, projectId }: ChatPageClient
     content: string,
     options: { modelId?: string; reasoningLevel?: string; files: File[] },
   ): Promise<boolean> => {
-    if (sending) return false;
+    if (busy) return false;
     setSending(true);
+    setRecoveringTurn(false);
     setSendError(null);
     setLiveActivity([]);
 
@@ -177,14 +248,25 @@ export function ChatPageClient({ chatId: chatIdProp, projectId }: ChatPageClient
     let optimistic: ChatMessage | null = null;
     let accepted = false;
 
-    const commitNewChat = () => {
+    const acceptNewChat = () => {
       if (!newChatTurn || !activeChatId || !provisionalChat || accepted) return;
       accepted = true;
       pendingChatAttemptRef.current = null;
+      const titledChat = { ...provisionalChat, title: autoTitle(content) };
+      provisionalChat = titledChat;
       setPendingChatId(activeChatId);
-      setChat(provisionalChat);
-      recentChats?.prependChat({ id: provisionalChat.id, title: provisionalChat.title });
-      router.push(`/chat/${activeChatId}`);
+      setChat(titledChat);
+      recentChats?.prependChat({ id: titledChat.id, title: titledChat.title });
+      // Do not use Next router here: changing /chat -> /chat/[id] remounts the component
+      // and used to destroy the live SSE activity state. Updating browser history keeps
+      // reload recovery while the current component continues reading the stream.
+      if (typeof window !== "undefined") {
+        window.history.replaceState(window.history.state, "", `/chat/${activeChatId}`);
+      }
+    };
+
+    const synchronizeRouteAfterTurn = () => {
+      if (newChatTurn && activeChatId) router.replace(`/chat/${activeChatId}`);
     };
 
     try {
@@ -295,7 +377,7 @@ export function ChatPageClient({ chatId: chatIdProp, projectId }: ChatPageClient
               const event = JSON.parse(payload) as StreamEvent;
               if (event.type === "message.accepted") {
                 messageAccepted = true;
-                commitNewChat();
+                acceptNewChat();
               } else if (event.type === "turn.completed" && event.content) {
                 turnResult = JSON.parse(event.content) as { userMessage: ChatMessage; assistantMessage: ChatMessage };
               } else {
@@ -316,11 +398,15 @@ export function ChatPageClient({ chatId: chatIdProp, projectId }: ChatPageClient
               [turnResult!.userMessage, turnResult!.assistantMessage],
             ),
           }));
-          commitNewChat();
+          acceptNewChat();
+          setRecoveringTurn(false);
+          synchronizeRouteAfterTurn();
           return true;
         }
         if (messageAccepted) {
-          setSendError({ message: "Сообщение сохранено, но поток ответа модели прервался. Обновите чат, чтобы проверить ответ." });
+          acceptNewChat();
+          setRecoveringTurn(true);
+          setSendError({ message: "Сообщение сохранено. Соединение с потоком ответа прервалось — продолжаю проверять результат автоматически." });
           return true;
         }
       } else {
@@ -336,7 +422,9 @@ export function ChatPageClient({ chatId: chatIdProp, projectId }: ChatPageClient
               [userMessage, assistantMessage],
             ),
           }));
-          commitNewChat();
+          acceptNewChat();
+          setRecoveringTurn(false);
+          synchronizeRouteAfterTurn();
           return true;
         }
         setSendError({ code: data?.error?.code, message: data?.error?.message ?? t("common.error") });
@@ -348,7 +436,7 @@ export function ChatPageClient({ chatId: chatIdProp, projectId }: ChatPageClient
           [activeChatId!]: (prev[activeChatId!] ?? []).filter((item) => item.id !== optimistic!.id),
         }));
       }
-      if (!sendError) setSendError({ message: t("common.error") });
+      setSendError({ message: t("common.error") });
       return false;
     } catch (error) {
       setSendError({ message: error instanceof Error ? error.message : t("common.error") });
@@ -367,7 +455,7 @@ export function ChatPageClient({ chatId: chatIdProp, projectId }: ChatPageClient
             <div className="mx-auto mb-6 max-w-3xl px-4">
               <h1 className="text-center text-2xl font-semibold tracking-tight text-foreground sm:text-3xl">Над чем поработаем?</h1>
             </div>
-            <ChatComposer onSend={handleSend} disabled={sending} variant="hero" autoFocus />
+            <ChatComposer onSend={handleSend} disabled={busy} variant="hero" autoFocus />
             {sendError ? <div className="mx-auto mt-4 max-w-3xl px-4"><ErrorCard error={sendError} /></div> : null}
             <p className="mt-3 text-center text-xs text-muted-foreground">Enter — отправить · Shift+Enter — новая строка</p>
           </div>
@@ -391,7 +479,7 @@ export function ChatPageClient({ chatId: chatIdProp, projectId }: ChatPageClient
               }}
             />
           ) : null}
-          <Button variant="ghost" size="sm" onClick={createChat}>
+          <Button variant="ghost" size="sm" onClick={createChat} disabled={busy}>
             <Plus className="h-4 w-4" />
             {t("chat.newChat")}
           </Button>
@@ -408,8 +496,17 @@ export function ChatPageClient({ chatId: chatIdProp, projectId }: ChatPageClient
             {messages.map((msg) => <ChatMessageView key={msg.id} message={msg} />)}
             {sending && liveActivity.length > 0 ? (
               <div className="px-4 py-2"><AgentActivityPanel events={liveActivity} isActive /></div>
-            ) : sending ? (
-              <div className="px-4 py-2"><AgentActivityPanel events={[{ type: "agent.run.started", label: "● Думаю…" }]} isActive /></div>
+            ) : busy ? (
+              <div className="px-4 py-2">
+                <AgentActivityPanel
+                  events={[{
+                    type: "agent.run.started",
+                    label: recoveringTurn ? "● Агент работает — ожидаю результат…" : "● Думаю…",
+                    status: "running",
+                  }]}
+                  isActive
+                />
+              </div>
             ) : null}
             {sendError ? <div className="px-4 py-4"><ErrorCard error={sendError} /></div> : null}
             <div ref={messagesEndRef} />
@@ -420,7 +517,7 @@ export function ChatPageClient({ chatId: chatIdProp, projectId }: ChatPageClient
       <ChatComposer
         key={`${chatId}-${displayedChat?.model_id ?? ""}-${String(displayedChat?.metadata?.reasoning_level ?? "")}`}
         onSend={handleSend}
-        disabled={sending}
+        disabled={busy}
         chatId={chatId}
         defaultModelId={displayedChat?.model_id ?? undefined}
         defaultReasoningLevel={
