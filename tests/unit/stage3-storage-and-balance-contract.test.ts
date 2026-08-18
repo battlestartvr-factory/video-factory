@@ -7,36 +7,68 @@ function source(path: string): string {
 }
 
 describe("knowledge document Drive delete contract", () => {
-  it("deletes the Drive object before deleting the database row", () => {
-    const code = source("lib/knowledge/knowledge-service.ts");
-    const fn = code.slice(code.indexOf("export async function deleteKnowledgeDocument"));
+  it("uses the verified Drive-sync delete path as the user-facing canonical path", () => {
+    const route = source("app/api/knowledge/route.ts");
+    const barrel = source("lib/knowledge/index.ts");
+
+    expect(route).toContain("deleteKnowledgeDocumentWithDriveSync");
+    expect(barrel).toContain("deleteKnowledgeDocumentWithDriveSync as deleteKnowledgeDocument");
+  });
+
+  it("resolves legacy Drive identities without relying only on drive_file_id", () => {
+    const code = source("lib/knowledge/drive-delete.ts");
+
+    expect(code).toContain("resolveKnowledgeDriveFileId");
+    expect(code).toContain("document.storage_path");
+    expect(code).toContain("metadata.drive_file_id");
+    expect(code).toContain("metadata.driveFileId");
+    expect(code).toContain("parseGoogleDriveFileId(document.drive_web_url)");
+  });
+
+  it("verifies remote deletion before deleting the database row", () => {
+    const code = source("lib/knowledge/drive-delete.ts");
+    const fn = code.slice(code.indexOf("export async function deleteKnowledgeDocumentWithDriveSync"));
     const driveDelete = fn.indexOf("await drive.deleteFile(driveFileId)");
+    const verification = fn.indexOf("await verifyDriveFileAbsent(driveFileId)");
     const databaseDelete = fn.indexOf('.from("knowledge_documents")\n    .delete()');
 
     expect(driveDelete).toBeGreaterThan(-1);
-    expect(databaseDelete).toBeGreaterThan(driveDelete);
+    expect(verification).toBeGreaterThan(driveDelete);
+    expect(databaseDelete).toBeGreaterThan(verification);
   });
 
-  it("keeps the database row when Drive deletion fails", () => {
-    const code = source("lib/knowledge/knowledge-service.ts");
-    const fn = code.slice(code.indexOf("export async function deleteKnowledgeDocument"));
-    const driveFailure = fn.indexOf('throw new Error(errorCode)');
+  it("keeps the database row when Drive identity or deletion cannot be confirmed", () => {
+    const code = source("lib/knowledge/drive-delete.ts");
+    const fn = code.slice(code.indexOf("export async function deleteKnowledgeDocumentWithDriveSync"));
+    const missingIdFailure = fn.indexOf('throw new Error("DRIVE_FILE_ID_MISSING")');
+    const deleteFailureAudit = fn.indexOf("await markDeleteFailure");
     const databaseDelete = fn.indexOf('.from("knowledge_documents")\n    .delete()');
 
-    expect(driveFailure).toBeGreaterThan(-1);
-    expect(databaseDelete).toBeGreaterThan(driveFailure);
-    expect(fn).toContain("drive_delete_failed: true");
+    expect(missingIdFailure).toBeGreaterThan(-1);
+    expect(deleteFailureAudit).toBeGreaterThan(-1);
+    expect(databaseDelete).toBeGreaterThan(missingIdFailure);
+    expect(code).toContain("DRIVE_DELETE_NOT_CONFIRMED");
+    expect(code).toContain("drive_delete_failed: true");
   });
 
-  it("blocks user deletion when a Drive-backed row cannot be cleaned remotely", () => {
-    const route = source("app/api/knowledge/route.ts");
-    const deleteHandler = route.slice(route.indexOf("export async function DELETE"));
-    const guard = deleteHandler.indexOf("document.drive_file_id && !isDriveStorageConfigured()");
-    const deleteCall = deleteHandler.indexOf("await deleteKnowledgeDocument(user.id, id)");
+  it("cleans only strongly matched unreferenced retry duplicates in the managed Drive folder", () => {
+    const code = source("lib/knowledge/drive-delete.ts");
 
-    expect(guard).toBeGreaterThan(-1);
-    expect(deleteCall).toBeGreaterThan(guard);
-    expect(deleteHandler).toContain("Google Drive недоступен: документ не удалён");
+    expect(code).toContain("cleanupLikelyRetryDuplicates");
+    expect(code).toContain("protectedIds");
+    expect(code).toContain("DUPLICATE_CREATED_AT_TOLERANCE_MS");
+    expect(code).toContain("candidateSize !== input.document.size_bytes");
+    expect(code).toContain("cleaned_retry_duplicates");
+  });
+
+  it("shows delete failures to the user instead of silently removing the row", () => {
+    const client = source("components/knowledge/knowledge-page-client.tsx");
+
+    expect(client).toContain("if (!res.ok || !payload?.ok)");
+    expect(client).toContain("window.alert");
+    expect(client.indexOf("setDocuments((prev) => prev.filter")).toBeGreaterThan(
+      client.indexOf("if (!res.ok || !payload?.ok)"),
+    );
   });
 });
 
