@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { buildGameplayAssetGraph } from "../../lib/game-discovery/asset-graph";
 import { DurableWorkflowError } from "../../lib/orchestrator/retry";
 import { gameDiscoveryBatchStage4V1 } from "./game-discovery-batch-stage4-v1";
 import type { WorkflowTickContext, WorkflowTickHandler, WorkflowTickOutcome } from "./types";
@@ -141,10 +142,7 @@ async function handleVideoPending(context: WorkflowTickContext): Promise<Workflo
   const existingByShot = new Map(videoStage.items.map((item) => [item.shotId, item]));
   for (const item of approved) {
     const existing = existingByShot.get(item.shotId);
-    if (
-      existing &&
-      existing.approvedReferenceGenerationId !== item.generationId
-    ) {
+    if (existing && existing.approvedReferenceGenerationId !== item.generationId) {
       return failedOutcome({
         context,
         currentStage: "video_generation_pending",
@@ -171,9 +169,7 @@ async function handleVideoPending(context: WorkflowTickContext): Promise<Workflo
 
   for (const item of approved) {
     if (existingByShot.has(item.shotId)) continue;
-    const requestId = stableUuid(
-      `stage4-video:${context.jobId}:${item.shotId}:${item.generationId}`,
-    );
+    const requestId = stableUuid(`stage4-video:${context.jobId}:${item.shotId}:${item.generationId}`);
     try {
       const admission = await services.video.createApprovedVideo({
         rootJobId: context.jobId,
@@ -327,7 +323,8 @@ async function handleVideoWaiting(context: WorkflowTickContext): Promise<Workflo
     status: "waiting",
     currentStage: "asset_graph_pending",
     progress: 94,
-    nextActionAt: null,
+    nextActionAt: new Date().toISOString(),
+    enqueueReason: "gameplay_asset_graph_persist",
     state: {
       ...context.state,
       gameplay_videos: videoStage.items,
@@ -344,12 +341,122 @@ async function handleVideoWaiting(context: WorkflowTickContext): Promise<Workflo
   };
 }
 
+async function handleAssetGraphPending(context: WorkflowTickContext): Promise<WorkflowTickOutcome> {
+  const rootCreativeRunId = text(context.state.creative_run_id);
+  if (!rootCreativeRunId) {
+    return failedOutcome({
+      context,
+      currentStage: "asset_graph_pending",
+      code: "DISCOVERY_ASSET_GRAPH_ROOT_MISSING",
+      message: "Gameplay AssetGraph persistence is missing the root creative run id",
+      stateReason: "s4_005c_asset_graph_root_missing",
+      eventType: "discovery.asset_graph_failed",
+    });
+  }
+
+  const services = runtime(context);
+  let approvals;
+  let videoStage;
+  try {
+    [approvals, videoStage] = await Promise.all([
+      services.gameDiscovery.getReferenceApprovalStage({ rootCreativeRunId }),
+      services.video.getGameplayVideoStage({ rootCreativeRunId }),
+    ]);
+  } catch (error) {
+    throw persistenceError("GAMEPLAY_ASSET_GRAPH_RECONCILE_FAILED", error);
+  }
+
+  const approved = approvals.items.filter((item) => item.decision === "approve");
+  if (!approved.length || !videoStage.allCompleted) {
+    return failedOutcome({
+      context,
+      currentStage: "asset_graph_pending",
+      code: "DISCOVERY_ASSET_GRAPH_INPUTS_INCOMPLETE",
+      message: "AssetGraph requires at least one current approved reference and completed gameplay video",
+      stateReason: "s4_005c_asset_graph_inputs_incomplete",
+      eventType: "discovery.asset_graph_failed",
+    });
+  }
+
+  const videosByShot = new Map(videoStage.items.map((item) => [item.shotId, item]));
+  const graphs = [];
+
+  for (const reference of approved) {
+    const video = videosByShot.get(reference.shotId);
+    if (
+      !video ||
+      video.status !== "completed" ||
+      video.approvedReferenceGenerationId !== reference.generationId ||
+      video.conceptRunId !== reference.conceptRunId ||
+      video.conceptId !== reference.conceptId ||
+      video.momentId !== reference.momentId
+    ) {
+      return failedOutcome({
+        context,
+        currentStage: "asset_graph_pending",
+        code: "DISCOVERY_ASSET_GRAPH_LINEAGE_MISMATCH",
+        message: `AssetGraph lineage mismatch for shot ${reference.shotId}`,
+        stateReason: "s4_005c_asset_graph_lineage_mismatch",
+        eventType: "discovery.asset_graph_failed",
+        eventPayload: { shot_id: reference.shotId },
+      });
+    }
+
+    const graph = buildGameplayAssetGraph({
+      objectiveRunId: rootCreativeRunId,
+      conceptRunId: reference.conceptRunId,
+      conceptId: reference.conceptId,
+      momentId: reference.momentId,
+      shotId: reference.shotId,
+      approvedReferenceGenerationId: reference.generationId,
+      approvedReferenceOutputs: reference.outputs,
+      videoGenerationId: video.generationId,
+      videoOutputs: video.outputs,
+    });
+
+    try {
+      await services.video.persistAssetGraph({
+        rootJobId: context.jobId,
+        rootCreativeRunId,
+        conceptRunId: reference.conceptRunId,
+        assetGraph: graph,
+      });
+    } catch (error) {
+      throw persistenceError("GAMEPLAY_ASSET_GRAPH_PERSIST_FAILED", error);
+    }
+    graphs.push(graph);
+  }
+
+  return {
+    status: "waiting",
+    currentStage: "assembly_pending",
+    progress: 96,
+    nextActionAt: null,
+    state: {
+      ...context.state,
+      asset_graphs: graphs,
+      asset_graphs_completed_at: new Date().toISOString(),
+      video_generation_locked: false,
+    },
+    stateReason: "s4_005c_asset_graphs_ready_for_assembly",
+    eventType: "discovery.asset_graphs_ready",
+    eventPayload: {
+      asset_graph_count: graphs.length,
+      concept_run_ids: graphs.map((graph) => graph.conceptRunId),
+      next_stage: "assembly_pending",
+    },
+  };
+}
+
 export const gameDiscoveryBatchStage4VideoV1: WorkflowTickHandler = async (context) => {
   if (context.currentStage === "video_generation_pending") {
     return handleVideoPending(context);
   }
   if (context.currentStage === "video_generation_waiting") {
     return handleVideoWaiting(context);
+  }
+  if (context.currentStage === "asset_graph_pending") {
+    return handleAssetGraphPending(context);
   }
 
   const outcome = await gameDiscoveryBatchStage4V1(context);
