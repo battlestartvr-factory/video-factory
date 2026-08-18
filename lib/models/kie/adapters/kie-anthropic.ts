@@ -1,10 +1,3 @@
-import Anthropic, { APIError } from "@anthropic-ai/sdk";
-import type {
-  ContentBlockParam,
-  MessageCreateParamsNonStreaming,
-  MessageParam,
-  Tool,
-} from "@anthropic-ai/sdk/resources/messages/messages";
 import { AGENT_ERROR_CODES, AGENT_PROVIDER_TIMEOUT_MS } from "@/lib/agent/config";
 import type {
   AgentContentPart,
@@ -13,18 +6,61 @@ import type {
   AgentRequest,
   AgentToolCall,
 } from "@/lib/agent/types";
-import {
-  classifyKieHttpStatus,
-  KieProviderError,
-  logKieProviderError,
-  normalizeKieError,
-  parseKieErrorBody,
-} from "../errors";
+import { KieProviderError } from "../errors";
 import type { KieAdapter, KieAdapterContext } from "./base";
-import { joinKieUrl } from "./base";
+import { handleKieResponse, joinKieUrl } from "./base";
 
-const MAX_TOKENS = 4096;
+const MAX_TOKENS = 8192;
 const CLAUDE_ANTHROPIC_BASE_PATH = "/claude";
+const ANTHROPIC_VERSION = "2023-06-01";
+
+type ClaudeTextBlock = { type: "text"; text: string };
+type ClaudeImageBlock = {
+  type: "image";
+  source: { type: "url"; url: string };
+};
+type ClaudeToolUseBlock = {
+  type: "tool_use";
+  id: string;
+  name: string;
+  input: Record<string, unknown>;
+};
+type ClaudeToolResultBlock = {
+  type: "tool_result";
+  tool_use_id: string;
+  content: string;
+};
+
+type ClaudeContentBlock =
+  | ClaudeTextBlock
+  | ClaudeImageBlock
+  | ClaudeToolUseBlock
+  | ClaudeToolResultBlock;
+
+export type ClaudeMessageParam = {
+  role: "user" | "assistant";
+  content: string | ClaudeContentBlock[];
+};
+
+export type ClaudeTool = {
+  name: string;
+  description: string;
+  input_schema: {
+    type: "object";
+    properties: Record<string, unknown>;
+    required: string[];
+  };
+};
+
+export type ClaudeRequestBody = {
+  model: string;
+  max_tokens: number;
+  messages: ClaudeMessageParam[];
+  stream: false;
+  system?: string;
+  tools?: ClaudeTool[];
+  thinkingFlag?: true;
+};
 
 export function buildKieAnthropicBaseUrl(kieRootUrl: string): string {
   return joinKieUrl(kieRootUrl, CLAUDE_ANTHROPIC_BASE_PATH);
@@ -39,24 +75,20 @@ export function extractMessageText(content: AgentMessage["content"]): string {
     .join("");
 }
 
-function messageContentLength(content: string | ContentBlockParam[]): number {
+function messageContentLength(content: string | ClaudeContentBlock[]): number {
   if (typeof content === "string") return content.trim().length;
   return content.reduce((sum, block) => {
-    if (block.type === "text") return sum + (block.text?.trim().length ?? 0);
-    if (block.type === "tool_result") {
-      const toolContent = block.content;
-      if (typeof toolContent === "string") return sum + toolContent.trim().length;
-      return sum + 1;
-    }
+    if (block.type === "text") return sum + block.text.trim().length;
+    if (block.type === "tool_result") return sum + block.content.trim().length;
     return sum + 1;
   }, 0);
 }
 
-function convertUserContent(message: AgentMessage): string | ContentBlockParam[] {
+function convertUserContent(message: AgentMessage): string | ClaudeContentBlock[] {
   if (typeof message.content === "string") return message.content;
   if (!Array.isArray(message.content)) return "";
 
-  const blocks: ContentBlockParam[] = [];
+  const blocks: ClaudeContentBlock[] = [];
   for (const part of message.content as AgentContentPart[]) {
     if (part.type === "text" && part.text) {
       blocks.push({ type: "text", text: part.text });
@@ -69,13 +101,14 @@ function convertUserContent(message: AgentMessage): string | ContentBlockParam[]
       });
     }
   }
+
   return blocks.length === 1 && blocks[0]?.type === "text" ? blocks[0].text : blocks;
 }
 
-function convertAssistantMessage(message: AgentMessage): MessageParam {
+function convertAssistantMessage(message: AgentMessage): ClaudeMessageParam {
   const text = extractMessageText(message.content);
   if (message.toolCalls?.length) {
-    const blocks: ContentBlockParam[] = [];
+    const blocks: ClaudeContentBlock[] = [];
     if (text.trim()) blocks.push({ type: "text", text });
     for (const call of message.toolCalls) {
       blocks.push({
@@ -90,7 +123,7 @@ function convertAssistantMessage(message: AgentMessage): MessageParam {
   return { role: "assistant", content: text };
 }
 
-function convertToolMessage(message: AgentMessage): MessageParam {
+function convertToolMessage(message: AgentMessage): ClaudeMessageParam {
   const resultText =
     typeof message.content === "string" ? message.content : JSON.stringify(message.content ?? {});
   return {
@@ -105,9 +138,12 @@ function convertToolMessage(message: AgentMessage): MessageParam {
   };
 }
 
-/** Builds Anthropic messages from agent history + current user turn (system stays separate). */
-export function buildAnthropicMessages(input: AgentRequest): MessageParam[] {
-  const result: MessageParam[] = [];
+/**
+ * Build Claude Messages API history. System instructions are deliberately kept out of
+ * `messages`; KIE's Claude proxy accepts the native top-level `system` field.
+ */
+export function buildAnthropicMessages(input: AgentRequest): ClaudeMessageParam[] {
+  const result: ClaudeMessageParam[] = [];
 
   for (const message of input.messages) {
     if (message.role === "system") continue;
@@ -119,9 +155,7 @@ export function buildAnthropicMessages(input: AgentRequest): MessageParam[] {
 
     if (message.role === "assistant") {
       const converted = convertAssistantMessage(message);
-      if (messageContentLength(converted.content) > 0) {
-        result.push(converted);
-      }
+      if (messageContentLength(converted.content) > 0) result.push(converted);
       continue;
     }
 
@@ -135,7 +169,7 @@ export function buildAnthropicMessages(input: AgentRequest): MessageParam[] {
   return result;
 }
 
-export function assertAnthropicMessagesNonEmpty(messages: MessageParam[]): void {
+export function assertAnthropicMessagesNonEmpty(messages: ClaudeMessageParam[]): void {
   const hasUserContent = messages.some(
     (message) => message.role === "user" && messageContentLength(message.content) > 0,
   );
@@ -149,9 +183,8 @@ export function assertAnthropicMessagesNonEmpty(messages: MessageParam[]): void 
 
 function normalizeAnthropicInputSchema(
   parameters: Record<string, unknown>,
-): Tool["input_schema"] {
-  const type = parameters.type;
-  if (type !== "object") {
+): ClaudeTool["input_schema"] {
+  if (parameters.type !== "object") {
     throw new KieProviderError(
       AGENT_ERROR_CODES.CLAUDE_TOOL_SCHEMA_UNSUPPORTED,
       "Claude tool schema must have type object",
@@ -170,7 +203,7 @@ function normalizeAnthropicInputSchema(
   return { type: "object", properties, required };
 }
 
-export function toAnthropicTool(tool: AgentRequest["tools"][number]): Tool {
+export function toAnthropicTool(tool: AgentRequest["tools"][number]): ClaudeTool {
   if (!tool.name?.trim()) {
     throw new KieProviderError(
       AGENT_ERROR_CODES.CLAUDE_TOOL_SCHEMA_UNSUPPORTED,
@@ -204,7 +237,7 @@ export function toAnthropicTool(tool: AgentRequest["tools"][number]): Tool {
   };
 }
 
-export function buildAnthropicTools(tools: AgentRequest["tools"]): Tool[] {
+export function buildAnthropicTools(tools: AgentRequest["tools"]): ClaudeTool[] {
   return tools.map((tool) => toAnthropicTool(tool));
 }
 
@@ -216,9 +249,7 @@ export function resolveAnthropicThinkingMode(
     level === "on" || level === "thinking" || level === "high" || level === "max"
       ? "thinking"
       : "standard";
-  if (normalized === "thinking") {
-    return { thinkingMode: "thinking", thinkingFlag: true };
-  }
+  if (normalized === "thinking") return { thinkingMode: "thinking", thinkingFlag: true };
   return { thinkingMode: "standard" };
 }
 
@@ -226,8 +257,8 @@ export function buildAnthropicRequestParams(
   input: AgentRequest,
   ctx: KieAdapterContext,
 ): {
-  params: MessageCreateParamsNonStreaming & { thinkingFlag?: true };
-  messages: MessageParam[];
+  params: ClaudeRequestBody;
+  messages: ClaudeMessageParam[];
   thinkingMode: "standard" | "thinking";
   toolsCount: number;
   systemChars: number;
@@ -241,7 +272,7 @@ export function buildAnthropicRequestParams(
   const tools = buildAnthropicTools(input.tools);
   const system = input.system.trim() || undefined;
 
-  const params: MessageCreateParamsNonStreaming & { thinkingFlag?: true } = {
+  const params: ClaudeRequestBody = {
     model: ctx.model.providerModel,
     max_tokens: MAX_TOKENS,
     messages,
@@ -265,93 +296,97 @@ export function buildAnthropicRequestParams(
   };
 }
 
-function parseAnthropicResponse(message: Anthropic.Message): {
-  content: string | null;
-  toolCalls: AgentToolCall[];
-  finishReason: "stop" | "tool_calls";
-  usage: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
+function extractClaudeResponse(payload: unknown): {
+  content?: string | null;
+  tool_calls?: unknown;
+  finish_reason?: string;
+  usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
 } {
-  const text = message.content
-    .filter((block) => block.type === "text")
+  if (!payload || typeof payload !== "object") {
+    throw new Error("Claude response is not an object");
+  }
+
+  const response = payload as {
+    content?: unknown;
+    stop_reason?: string | null;
+    usage?: { input_tokens?: number; output_tokens?: number };
+  };
+
+  const blocks = Array.isArray(response.content) ? response.content : [];
+  const text = blocks
+    .filter(
+      (block): block is { type: "text"; text: string } =>
+        !!block &&
+        typeof block === "object" &&
+        (block as { type?: unknown }).type === "text" &&
+        typeof (block as { text?: unknown }).text === "string",
+    )
     .map((block) => block.text)
     .join("");
 
-  const toolCalls: AgentToolCall[] = message.content
-    .filter((block) => block.type === "tool_use")
+  const toolCalls = blocks
+    .filter(
+      (block): block is {
+        type: "tool_use";
+        id: string;
+        name: string;
+        input?: Record<string, unknown>;
+      } =>
+        !!block &&
+        typeof block === "object" &&
+        (block as { type?: unknown }).type === "tool_use" &&
+        typeof (block as { id?: unknown }).id === "string" &&
+        typeof (block as { name?: unknown }).name === "string",
+    )
     .map((block) => ({
       id: block.id,
       name: block.name,
-      arguments: (block.input ?? {}) as Record<string, unknown>,
-    }));
+      arguments: block.input ?? {},
+    } satisfies AgentToolCall));
 
-  const finishReason =
-    message.stop_reason === "tool_use" || toolCalls.length ? "tool_calls" : "stop";
+  const inputTokens = response.usage?.input_tokens;
+  const outputTokens = response.usage?.output_tokens;
 
   return {
     content: text || null,
-    toolCalls,
-    finishReason,
+    tool_calls: toolCalls,
+    finish_reason: response.stop_reason === "tool_use" || toolCalls.length ? "tool_calls" : "stop",
     usage: {
-      prompt_tokens: message.usage.input_tokens,
-      completion_tokens: message.usage.output_tokens,
-      total_tokens: message.usage.input_tokens + message.usage.output_tokens,
+      prompt_tokens: inputTokens,
+      completion_tokens: outputTokens,
+      total_tokens:
+        typeof inputTokens === "number" && typeof outputTokens === "number"
+          ? inputTokens + outputTokens
+          : undefined,
     },
   };
 }
 
-function createKieAnthropicClient(ctx: KieAdapterContext): Anthropic {
-  return new Anthropic({
-    authToken: ctx.apiKey,
-    baseURL: buildKieAnthropicBaseUrl(ctx.baseUrl),
-    timeout: AGENT_PROVIDER_TIMEOUT_MS,
+async function kieClaudeFetch(ctx: KieAdapterContext, body: ClaudeRequestBody): Promise<Response> {
+  return fetch(joinKieUrl(ctx.baseUrl, ctx.model.endpoint), {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${ctx.apiKey}`,
+      "anthropic-version": ANTHROPIC_VERSION,
+    },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(AGENT_PROVIDER_TIMEOUT_MS),
   });
 }
 
-/** KIE Claude proxy via official Anthropic SDK. */
+/**
+ * KIE Claude Messages API adapter.
+ *
+ * This intentionally uses KIE's documented wire contract directly rather than the
+ * Anthropic SDK. It prevents SDK auth/base-URL behavior from changing the request and
+ * makes the exact model id, headers and payload visible in our own tests and logs.
+ */
 export class KieAnthropicProvider implements KieAdapter {
   async run(ctx: KieAdapterContext, input: AgentRequest): Promise<AgentProviderResponse> {
-    const client = createKieAnthropicClient(ctx);
     const { params } = buildAnthropicRequestParams(input, ctx);
-
-    const endpoint = `${CLAUDE_ANTHROPIC_BASE_PATH}/v1/messages`;
-
-    try {
-      const response = await client.messages.create(params);
-
-      const parsed = parseAnthropicResponse(response);
-      return {
-        content: parsed.content,
-        toolCalls: parsed.toolCalls,
-        usage: {
-          promptTokens: parsed.usage.prompt_tokens,
-          completionTokens: parsed.usage.completion_tokens,
-          totalTokens: parsed.usage.total_tokens,
-        },
-        finishReason: parsed.finishReason,
-      };
-    } catch (error) {
-      if (error instanceof APIError) {
-        const text = typeof error.error === "object" ? JSON.stringify(error.error) : String(error.error ?? error.message);
-        const providerError = normalizeKieError(error.status ?? 502, text, "application/json", "claude_sonnet");
-        const parsed = parseKieErrorBody(text);
-
-        logKieProviderError({
-          model_id: ctx.model.id,
-          adapter: ctx.model.adapter,
-          endpoint,
-          http_status: error.status,
-          content_type: "application/json",
-          http_error_category: classifyKieHttpStatus(error.status ?? 500),
-          normalized_error_code: providerError.code,
-          response_parse_stage: "error_body",
-          agent_run_id: ctx.agentRunId ?? undefined,
-          response_body: text || undefined,
-          ...parsed,
-        });
-        throw providerError;
-      }
-      throw error;
-    }
+    const response = await kieClaudeFetch(ctx, params);
+    return handleKieResponse(ctx, response, extractClaudeResponse, { requestBody: params });
   }
 }
 
