@@ -172,8 +172,6 @@ export const gameDiscoveryBatchStage4V1: WorkflowTickHandler = async (context) =
           factoryJobId: admission.factoryJobId,
         });
       } catch (error) {
-        // Stable request IDs include the revision number. A committed provider admission is
-        // reconciled from DB instead of spending again after transport/restart failure.
         throw persistenceError("REFERENCE_IMAGE_ADMISSION_FAILED", error);
       }
     }
@@ -528,8 +526,6 @@ export const gameDiscoveryBatchStage4V1: WorkflowTickHandler = async (context) =
           shots: mergedShots,
         },
         promptPlans: mergedPrompts,
-        revisionKey: key,
-        revisionNumber: prepared.revisionNumber,
       });
     } catch (error) {
       throw persistenceError("REFERENCE_REVISION_PERSIST_FAILED", error);
