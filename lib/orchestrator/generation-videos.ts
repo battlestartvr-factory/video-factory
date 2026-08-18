@@ -96,14 +96,13 @@ export class GenerationVideoRepository {
       const archived: DurableVideoOutput[] = [];
       for (let index = 0; index < input.outputs.length; index += 1) {
         const output = input.outputs[index]!;
-        archived.push(
-          await archive.archive({
-            generationId: generation.id,
-            outputIndex: index,
-            sourceUrl: output.providerUrl ?? output.url,
-            kind: "video",
-          }),
-        );
+        const stored = await archive.archive({
+          generationId: generation.id,
+          outputIndex: index,
+          sourceUrl: output.providerUrl ?? output.url,
+          kind: "video",
+        });
+        archived.push({ ...stored, kind: "video" });
       }
       persistedOutputs = archived;
     }
