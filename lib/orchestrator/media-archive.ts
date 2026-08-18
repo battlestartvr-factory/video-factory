@@ -68,6 +68,11 @@ let defaultArchiveService: MediaArchiveService | null | undefined;
 
 export function getDefaultMediaArchiveService(): MediaArchiveService | null {
   if (defaultArchiveService !== undefined) return defaultArchiveService;
+  if ((process.env.GOOGLE_DRIVE_INTEGRATION_ENABLED ?? "").trim() !== "true") {
+    defaultArchiveService = null;
+    return defaultArchiveService;
+  }
+
   const token = (
     process.env.SUPABASE_SERVICE_ROLE_KEY ??
     process.env.SUPABASE_SECRET_KEY ??
