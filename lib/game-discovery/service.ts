@@ -67,3 +67,48 @@ export async function createGameDiscoveryBatch(
     traceId: typeof row.trace_id === "string" ? row.trace_id : null,
   };
 }
+
+export async function listGameDiscoveryBatches(input: {
+  userId: string;
+  projectId?: string | null;
+  limit?: number;
+}): Promise<CreativeRun[]> {
+  if (input.projectId) await assertProjectAccess(input.userId, input.projectId);
+
+  const service = createSupabaseServiceClient();
+  let query = service
+    .from("creative_runs")
+    .select("*")
+    .contains("metadata", { domain_kind: "game_discovery_batch" })
+    .order("created_at", { ascending: false })
+    .limit(Math.min(Math.max(input.limit ?? 20, 1), 100));
+
+  if (input.projectId) query = query.eq("project_id", input.projectId);
+  else query = query.eq("user_id", input.userId);
+
+  const { data, error } = await query;
+  if (error) throw new Error(`Failed to list game discovery batches: ${error.message}`);
+  return (data ?? []) as CreativeRun[];
+}
+
+export async function getGameDiscoveryBatch(input: {
+  userId: string;
+  runId: string;
+}): Promise<CreativeRun | null> {
+  const service = createSupabaseServiceClient();
+  const { data, error } = await service
+    .from("creative_runs")
+    .select("*")
+    .eq("id", input.runId)
+    .contains("metadata", { domain_kind: "game_discovery_batch" })
+    .maybeSingle();
+
+  if (error) throw new Error(`Failed to load game discovery batch: ${error.message}`);
+  if (!data) return null;
+
+  const run = data as CreativeRun;
+  if (run.user_id === input.userId) return run;
+  if (!run.project_id) return null;
+  await assertProjectAccess(input.userId, run.project_id);
+  return run;
+}
