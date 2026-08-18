@@ -29,6 +29,7 @@ import type { MediaQuality } from "@/lib/models/kie/types";
 import type { Generation } from "@/lib/types/workspace";
 import { cn } from "@/lib/utils";
 
+const DEFAULT_ASPECT_RATIOS = ["1:1", "16:9", "9:16", "4:3", "3:4"];
 const IMAGE_MODES = [
   {
     id: "text-to-image",
@@ -118,11 +119,10 @@ export function ImageGeneratorClient() {
     (!modeNeedsImage(mode) || selectedReferences.length > 0) &&
     !generating;
 
-  const aspectRatios = model?.capabilities.aspectRatios ?? ["1:1", "16:9", "9:16", "4:3", "3:4"];
-
-  useEffect(() => {
-    if (!aspectRatios.includes(aspectRatio)) setAspectRatio(aspectRatios[0] ?? "1:1");
-  }, [aspectRatio, aspectRatios]);
+  const aspectRatios = model?.capabilities.aspectRatios ?? DEFAULT_ASPECT_RATIOS;
+  const resolvedAspectRatio = aspectRatios.includes(aspectRatio)
+    ? aspectRatio
+    : (aspectRatios[0] ?? "1:1");
 
   const loadHistory = useCallback(async (silent = false) => {
     if (!silent) setLoading(true);
@@ -136,8 +136,19 @@ export function ImageGeneratorClient() {
   }, []);
 
   useEffect(() => {
-    void loadHistory();
-  }, [loadHistory]);
+    let cancelled = false;
+    fetch("/api/generations?type=image&limit=30", { cache: "no-store" })
+      .then((response) => response.json())
+      .then((payload) => {
+        if (!cancelled && payload.ok) setHistory(payload.data.generations ?? []);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const hasActiveGeneration = useMemo(
     () => history.some((generation) => ACTIVE_STATUSES.has(generation.status)),
@@ -201,7 +212,7 @@ export function ImageGeneratorClient() {
           prompt: prompt.trim(),
           modelId,
           settings: {
-            aspectRatio,
+            aspectRatio: resolvedAspectRatio,
             numOutputs,
             quality,
             ...(documentContext ? { documentContext } : {}),
@@ -227,7 +238,7 @@ export function ImageGeneratorClient() {
     }
   };
 
-  const useOutputAsReference = (url: string) => {
+  const applyOutputAsReference = (url: string) => {
     setReferences([
       {
         id: crypto.randomUUID(),
@@ -375,7 +386,7 @@ export function ImageGeneratorClient() {
                     onClick={() => setAspectRatio(ratio)}
                     className={cn(
                       "rounded-lg border px-2.5 py-1.5 text-xs transition",
-                      aspectRatio === ratio
+                      resolvedAspectRatio === ratio
                         ? "border-accent bg-accent-muted text-accent"
                         : "border-border bg-surface-elevated text-muted-foreground hover:text-foreground",
                     )}
@@ -485,7 +496,7 @@ export function ImageGeneratorClient() {
                       </div>
                       {urls[0] ? (
                         <div className="flex flex-wrap gap-2">
-                          <Button type="button" variant="outline" size="sm" onClick={() => useOutputAsReference(urls[0])}>
+                          <Button type="button" variant="outline" size="sm" onClick={() => applyOutputAsReference(urls[0])}>
                             <Images className="h-3.5 w-3.5" />
                             В референс
                           </Button>
