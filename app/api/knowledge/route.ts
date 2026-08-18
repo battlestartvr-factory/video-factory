@@ -6,10 +6,12 @@ import { isAllowedMime } from "@/lib/attachments/mime";
 import {
   addKnowledgeDocument,
   deleteKnowledgeDocument,
+  getKnowledgeDocument,
   getOrCreateKnowledgeBase,
   listKnowledgeDocuments,
   searchKnowledge,
 } from "@/lib/knowledge";
+import { isDriveStorageConfigured } from "@/lib/storage/drive-provider";
 
 export async function GET() {
   const requestId = generateRequestId();
@@ -64,10 +66,24 @@ export async function DELETE(request: Request) {
   if (!id) return apiError("VALIDATION_ERROR", "id обязателен", 400, requestId);
 
   try {
+    const document = await getKnowledgeDocument(user.id, id);
+    if (!document) return apiError("NOT_FOUND", "Документ не найден", 404, requestId);
+
+    // A Drive-backed record is deliberately kept if Drive cleanup cannot run.
+    // This prevents losing the only pointer to an orphaned remote file.
+    if (document.drive_file_id && !isDriveStorageConfigured()) {
+      return apiError(
+        "GOOGLE_DRIVE_NOT_CONFIGURED",
+        "Google Drive недоступен: документ не удалён, чтобы не оставить файл-сироту",
+        503,
+        requestId,
+      );
+    }
+
     await deleteKnowledgeDocument(user.id, id);
     return apiSuccess({ deleted: true });
   } catch {
-    return apiError("DELETE_FAILED", "Не удалось удалить документ", 500, requestId);
+    return apiError("DELETE_FAILED", "Не удалось удалить документ из базы знаний и Google Drive", 500, requestId);
   }
 }
 
