@@ -53,8 +53,6 @@ log "Rollback candidate: $ROLLBACK_CANDIDATE"
 log "Fetching origin/main"
 git fetch origin main
 
-# A manual pre-merge deployment can target a commit that is not reachable from main yet.
-# Do not depend on a previous preflight having populated the Git object store.
 if [[ -n "$COMMIT" ]] && ! git cat-file -e "${COMMIT}^{commit}" 2>/dev/null; then
   log "Target commit is not local; fetching advertised origin branches"
   git fetch origin '+refs/heads/*:refs/remotes/origin/*'
@@ -63,9 +61,6 @@ if [[ -n "$COMMIT" ]]; then
   git cat-file -e "${COMMIT}^{commit}" 2>/dev/null || fail "Target commit is unavailable after fetch: $COMMIT"
 fi
 
-# Production working tree is deployment-only. Discard tracked manual edits so
-# checkout of the CI-approved commit is deterministic. Secrets and persistent
-# data live outside the repository and are not affected by this reset.
 log "Resetting tracked local changes"
 git reset --hard HEAD
 
@@ -94,6 +89,17 @@ if [[ -z "${SUPABASE_SERVICE_ROLE_KEY:-}" && -z "${SUPABASE_SECRET_KEY:-}" ]]; t
   fail "SUPABASE_SERVICE_ROLE_KEY or SUPABASE_SECRET_KEY is required for the durable worker"
 fi
 
+[[ "${GOOGLE_DRIVE_INTEGRATION_ENABLED:-false}" == "true" ]] || fail "GOOGLE_DRIVE_INTEGRATION_ENABLED=true is required for durable media archive"
+: "${GOOGLE_DRIVE_SHARED_FOLDER_ID:?GOOGLE_DRIVE_SHARED_FOLDER_ID is required for durable media archive}"
+if [[ "${GOOGLE_DRIVE_AUTH_MODE:-service_account}" == "oauth_user" ]]; then
+  : "${GOOGLE_DRIVE_CLIENT_ID:?GOOGLE_DRIVE_CLIENT_ID is required for Drive OAuth}"
+  : "${GOOGLE_DRIVE_CLIENT_SECRET:?GOOGLE_DRIVE_CLIENT_SECRET is required for Drive OAuth}"
+  : "${GOOGLE_DRIVE_REFRESH_TOKEN:?GOOGLE_DRIVE_REFRESH_TOKEN is required for Drive OAuth}"
+else
+  : "${GOOGLE_DRIVE_CLIENT_EMAIL:?GOOGLE_DRIVE_CLIENT_EMAIL is required for Drive service account}"
+  : "${GOOGLE_DRIVE_PRIVATE_KEY:?GOOGLE_DRIVE_PRIVATE_KEY is required for Drive service account}"
+fi
+
 log "Building Docker images"
 docker compose -f "$COMPOSE_FILE" build --pull
 
@@ -109,6 +115,19 @@ while (( SECONDS < deadline )); do
     if curl -fsS "http://127.0.0.1/api/health" >/dev/null 2>&1 || \
        curl -fsS "http://127.0.0.1:3000/api/health" >/dev/null 2>&1; then
       deployed_commit="$(git rev-parse HEAD)"
+
+      log "Backfilling recent completed media into Google Drive"
+      if archive_result="$(docker compose -f "$COMPOSE_FILE" exec -T app sh -lc '
+        token="${SUPABASE_SERVICE_ROLE_KEY:-${SUPABASE_SECRET_KEY:-}}"
+        curl -sS --max-time 300 -X POST http://127.0.0.1:3000/api/internal/generation-archive/backfill \
+          -H "Authorization: Bearer ${token}" \
+          -H "Accept: application/json"
+      ' 2>&1)"; then
+        log "Media archive backfill: $archive_result"
+      else
+        log "WARNING: media archive backfill could not be completed: $archive_result"
+      fi
+
       mkdir -p "$(dirname "$LAST_GOOD_FILE")" "$(dirname "$ROLLBACK_CANDIDATE_FILE")"
       printf '%s\n' "$ROLLBACK_CANDIDATE" > "$ROLLBACK_CANDIDATE_FILE"
       printf '%s\n' "$deployed_commit" > "$LAST_GOOD_FILE"
