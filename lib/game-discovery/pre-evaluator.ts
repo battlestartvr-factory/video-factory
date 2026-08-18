@@ -12,8 +12,14 @@ const preEvaluationBatchSchema = z
   .object({ evaluations: z.array(conceptPreEvaluationV1Schema).min(1).max(16) })
   .strict();
 
+type ConceptPreEvaluatorGenerateResult = Omit<KieClaudeGenerateResult, "usage"> & {
+  usage: Partial<KieClaudeGenerateResult["usage"]>;
+};
+
 export interface ConceptPreEvaluatorLlm {
-  generate: KieClaudeTaskAdapter["generate"];
+  generate: (
+    input: Parameters<KieClaudeTaskAdapter["generate"]>[0],
+  ) => Promise<ConceptPreEvaluatorGenerateResult>;
 }
 
 export interface ConceptPreEvaluationResult {
@@ -52,7 +58,7 @@ function extractJsonObject(text: string): string {
 
 function addUsage(
   total: ConceptPreEvaluationResult["usage"],
-  response: KieClaudeGenerateResult,
+  response: ConceptPreEvaluatorGenerateResult,
 ): void {
   total.inputTokens += response.usage.inputTokens ?? 0;
   total.outputTokens += response.usage.outputTokens ?? 0;
