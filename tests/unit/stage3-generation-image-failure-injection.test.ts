@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import { ProviderTaskRepository } from "@/lib/orchestrator/provider-tasks";
 import type { OrchestratorRpcClient } from "@/lib/orchestrator/rpc";
 import type { GenerationImageRepository } from "@/lib/orchestrator/generation-images";
+import type { GenerationVideoRepository } from "@/lib/orchestrator/generation-videos";
 import type { KieMarketTaskAdapter } from "@/lib/models/kie/market-task";
 import { generationImageV1 } from "@/worker/workflows/generation-image-v1";
 import type { WorkflowServices } from "@/worker/workflows/types";
@@ -77,7 +78,9 @@ function successfulWorkflowServices(complete: ReturnType<typeof vi.fn>) {
   const services: WorkflowServices = {
     providerTasks,
     generationImages,
+    generationVideos: {} as GenerationVideoRepository,
     kieMarketTask: market,
+    kieVeoTask: null,
     appUrl: "https://factory.example.test",
   };
 
