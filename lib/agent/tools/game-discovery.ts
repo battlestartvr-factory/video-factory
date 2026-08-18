@@ -35,15 +35,17 @@ export const startGameDiscoveryTool: AgentTool<typeof startGameDiscoverySchema._
   risk: "safe",
   async handler(input, ctx) {
     const service = createSupabaseServiceClient();
-    const { data: attachmentRows, error: attachmentError } = await service
+    const selectColumns = "id,filename,mime_type,metadata,created_at";
+    const currentAttachments = await service
       .from("chat_attachments")
-      .select("id,filename,mime_type,metadata")
+      .select(selectColumns)
       .eq("user_id", ctx.userId)
       .eq("chat_id", ctx.chatId)
       .eq("message_id", ctx.userMessageId)
+      .order("created_at", { ascending: false })
       .limit(MAX_RESEARCH_DOCUMENTS);
 
-    if (attachmentError) {
+    if (currentAttachments.error) {
       return {
         ok: false,
         code: "DISCOVERY_RESEARCH_LOAD_FAILED",
@@ -51,10 +53,32 @@ export const startGameDiscoveryTool: AgentTool<typeof startGameDiscoverySchema._
       };
     }
 
+    let attachmentRows = currentAttachments.data ?? [];
+    // A failed durable run should be restartable from the same chat with a short command.
+    // If that new message has no file attached, reuse the latest archived research files
+    // from this chat instead of forcing the user to upload the same multi-MB document again.
+    if (attachmentRows.length === 0) {
+      const recentAttachments = await service
+        .from("chat_attachments")
+        .select(selectColumns)
+        .eq("user_id", ctx.userId)
+        .eq("chat_id", ctx.chatId)
+        .order("created_at", { ascending: false })
+        .limit(MAX_RESEARCH_DOCUMENTS);
+      if (recentAttachments.error) {
+        return {
+          ok: false,
+          code: "DISCOVERY_RESEARCH_LOAD_FAILED",
+          error: "Не удалось восстановить research context из текущего чата.",
+        };
+      }
+      attachmentRows = recentAttachments.data ?? [];
+    }
+
     const researchDocuments: Array<Record<string, unknown>> = [];
     let remainingResearchChars = MAX_RESEARCH_TOTAL_CHARS;
 
-    for (const row of attachmentRows ?? []) {
+    for (const row of attachmentRows) {
       const metadata =
         row.metadata && typeof row.metadata === "object" && !Array.isArray(row.metadata)
           ? (row.metadata as Record<string, unknown>)
