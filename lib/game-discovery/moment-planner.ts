@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import type { KieClaudeGenerateResult, KieClaudeTaskAdapter } from "../models/kie/claude-task";
+import { getDiscoveryLlmPolicy } from "./model-policy";
 import {
   gameplayMomentSpecV1Schema,
   type CoopGameConceptSpecV1,
@@ -68,7 +69,9 @@ export async function planGameplayMoments(input: {
   if (!input.concepts.length) throw new Error("GAMEPLAY_MOMENT_EMPTY_BATCH");
   if (input.concepts.length > 4) throw new Error("GAMEPLAY_MOMENT_BATCH_TOO_LARGE");
 
-  const model = input.model ?? "claude-sonnet-5";
+  const policy = getDiscoveryLlmPolicy("gameplay_moment_planning");
+  const repairPolicy = getDiscoveryLlmPolicy("schema_repair");
+  const model = input.model ?? policy.primaryModel;
   const usage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
   const hashes: string[] = [];
   const conceptIds = input.concepts.map((concept) => concept.conceptId);
@@ -79,8 +82,8 @@ export async function planGameplayMoments(input: {
     system:
       "You are the Gameplay Moment Planner inside an AI Co-op Game Discovery Factory. Turn a game hypothesis into one falsifiable, visually legible co-op gameplay moment. Mechanics and evidence come before spectacle.",
     prompt: plannerPrompt,
-    maxTokens: 6144,
-    thinking: true,
+    maxTokens: policy.maxOutputTokens,
+    thinking: policy.thinking,
     signal: input.signal,
   });
   hashes.push(hash(first.text));
@@ -91,11 +94,11 @@ export async function planGameplayMoments(input: {
     moments = parse(first.text);
   } catch (firstError) {
     const repair = await input.llm.generate({
-      model,
+      model: repairPolicy.primaryModel,
       system: "Repair JSON/schema only. Preserve the planned gameplay moments. Return JSON only.",
       prompt: `Repair this response into exactly one valid GameplayMomentSpec v1 for each concept ID ${JSON.stringify(conceptIds)}.\n\nINVALID RESPONSE:\n${first.text}\n\n${schemaInstructions()}`,
-      maxTokens: 6144,
-      thinking: false,
+      maxTokens: repairPolicy.maxOutputTokens,
+      thinking: repairPolicy.thinking,
       signal: input.signal,
     });
     hashes.push(hash(repair.text));
