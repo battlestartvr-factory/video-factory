@@ -2,6 +2,7 @@ import type { GenerationImageRepository } from "../../lib/orchestrator/generatio
 import type { GenerationVideoRepository } from "../../lib/orchestrator/generation-videos";
 import type { ProviderTaskRepository } from "../../lib/orchestrator/provider-tasks";
 import type { GameDiscoveryWorkerRepository } from "../../lib/game-discovery/worker-repository";
+import type { GameDiscoveryVideoRepository } from "../../lib/game-discovery/video-fanout-repository";
 import type { KieClaudeTaskAdapter } from "../../lib/models/kie/claude-task";
 import type { KieMarketTaskAdapter } from "../../lib/models/kie/market-task";
 import type { KieVeoTaskAdapter } from "../../lib/models/kie/veo-task";
@@ -20,6 +21,7 @@ export interface WorkflowServices {
   generationImages: GenerationImageRepository;
   generationVideos: GenerationVideoRepository;
   gameDiscovery?: GameDiscoveryWorkerRepository;
+  gameDiscoveryVideo?: GameDiscoveryVideoRepository;
   kieClaude?: KieClaudeTaskAdapter | null;
   kieMarketTask: KieMarketTaskAdapter | null;
   kieVeoTask: KieVeoTaskAdapter | null;
