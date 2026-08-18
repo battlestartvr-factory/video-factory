@@ -75,8 +75,11 @@ async function assertChatOwner(userId: string, chatId: string) {
   return data as { id: string; user_id: string; project_id: string | null };
 }
 
-async function resolveOwnedAssets(userId: string, ids: string[]) {
-  if (!ids.length) return [] as GenerationReferenceAsset[];
+async function resolveOwnedAssets(
+  userId: string,
+  ids: string[],
+): Promise<GenerationReferenceAsset[]> {
+  if (!ids.length) return [];
   const unique = [...new Set(ids)];
   const service = createSupabaseServiceClient();
   const { data } = await service
