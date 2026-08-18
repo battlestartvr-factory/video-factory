@@ -15,8 +15,52 @@ export interface PersistedConceptRun {
   conceptId: string;
 }
 
+export interface PersistedConceptStage {
+  persisted: boolean;
+  acceptedConcepts: CoopGameConceptSpecV1[];
+  conceptRuns: PersistedConceptRun[];
+  explorerMetadata: Record<string, unknown>;
+  rejectionCount: number;
+}
+
+function parseConceptRuns(value: unknown): PersistedConceptRun[] {
+  return array(value)
+    .map((item) => {
+      if (!item || typeof item !== "object" || Array.isArray(item)) return null;
+      const record = item as Record<string, unknown>;
+      return typeof record.run_id === "string" && typeof record.concept_id === "string"
+        ? { runId: record.run_id, conceptId: record.concept_id }
+        : null;
+    })
+    .filter((item): item is PersistedConceptRun => item !== null);
+}
+
 export class GameDiscoveryWorkerRepository {
   constructor(private readonly client: OrchestratorRpcClient) {}
+
+  async getConceptStage(input: { rootCreativeRunId: string }): Promise<PersistedConceptStage> {
+    const { data, error } = await this.client.rpc("orchestrator_get_game_discovery_concept_stage", {
+      payload: { root_creative_run_id: input.rootCreativeRunId },
+    });
+    if (error) throw new Error(`Failed to inspect game discovery concept stage: ${error.message}`);
+
+    const row = requireRpcObject(data, "game discovery concept stage");
+    const acceptedConcepts = array(row.accepted_concepts)
+      .map((concept) => coopGameConceptSpecV1Schema.safeParse(concept))
+      .filter((parsed) => parsed.success)
+      .map((parsed) => parsed.data);
+
+    return {
+      persisted: row.persisted === true,
+      acceptedConcepts,
+      conceptRuns: parseConceptRuns(row.concept_runs),
+      explorerMetadata:
+        row.concept_explorer && typeof row.concept_explorer === "object" && !Array.isArray(row.concept_explorer)
+          ? (row.concept_explorer as Record<string, unknown>)
+          : {},
+      rejectionCount: array(row.diversity_rejections).length,
+    };
+  }
 
   async getConceptHistory(input: {
     rootCreativeRunId: string;
@@ -65,14 +109,6 @@ export class GameDiscoveryWorkerRepository {
     if (error) throw new Error(`Failed to persist concept exploration: ${error.message}`);
 
     const row = requireRpcObject(data, "persist game concept exploration");
-    return array(row.concept_runs)
-      .map((item) => {
-        if (!item || typeof item !== "object" || Array.isArray(item)) return null;
-        const record = item as Record<string, unknown>;
-        return typeof record.run_id === "string" && typeof record.concept_id === "string"
-          ? { runId: record.run_id, conceptId: record.concept_id }
-          : null;
-      })
-      .filter((item): item is PersistedConceptRun => item !== null);
+    return parseConceptRuns(row.concept_runs);
   }
 }
