@@ -40,6 +40,51 @@ describe("Stage 4 durable waiting contract", () => {
     expect(outcome.enqueueReason).toBeUndefined();
   });
 
+  it("does not leave the approval gate after only one of several reference decisions", () => {
+    const outcome = enforceStage4DurableWakeup({
+      status: "waiting",
+      currentStage: "reference_revision_pending",
+      progress: 86,
+      nextActionAt: new Date().toISOString(),
+      enqueueReason: "reference_revision",
+      state: {
+        revision_shot_ids: ["shot-a"],
+        reference_approvals: [
+          { shotId: "shot-a", decision: "revise" },
+          { shotId: "shot-b", decision: null },
+        ],
+      },
+    });
+
+    expect(outcome.currentStage).toBe("human_reference_approval_pending");
+    expect(outcome.progress).toBe(85);
+    expect(outcome.nextActionAt).toBeNull();
+    expect(outcome.enqueueReason).toBeNull();
+    expect(outcome.state).not.toHaveProperty("revision_shot_ids");
+  });
+
+  it("allows revision once every current reference has a decision", () => {
+    const now = new Date().toISOString();
+    const outcome = enforceStage4DurableWakeup({
+      status: "waiting",
+      currentStage: "reference_revision_pending",
+      progress: 86,
+      nextActionAt: now,
+      enqueueReason: "reference_revision",
+      state: {
+        revision_shot_ids: ["shot-a"],
+        reference_approvals: [
+          { shotId: "shot-a", decision: "revise" },
+          { shotId: "shot-b", decision: "reject" },
+        ],
+      },
+    });
+
+    expect(outcome.currentStage).toBe("reference_revision_pending");
+    expect(outcome.nextActionAt).toBe(now);
+    expect(outcome.enqueueReason).toBe("reference_revision");
+  });
+
   it("allows timerless waiting but still requires a retry timer", () => {
     expect(finishTickMigration).toMatch(/p_new_status='retrying' AND p_next_action_at IS NULL/);
     expect(finishTickMigration).not.toMatch(/p_new_status IN \('waiting','retrying'\) AND p_next_action_at IS NULL/);
