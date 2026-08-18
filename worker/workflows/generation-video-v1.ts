@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { DurableWorkflowError } from "../../lib/orchestrator/errors";
+import { DurableWorkflowError } from "../../lib/orchestrator/retry";
 import type { DurableVideoGeneration } from "../../lib/orchestrator/generation-videos";
 import {
   KieMarketTaskError,
@@ -235,7 +235,7 @@ function waitingOutcome(input: {
   variantIndex: number;
   outputs: Array<{ url: string; kind: "video" }>;
   providerTaskId: string;
-  externalTaskId: string | null;
+  externalTaskId?: string | null;
   ambiguousSubmit?: boolean;
   delayMs: number;
   providerState?: string;
@@ -249,7 +249,7 @@ function waitingOutcome(input: {
       variant_index: input.variantIndex,
       outputs: input.outputs,
       provider_task_id: input.providerTaskId,
-      external_task_id: input.externalTaskId,
+      external_task_id: input.externalTaskId ?? null,
       ambiguous_submit: input.ambiguousSubmit ?? false,
       ...(input.providerState ? { provider_state: input.providerState } : {}),
     },
@@ -261,7 +261,7 @@ function waitingOutcome(input: {
     eventPayload: {
       generation_id: input.generationId,
       provider_task_id: input.providerTaskId,
-      external_task_id: input.externalTaskId,
+      external_task_id: input.externalTaskId ?? null,
       provider_state: input.providerState ?? null,
       ambiguous_submit: input.ambiguousSubmit ?? false,
     },
