@@ -1,4 +1,6 @@
 import { exploreConcepts } from "../../lib/game-discovery/concept-explorer";
+import { planGameplayMoments } from "../../lib/game-discovery/moment-planner";
+import { preEvaluateConcepts } from "../../lib/game-discovery/pre-evaluator";
 import { discoveryObjectiveSpecV1Schema } from "../../lib/game-discovery/schemas";
 import { DurableWorkflowError } from "../../lib/orchestrator/retry";
 import { KieClaudeTaskError } from "../../lib/models/kie/claude-task";
@@ -8,7 +10,7 @@ function text(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
-function requireConceptRuntime(context: WorkflowTickContext) {
+function requireDiscoveryRuntime(context: WorkflowTickContext) {
   if (!context.services) {
     throw new DurableWorkflowError({
       code: "DISCOVERY_RUNTIME_MISSING",
@@ -26,7 +28,7 @@ function requireConceptRuntime(context: WorkflowTickContext) {
   if (!context.services.kieClaude) {
     throw new DurableWorkflowError({
       code: "KIE_NOT_CONFIGURED",
-      message: "KIE_API_KEY is required for the Stage 4 Concept Explorer",
+      message: "KIE_API_KEY is required for Stage 4 discovery reasoning",
       retryable: false,
     });
   }
@@ -36,13 +38,23 @@ function requireConceptRuntime(context: WorkflowTickContext) {
   };
 }
 
-function providerFailure(error: KieClaudeTaskError): DurableWorkflowError {
+function providerFailure(error: KieClaudeTaskError, stage: string): DurableWorkflowError {
   return new DurableWorkflowError({
-    code: "CONCEPT_EXPLORER_PROVIDER_FAILED",
+    code: `${stage}_PROVIDER_FAILED`,
     message: error.message,
     retryable: error.retryable,
     retryAfterMs: error.retryable ? 5_000 : undefined,
     details: { http_status: error.status },
+    cause: error,
+  });
+}
+
+function retryablePersistenceError(code: string, error: unknown): DurableWorkflowError {
+  return new DurableWorkflowError({
+    code,
+    message: error instanceof Error ? error.message : String(error),
+    retryable: true,
+    retryAfterMs: 5_000,
     cause: error,
   });
 }
@@ -92,27 +104,23 @@ export const gameDiscoveryBatchV1: WorkflowTickHandler = async (context) => {
   }
 
   if (context.currentStage === "concept_generation_pending") {
-    const runtime = requireConceptRuntime(context);
+    const runtime = requireDiscoveryRuntime(context);
 
     let persisted;
     try {
       persisted = await runtime.repository.getConceptStage({ rootCreativeRunId: creativeRunId });
     } catch (error) {
-      throw new DurableWorkflowError({
-        code: "CONCEPT_STAGE_RESUME_CHECK_FAILED",
-        message: error instanceof Error ? error.message : String(error),
-        retryable: true,
-        retryAfterMs: 5_000,
-        cause: error,
-      });
+      throw retryablePersistenceError("CONCEPT_STAGE_RESUME_CHECK_FAILED", error);
     }
 
     if (persisted.persisted) {
+      const now = new Date().toISOString();
       return {
         status: "waiting",
         currentStage: "pre_evaluation_pending",
         progress: 35,
-        nextActionAt: null,
+        nextActionAt: now,
+        enqueueReason: "concept_pre_evaluation",
         state: {
           ...context.state,
           concept_ids: persisted.acceptedConcepts.map((concept) => concept.conceptId),
@@ -121,7 +129,7 @@ export const gameDiscoveryBatchV1: WorkflowTickHandler = async (context) => {
           concept_count_rejected: persisted.rejectionCount,
           concept_explorer: persisted.explorerMetadata,
           concept_generation_completed_at:
-            text(context.state.concept_generation_completed_at) ?? new Date().toISOString(),
+            text(context.state.concept_generation_completed_at) ?? now,
         },
         stateReason: "s4_003_resumed_from_persisted_concepts",
         eventType: "discovery.concepts_resumed",
@@ -140,13 +148,7 @@ export const gameDiscoveryBatchV1: WorkflowTickHandler = async (context) => {
         limit: 200,
       });
     } catch (error) {
-      throw new DurableWorkflowError({
-        code: "CONCEPT_HISTORY_LOAD_FAILED",
-        message: error instanceof Error ? error.message : String(error),
-        retryable: true,
-        retryAfterMs: 5_000,
-        cause: error,
-      });
+      throw retryablePersistenceError("CONCEPT_HISTORY_LOAD_FAILED", error);
     }
 
     let exploration;
@@ -161,7 +163,7 @@ export const gameDiscoveryBatchV1: WorkflowTickHandler = async (context) => {
         signal: context.signal,
       });
     } catch (error) {
-      if (error instanceof KieClaudeTaskError) throw providerFailure(error);
+      if (error instanceof KieClaudeTaskError) throw providerFailure(error, "CONCEPT_EXPLORER");
       if (context.signal.aborted) throw error;
       throw new DurableWorkflowError({
         code: "CONCEPT_EXPLORER_FAILED",
@@ -179,15 +181,8 @@ export const gameDiscoveryBatchV1: WorkflowTickHandler = async (context) => {
         result: exploration,
       });
     } catch (error) {
-      // Persistence can have committed before a transport failure. The next tick first calls
-      // getConceptStage(), so retrying this parent tick does not automatically repeat the LLM call.
-      throw new DurableWorkflowError({
-        code: "CONCEPT_EXPLORATION_PERSIST_FAILED",
-        message: error instanceof Error ? error.message : String(error),
-        retryable: true,
-        retryAfterMs: 5_000,
-        cause: error,
-      });
+      // A commit can succeed before the RPC transport fails. The next tick reconciles DB state first.
+      throw retryablePersistenceError("CONCEPT_EXPLORATION_PERSIST_FAILED", error);
     }
 
     const completedAt = new Date().toISOString();
@@ -195,7 +190,8 @@ export const gameDiscoveryBatchV1: WorkflowTickHandler = async (context) => {
       status: "waiting",
       currentStage: "pre_evaluation_pending",
       progress: 35,
-      nextActionAt: null,
+      nextActionAt: completedAt,
+      enqueueReason: "concept_pre_evaluation",
       state: {
         ...context.state,
         concept_ids: exploration.accepted.map((concept) => concept.conceptId),
@@ -230,13 +226,280 @@ export const gameDiscoveryBatchV1: WorkflowTickHandler = async (context) => {
   }
 
   if (context.currentStage === "pre_evaluation_pending") {
+    const runtime = requireDiscoveryRuntime(context);
+    let planning;
+    let concepts;
+    try {
+      [planning, concepts] = await Promise.all([
+        runtime.repository.getPlanningStage({ rootCreativeRunId: creativeRunId }),
+        runtime.repository.getConceptStage({ rootCreativeRunId: creativeRunId }),
+      ]);
+    } catch (error) {
+      throw retryablePersistenceError("PRE_EVALUATION_RESUME_CHECK_FAILED", error);
+    }
+
+    if (planning.preEvaluations.length > 0) {
+      if (planning.selectedConceptIds.length === 0) {
+        return {
+          status: "completed",
+          currentStage: "pre_evaluation_complete_no_candidates",
+          progress: 100,
+          state: {
+            ...context.state,
+            concept_pre_evaluations: planning.preEvaluations,
+            selected_concept_ids: [],
+            pre_evaluation: planning.preEvaluationMetadata,
+          },
+          result: {
+            accepted_concepts: concepts.acceptedConcepts.length,
+            prototype_candidates: 0,
+            reason: "no_concepts_passed_pre_evaluation",
+          },
+          stateReason: "s4_004_no_concepts_passed_pre_evaluation",
+          eventType: "discovery.pre_evaluation_no_candidates",
+        };
+      }
+
+      const now = new Date().toISOString();
+      return {
+        status: "waiting",
+        currentStage: "planning_moments_pending",
+        progress: 50,
+        nextActionAt: now,
+        enqueueReason: "gameplay_moment_planning",
+        state: {
+          ...context.state,
+          concept_pre_evaluations: planning.preEvaluations,
+          selected_concept_ids: planning.selectedConceptIds,
+          pre_evaluation: planning.preEvaluationMetadata,
+        },
+        stateReason: "s4_004_resumed_from_persisted_pre_evaluations",
+        eventType: "discovery.pre_evaluations_resumed",
+      };
+    }
+
+    if (!concepts.persisted || concepts.acceptedConcepts.length === 0) {
+      throw new DurableWorkflowError({
+        code: "PRE_EVALUATION_CONCEPTS_MISSING",
+        message: "Concept pre-evaluation requires persisted accepted concepts",
+        retryable: false,
+      });
+    }
+
+    let preEvaluation;
+    try {
+      preEvaluation = await preEvaluateConcepts({
+        llm: runtime.claude,
+        objective: objectiveResult.data,
+        concepts: concepts.acceptedConcepts,
+        model: "claude-haiku-4-5",
+        signal: context.signal,
+      });
+    } catch (error) {
+      if (error instanceof KieClaudeTaskError) throw providerFailure(error, "CONCEPT_PRE_EVALUATOR");
+      if (context.signal.aborted) throw error;
+      throw new DurableWorkflowError({
+        code: "CONCEPT_PRE_EVALUATOR_FAILED",
+        message: error instanceof Error ? error.message : String(error),
+        retryable: false,
+        cause: error,
+      });
+    }
+
+    const selectedConceptIds = concepts.acceptedConcepts
+      .map((concept) => concept.conceptId)
+      .filter((conceptId) => preEvaluation.passingConceptIds.includes(conceptId))
+      .slice(0, objectiveResult.data.maxConceptsToPrototype);
+
+    try {
+      await runtime.repository.persistPreEvaluations({
+        jobId: context.jobId,
+        rootCreativeRunId: creativeRunId,
+        result: preEvaluation,
+        selectedConceptIds,
+      });
+    } catch (error) {
+      throw retryablePersistenceError("CONCEPT_PRE_EVALUATION_PERSIST_FAILED", error);
+    }
+
+    if (selectedConceptIds.length === 0) {
+      return {
+        status: "completed",
+        currentStage: "pre_evaluation_complete_no_candidates",
+        progress: 100,
+        state: {
+          ...context.state,
+          concept_pre_evaluations: preEvaluation.evaluations,
+          selected_concept_ids: [],
+          pre_evaluation: {
+            model: preEvaluation.model,
+            usage: preEvaluation.usage,
+            raw_response_hashes: preEvaluation.rawResponseHashes,
+          },
+        },
+        result: {
+          accepted_concepts: concepts.acceptedConcepts.length,
+          prototype_candidates: 0,
+          reason: "no_concepts_passed_pre_evaluation",
+        },
+        stateReason: "s4_004_no_concepts_passed_pre_evaluation",
+        eventType: "discovery.pre_evaluation_no_candidates",
+      };
+    }
+
+    const completedAt = new Date().toISOString();
     return {
       status: "waiting",
-      currentStage: "pre_evaluation_pending",
-      progress: Math.max(35, Number(context.state.progress ?? 35)),
+      currentStage: "planning_moments_pending",
+      progress: 50,
+      nextActionAt: completedAt,
+      enqueueReason: "gameplay_moment_planning",
+      state: {
+        ...context.state,
+        concept_pre_evaluations: preEvaluation.evaluations,
+        selected_concept_ids: selectedConceptIds,
+        pre_evaluation_completed_at: completedAt,
+        pre_evaluation: {
+          model: preEvaluation.model,
+          usage: preEvaluation.usage,
+          raw_response_hashes: preEvaluation.rawResponseHashes,
+          passing_concept_ids: preEvaluation.passingConceptIds,
+        },
+      },
+      stateReason: "s4_004_pre_evaluation_complete",
+      eventType: "discovery.pre_evaluations_ready",
+      eventPayload: {
+        evaluated_count: preEvaluation.evaluations.length,
+        passing_count: preEvaluation.passingConceptIds.length,
+        selected_concept_ids: selectedConceptIds,
+        model: preEvaluation.model,
+        usage: preEvaluation.usage,
+      },
+    };
+  }
+
+  if (context.currentStage === "planning_moments_pending") {
+    const runtime = requireDiscoveryRuntime(context);
+    let planning;
+    let conceptStage;
+    try {
+      [planning, conceptStage] = await Promise.all([
+        runtime.repository.getPlanningStage({ rootCreativeRunId: creativeRunId }),
+        runtime.repository.getConceptStage({ rootCreativeRunId: creativeRunId }),
+      ]);
+    } catch (error) {
+      throw retryablePersistenceError("GAMEPLAY_MOMENT_RESUME_CHECK_FAILED", error);
+    }
+
+    const selectedConceptIds = planning.selectedConceptIds.length
+      ? planning.selectedConceptIds
+      : Array.isArray(context.state.selected_concept_ids)
+        ? context.state.selected_concept_ids.filter((value): value is string => typeof value === "string")
+        : [];
+
+    if (planning.moments.length > 0) {
+      return {
+        status: "waiting",
+        currentStage: "shot_planning_pending",
+        progress: 65,
+        nextActionAt: null,
+        state: {
+          ...context.state,
+          selected_concept_ids: selectedConceptIds,
+          gameplay_moments: planning.moments,
+          moment_planner: planning.momentPlannerMetadata,
+        },
+        stateReason: "s4_004_resumed_from_persisted_gameplay_moments",
+        eventType: "discovery.gameplay_moments_resumed",
+      };
+    }
+
+    if (!selectedConceptIds.length) {
+      throw new DurableWorkflowError({
+        code: "GAMEPLAY_MOMENT_SELECTION_MISSING",
+        message: "Gameplay Moment Planner requires selected concept IDs from pre-evaluation",
+        retryable: false,
+      });
+    }
+
+    const selectedConcepts = selectedConceptIds.map((conceptId) => {
+      const concept = conceptStage.acceptedConcepts.find((item) => item.conceptId === conceptId);
+      if (!concept) {
+        throw new DurableWorkflowError({
+          code: "GAMEPLAY_MOMENT_CONCEPT_MISSING",
+          message: `Selected concept ${conceptId} is missing from persisted concept stage`,
+          retryable: false,
+        });
+      }
+      return concept;
+    });
+
+    let momentPlanning;
+    try {
+      momentPlanning = await planGameplayMoments({
+        llm: runtime.claude,
+        objective: objectiveResult.data,
+        concepts: selectedConcepts,
+        model: "claude-sonnet-5",
+        signal: context.signal,
+      });
+    } catch (error) {
+      if (error instanceof KieClaudeTaskError) throw providerFailure(error, "GAMEPLAY_MOMENT_PLANNER");
+      if (context.signal.aborted) throw error;
+      throw new DurableWorkflowError({
+        code: "GAMEPLAY_MOMENT_PLANNER_FAILED",
+        message: error instanceof Error ? error.message : String(error),
+        retryable: false,
+        cause: error,
+      });
+    }
+
+    try {
+      await runtime.repository.persistGameplayMoments({
+        jobId: context.jobId,
+        rootCreativeRunId: creativeRunId,
+        result: momentPlanning,
+      });
+    } catch (error) {
+      throw retryablePersistenceError("GAMEPLAY_MOMENT_PERSIST_FAILED", error);
+    }
+
+    const completedAt = new Date().toISOString();
+    return {
+      status: "waiting",
+      currentStage: "shot_planning_pending",
+      progress: 65,
+      nextActionAt: null,
+      state: {
+        ...context.state,
+        selected_concept_ids: selectedConceptIds,
+        gameplay_moments: momentPlanning.moments,
+        gameplay_moment_planning_completed_at: completedAt,
+        moment_planner: {
+          model: momentPlanning.model,
+          usage: momentPlanning.usage,
+          raw_response_hashes: momentPlanning.rawResponseHashes,
+        },
+      },
+      stateReason: "s4_004_gameplay_moments_ready",
+      eventType: "discovery.gameplay_moments_ready",
+      eventPayload: {
+        selected_concept_ids: selectedConceptIds,
+        moment_ids: momentPlanning.moments.map((moment) => moment.momentId),
+        model: momentPlanning.model,
+        usage: momentPlanning.usage,
+      },
+    };
+  }
+
+  if (context.currentStage === "shot_planning_pending") {
+    return {
+      status: "waiting",
+      currentStage: "shot_planning_pending",
+      progress: Math.max(65, Number(context.state.progress ?? 65)),
       nextActionAt: null,
       state: context.state,
-      stateReason: "s4_004_not_enabled_yet",
+      stateReason: "s4_004_shot_planner_not_enabled_yet",
     };
   }
 
