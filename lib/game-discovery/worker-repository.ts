@@ -1,10 +1,16 @@
 import type { OrchestratorRpcClient } from "../orchestrator/rpc";
 import { requireRpcObject } from "../orchestrator/rpc";
 import {
+  conceptPreEvaluationV1Schema,
   coopGameConceptSpecV1Schema,
+  gameplayMomentSpecV1Schema,
+  type ConceptPreEvaluationV1,
   type CoopGameConceptSpecV1,
+  type GameplayMomentSpecV1,
 } from "./schemas";
 import type { ConceptExplorerResult } from "./concept-explorer";
+import type { ConceptPreEvaluationResult } from "./pre-evaluator";
+import type { GameplayMomentPlanningResult } from "./moment-planner";
 
 function array(value: unknown): unknown[] {
   return Array.isArray(value) ? value : [];
@@ -23,6 +29,14 @@ export interface PersistedConceptStage {
   rejectionCount: number;
 }
 
+export interface PersistedPlanningStage {
+  preEvaluations: ConceptPreEvaluationV1[];
+  selectedConceptIds: string[];
+  moments: GameplayMomentSpecV1[];
+  preEvaluationMetadata: Record<string, unknown>;
+  momentPlannerMetadata: Record<string, unknown>;
+}
+
 function parseConceptRuns(value: unknown): PersistedConceptRun[] {
   return array(value)
     .map((item) => {
@@ -33,6 +47,12 @@ function parseConceptRuns(value: unknown): PersistedConceptRun[] {
         : null;
     })
     .filter((item): item is PersistedConceptRun => item !== null);
+}
+
+function object(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
 }
 
 export class GameDiscoveryWorkerRepository {
@@ -54,11 +74,32 @@ export class GameDiscoveryWorkerRepository {
       persisted: row.persisted === true,
       acceptedConcepts,
       conceptRuns: parseConceptRuns(row.concept_runs),
-      explorerMetadata:
-        row.concept_explorer && typeof row.concept_explorer === "object" && !Array.isArray(row.concept_explorer)
-          ? (row.concept_explorer as Record<string, unknown>)
-          : {},
+      explorerMetadata: object(row.concept_explorer),
       rejectionCount: array(row.diversity_rejections).length,
+    };
+  }
+
+  async getPlanningStage(input: { rootCreativeRunId: string }): Promise<PersistedPlanningStage> {
+    const { data, error } = await this.client.rpc("orchestrator_get_game_discovery_planning_stage", {
+      payload: { root_creative_run_id: input.rootCreativeRunId },
+    });
+    if (error) throw new Error(`Failed to inspect game discovery planning stage: ${error.message}`);
+
+    const row = requireRpcObject(data, "game discovery planning stage");
+    return {
+      preEvaluations: array(row.pre_evaluations)
+        .map((value) => conceptPreEvaluationV1Schema.safeParse(value))
+        .filter((parsed) => parsed.success)
+        .map((parsed) => parsed.data),
+      selectedConceptIds: array(row.selected_concept_ids).filter(
+        (value): value is string => typeof value === "string" && value.length > 0,
+      ),
+      moments: array(row.gameplay_moments)
+        .map((value) => gameplayMomentSpecV1Schema.safeParse(value))
+        .filter((parsed) => parsed.success)
+        .map((parsed) => parsed.data),
+      preEvaluationMetadata: object(row.pre_evaluation_metadata),
+      momentPlannerMetadata: object(row.moment_planner_metadata),
     };
   }
 
@@ -110,5 +151,49 @@ export class GameDiscoveryWorkerRepository {
 
     const row = requireRpcObject(data, "persist game concept exploration");
     return parseConceptRuns(row.concept_runs);
+  }
+
+  async persistPreEvaluations(input: {
+    jobId: string;
+    rootCreativeRunId: string;
+    result: ConceptPreEvaluationResult;
+    selectedConceptIds: string[];
+  }): Promise<void> {
+    const { error } = await this.client.rpc("orchestrator_persist_game_pre_evaluations", {
+      payload: {
+        job_id: input.jobId,
+        root_creative_run_id: input.rootCreativeRunId,
+        evaluations: input.result.evaluations,
+        selected_concept_ids: input.selectedConceptIds,
+        model: input.result.model,
+        metadata: {
+          raw_response_hashes: input.result.rawResponseHashes,
+          usage: input.result.usage,
+          passing_concept_ids: input.result.passingConceptIds,
+          selection_policy: "first_passing_in_explorer_order_v1",
+        },
+      },
+    });
+    if (error) throw new Error(`Failed to persist concept pre-evaluations: ${error.message}`);
+  }
+
+  async persistGameplayMoments(input: {
+    jobId: string;
+    rootCreativeRunId: string;
+    result: GameplayMomentPlanningResult;
+  }): Promise<void> {
+    const { error } = await this.client.rpc("orchestrator_persist_gameplay_moments", {
+      payload: {
+        job_id: input.jobId,
+        root_creative_run_id: input.rootCreativeRunId,
+        moments: input.result.moments,
+        model: input.result.model,
+        metadata: {
+          raw_response_hashes: input.result.rawResponseHashes,
+          usage: input.result.usage,
+        },
+      },
+    });
+    if (error) throw new Error(`Failed to persist gameplay moments: ${error.message}`);
   }
 }
