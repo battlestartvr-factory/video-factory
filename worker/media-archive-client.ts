@@ -63,3 +63,23 @@ export class GenerationArchiveClient implements MediaArchiveService {
     return payload.data;
   }
 }
+
+let defaultArchiveService: MediaArchiveService | null | undefined;
+
+export function getDefaultMediaArchiveService(): MediaArchiveService | null {
+  if (defaultArchiveService !== undefined) return defaultArchiveService;
+
+  const token = (
+    process.env.SUPABASE_SERVICE_ROLE_KEY ??
+    process.env.SUPABASE_SECRET_KEY ??
+    ""
+  ).trim();
+  if (!token) {
+    defaultArchiveService = null;
+    return defaultArchiveService;
+  }
+
+  const baseUrl = (process.env.WORKER_APP_INTERNAL_URL ?? "http://app:3000").trim();
+  defaultArchiveService = new GenerationArchiveClient(baseUrl || "http://app:3000", token);
+  return defaultArchiveService;
+}
