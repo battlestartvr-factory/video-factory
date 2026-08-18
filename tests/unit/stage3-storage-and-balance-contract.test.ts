@@ -7,12 +7,13 @@ function source(path: string): string {
 }
 
 describe("knowledge document Drive delete contract", () => {
-  it("uses the verified Drive-sync delete path as the user-facing canonical path", () => {
+  it("uses the verified owner-aware Drive removal path as the user-facing canonical path", () => {
     const route = source("app/api/knowledge/route.ts");
-    const barrel = source("lib/knowledge/index.ts");
+    const code = source("lib/knowledge/drive-delete-v2.ts");
 
-    expect(route).toContain("deleteKnowledgeDocumentWithDriveSync");
-    expect(barrel).toContain("deleteKnowledgeDocumentWithDriveSync as deleteKnowledgeDocument");
+    expect(route).toContain("deleteKnowledgeDocumentWithVerifiedDriveRemoval");
+    expect(route).toContain('from "@/lib/knowledge/drive-delete-v2"');
+    expect(code).toContain("export async function deleteKnowledgeDocumentWithVerifiedDriveRemoval");
   });
 
   it("resolves legacy Drive identities without relying only on drive_file_id", () => {
@@ -25,21 +26,27 @@ describe("knowledge document Drive delete contract", () => {
     expect(code).toContain("parseGoogleDriveFileId(document.drive_web_url)");
   });
 
-  it("verifies remote deletion before deleting the database row", () => {
-    const code = source("lib/knowledge/drive-delete.ts");
-    const fn = code.slice(code.indexOf("export async function deleteKnowledgeDocumentWithDriveSync"));
-    const driveDelete = fn.indexOf("await drive.deleteFile(driveFileId)");
-    const verification = fn.indexOf("await verifyDriveFileAbsent(driveFileId)");
+  it("verifies owner/capability state and remote removal before deleting the database row", () => {
+    const code = source("lib/knowledge/drive-delete-v2.ts");
+    const fn = code.slice(
+      code.indexOf("export async function deleteKnowledgeDocumentWithVerifiedDriveRemoval"),
+    );
+    const capabilityRead = code.indexOf("capabilities(canTrash,canDelete)");
+    const verifiedRemoval = fn.indexOf("await removeDriveObjectVerified(driveFileId)");
     const databaseDelete = fn.indexOf('.from("knowledge_documents")\n    .delete()');
 
-    expect(driveDelete).toBeGreaterThan(-1);
-    expect(verification).toBeGreaterThan(driveDelete);
-    expect(databaseDelete).toBeGreaterThan(verification);
+    expect(capabilityRead).toBeGreaterThan(-1);
+    expect(code).toContain("file.ownedByMe !== true || file.capabilities?.canTrash !== true");
+    expect(code).toContain("file.capabilities?.canDelete !== true");
+    expect(verifiedRemoval).toBeGreaterThan(-1);
+    expect(databaseDelete).toBeGreaterThan(verifiedRemoval);
   });
 
-  it("keeps the database row when Drive identity or deletion cannot be confirmed", () => {
-    const code = source("lib/knowledge/drive-delete.ts");
-    const fn = code.slice(code.indexOf("export async function deleteKnowledgeDocumentWithDriveSync"));
+  it("keeps the database row when Drive ownership or deletion cannot be confirmed", () => {
+    const code = source("lib/knowledge/drive-delete-v2.ts");
+    const fn = code.slice(
+      code.indexOf("export async function deleteKnowledgeDocumentWithVerifiedDriveRemoval"),
+    );
     const missingIdFailure = fn.indexOf('throw new Error("DRIVE_FILE_ID_MISSING")');
     const deleteFailureAudit = fn.indexOf("await markDeleteFailure");
     const databaseDelete = fn.indexOf('.from("knowledge_documents")\n    .delete()');
@@ -47,18 +54,20 @@ describe("knowledge document Drive delete contract", () => {
     expect(missingIdFailure).toBeGreaterThan(-1);
     expect(deleteFailureAudit).toBeGreaterThan(-1);
     expect(databaseDelete).toBeGreaterThan(missingIdFailure);
+    expect(code).toContain("DRIVE_DELETE_PERMISSION_DENIED");
+    expect(code).toContain("DRIVE_DELETE_NOT_VERIFIABLE");
     expect(code).toContain("DRIVE_DELETE_NOT_CONFIRMED");
     expect(code).toContain("drive_delete_failed: true");
   });
 
-  it("cleans only strongly matched unreferenced retry duplicates in the managed Drive folder", () => {
-    const code = source("lib/knowledge/drive-delete.ts");
+  it("keeps the legacy duplicate cleanup helper isolated from the new fail-safe canonical delete", () => {
+    const legacy = source("lib/knowledge/drive-delete.ts");
+    const canonical = source("lib/knowledge/drive-delete-v2.ts");
 
-    expect(code).toContain("cleanupLikelyRetryDuplicates");
-    expect(code).toContain("protectedIds");
-    expect(code).toContain("DUPLICATE_CREATED_AT_TOLERANCE_MS");
-    expect(code).toContain("candidateSize !== input.document.size_bytes");
-    expect(code).toContain("cleaned_retry_duplicates");
+    expect(legacy).toContain("cleanupLikelyRetryDuplicates");
+    expect(legacy).toContain("protectedIds");
+    expect(legacy).toContain("DUPLICATE_CREATED_AT_TOLERANCE_MS");
+    expect(canonical).not.toContain("cleanupLikelyRetryDuplicates");
   });
 
   it("shows delete failures to the user instead of silently removing the row", () => {
