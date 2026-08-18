@@ -142,12 +142,17 @@ describe("Stage 4 deterministic prototype assembly", () => {
       }),
     );
     expect(persistAssembly).toHaveBeenCalledTimes(1);
-    const persisted = persistAssembly.mock.calls[0]?.[0];
-    expect(persisted.assetGraph.nodes).toEqual(
-      expect.arrayContaining([expect.objectContaining({ kind: "short", driveFileId: "drive-short" })]),
-    );
-    expect(persisted.assetGraph.edges).toEqual(
-      expect.arrayContaining([expect.objectContaining({ relation: "assembles_into" })]),
+    expect(persistAssembly).toHaveBeenCalledWith(
+      expect.objectContaining({
+        assetGraph: expect.objectContaining({
+          nodes: expect.arrayContaining([
+            expect.objectContaining({ kind: "short", driveFileId: "drive-short" }),
+          ]),
+          edges: expect.arrayContaining([
+            expect.objectContaining({ relation: "assembles_into" }),
+          ]),
+        }),
+      }),
     );
     expect(result.currentStage).toBe("prototype_finalization_pending");
     expect(result.enqueueReason).toBe("gameplay_prototype_finalize");
