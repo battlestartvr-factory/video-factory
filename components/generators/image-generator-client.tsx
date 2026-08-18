@@ -80,6 +80,11 @@ function outputUrls(generation: Generation): string[] {
   );
 }
 
+function generationMediaPath(generationId: string, index = 0, download = false): string {
+  const base = `/api/generations/${encodeURIComponent(generationId)}/outputs/${index}`;
+  return download ? `${base}?download=1` : base;
+}
+
 function statusLabel(status: string): string {
   if (status === "completed") return "Готово";
   if (status === "failed") return "Ошибка";
@@ -467,12 +472,14 @@ export function ImageGeneratorClient() {
               {history.map((generation) => {
                 const urls = outputUrls(generation);
                 const active = ACTIVE_STATUSES.has(generation.status);
+                const previewUrl = urls[0] ? generationMediaPath(generation.id) : null;
+                const downloadUrl = urls[0] ? generationMediaPath(generation.id, 0, true) : null;
                 return (
                   <article key={generation.id} className="overflow-hidden rounded-2xl border border-border bg-surface">
                     <div className="relative aspect-square bg-surface-elevated">
-                      {urls[0] ? (
+                      {previewUrl ? (
                         // eslint-disable-next-line @next/next/no-img-element
-                        <img src={urls[0]} alt={generation.prompt} className="h-full w-full object-cover" />
+                        <img src={previewUrl} alt={generation.prompt} className="h-full w-full object-cover" />
                       ) : active ? (
                         <div className="grid h-full place-items-center">
                           <div className="text-center text-muted-foreground">
@@ -494,13 +501,13 @@ export function ImageGeneratorClient() {
                         <p className="line-clamp-2 text-sm leading-5 text-foreground">{generation.prompt}</p>
                         <p className="mt-1 text-[10px] text-muted-foreground">{generation.model_id} · {generation.mode}</p>
                       </div>
-                      {urls[0] ? (
+                      {urls[0] && previewUrl && downloadUrl ? (
                         <div className="flex flex-wrap gap-2">
                           <Button type="button" variant="outline" size="sm" onClick={() => applyOutputAsReference(urls[0])}>
                             <Images className="h-3.5 w-3.5" />
                             В референс
                           </Button>
-                          <a href={urls[0]} target="_blank" rel="noreferrer" download>
+                          <a href={downloadUrl}>
                             <Button type="button" variant="ghost" size="sm"><Download className="h-3.5 w-3.5" />Скачать</Button>
                           </a>
                         </div>
