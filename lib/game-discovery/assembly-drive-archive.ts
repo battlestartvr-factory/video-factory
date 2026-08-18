@@ -92,8 +92,10 @@ export async function archiveDiscoveryAssembly(input: {
   conceptRunId: string;
   conceptId: string;
   artifactRelativePath: string;
+  sha256: string;
 }): Promise<ArchivedDiscoveryAssembly> {
   if (!isDriveStorageConfigured()) throw new Error("GOOGLE_DRIVE_NOT_CONFIGURED");
+  if (!/^[0-9a-f]{64}$/.test(input.sha256)) throw new Error("ASSEMBLY_ARCHIVE_INVALID_SHA256");
 
   const service = createSupabaseServiceClient();
   const [rootResult, conceptResult] = await Promise.all([
@@ -123,7 +125,7 @@ export async function archiveDiscoveryAssembly(input: {
 
   const drive = getDriveStorageProvider();
   const folderId = await drive.ensureFolderPath(folderSegments(rootResult.data.created_at));
-  const filename = `prototype-${input.conceptRunId}.mp4`;
+  const filename = `prototype-${input.conceptRunId}-${input.sha256.slice(0, 16)}.mp4`;
   const existingId = await findExistingDriveFile(folderId, filename);
   if (existingId) {
     const meta = await drive.finalizeUpload(existingId);
