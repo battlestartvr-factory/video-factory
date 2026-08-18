@@ -61,8 +61,9 @@ const GENERAL_PATTERNS: RegExp[] = [
 const GAME_DISCOVERY_PATTERNS: RegExp[] = [
   /discovery\s+pipeline/i,
   /stage\s*4.*(?:discovery|co-?op|game)/i,
+  /(?:повтор|перезапуст|запуст).*(?:поиск|discovery).*(?:co-?op|кооп|игр|game)/i,
   /(?:поиск|найд[иь]|придумай|предложи).*(?:нов(?:ую|ые)\s+)?(?:pc\/?steam|steam).*(?:co-?op|кооп|игр)/i,
-  /(?:нов(?:ую|ые)|перспективн(?:ую|ые)).*(?:co-?op|кооп).*(?:игр|game)/i,
+  /(?:нов(?:ую|ые|ой)|перспективн(?:ую|ые|ой)).*(?:co-?op|кооп).*(?:игр|game)/i,
   /gameplay\s+reference\s+images?/i,
   /reference\s+(?:image|изображ).*(?:approve|revise|reject|утверд)/i,
   /(?:concept|концепт).*(?:diversity|pre-?evaluation|gameplay\s+moment)/i,
