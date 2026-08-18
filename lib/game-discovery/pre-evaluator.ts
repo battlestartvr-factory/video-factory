@@ -19,6 +19,7 @@ export interface ConceptPreEvaluatorLlm {
 export interface ConceptPreEvaluationResult {
   evaluations: ConceptPreEvaluationV1[];
   passingConceptIds: string[];
+  rejectedConceptIds: string[];
   model: string;
   rawResponseHashes: string[];
   usage: { inputTokens: number; outputTokens: number; totalTokens: number };
@@ -70,6 +71,9 @@ function prompt(objective: DiscoveryObjectiveSpecV1, concepts: CoopGameConceptSp
   return `Pre-evaluate these accepted co-op game concepts before any paid image/video generation.\n\nDISCOVERY OBJECTIVE:\n${JSON.stringify(objective, null, 2)}\n\nCONCEPTS:\n${JSON.stringify(concepts, null, 2)}\n\nUse exactly three gates:\n1. coOpDependency: fail if another player is optional, cosmetic, or can be replaced without changing the central mechanic.\n2. instantReadability: fail if the core dependency and consequence cannot plausibly be shown and understood in a few seconds of gameplay evidence.\n3. buildability: fail if a small-team PC MVP clearly conflicts with the objective constraints or requires excessive networking/physics/content/NPC-AI scope.\nNovelty is NOT scored here; Diversity Guard already handled it. Settings and art cannot rescue a weak mechanic. Be conservative but do not fail merely because an idea is unusual.\n\n${schemaInstructions()}`;
 }
 
+const complexityRank = { low: 0, medium: 1, high: 2 } as const;
+const npcAiRank = { none: 0, light: 1, heavy: 2 } as const;
+
 function enforceObjectiveConstraints(
   objective: DiscoveryObjectiveSpecV1,
   concept: CoopGameConceptSpecV1,
@@ -78,23 +82,37 @@ function enforceObjectiveConstraints(
   const reasons = [...evaluation.rejectionReasons];
   let buildability = evaluation.buildability;
 
+  const networkingCap = objective.constraints.networkingComplexity;
   if (
-    objective.constraints.networkingComplexity === "low" &&
-    concept.buildability.networking !== "low"
+    networkingCap &&
+    complexityRank[concept.buildability.networking] > complexityRank[networkingCap]
   ) {
     buildability = "fail";
-    reasons.push("networking complexity exceeds objective constraint");
+    reasons.push(`networking_complexity_exceeds_objective:${networkingCap}`);
   }
-  if (objective.constraints.contentBurden === "low" && concept.buildability.contentBurden !== "low") {
-    buildability = "fail";
-    reasons.push("content burden exceeds objective constraint");
-  }
+
+  const contentCap = objective.constraints.contentBurden;
   if (
-    objective.constraints.npcAiDependency === "avoid" &&
-    concept.buildability.npcAiDependency !== "none"
+    contentCap &&
+    complexityRank[concept.buildability.contentBurden] > complexityRank[contentCap]
   ) {
     buildability = "fail";
-    reasons.push("NPC AI dependency violates objective constraint");
+    reasons.push(`content_burden_exceeds_objective:${contentCap}`);
+  }
+
+  const npcAiCap = objective.constraints.npcAiDependency;
+  if (
+    npcAiCap === "avoid" &&
+    npcAiRank[concept.buildability.npcAiDependency] > npcAiRank.none
+  ) {
+    buildability = "fail";
+    reasons.push("npc_ai_dependency_violates_objective:avoid");
+  } else if (
+    npcAiCap === "allow_light" &&
+    npcAiRank[concept.buildability.npcAiDependency] > npcAiRank.light
+  ) {
+    buildability = "fail";
+    reasons.push("npc_ai_dependency_violates_objective:allow_light");
   }
 
   return {
@@ -177,6 +195,20 @@ export async function preEvaluateConcepts(input: {
         evaluation.buildability === "pass",
     )
     .map((evaluation) => evaluation.conceptId);
+  const passing = new Set(passingConceptIds);
+  const rejectedConceptIds = evaluations
+    .filter((evaluation) => !passing.has(evaluation.conceptId))
+    .map((evaluation) => evaluation.conceptId);
 
-  return { evaluations, passingConceptIds, model, rawResponseHashes: hashes, usage };
+  return {
+    evaluations,
+    passingConceptIds,
+    rejectedConceptIds,
+    model,
+    rawResponseHashes: hashes,
+    usage,
+  };
 }
+
+/** @deprecated Use preEvaluateConcepts. Kept for Stage 4 fixture/backward compatibility. */
+export const evaluateConcepts = preEvaluateConcepts;
