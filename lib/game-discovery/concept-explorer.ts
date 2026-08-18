@@ -18,9 +18,8 @@ const conceptBatchSchema = z
 const DEFAULT_REPLACEMENT_BUFFER = 2;
 const MAX_REPLACEMENT_ATTEMPTS = 3;
 const MAX_HISTORY_IN_PROMPT = 40;
-// A full CoopGameConceptSpec is intentionally detailed. Asking Sonnet for 8 of them
-// in one response exceeded KIE's practical gateway window in production (~110s -> 500).
-// Keep each provider turn small while preserving the same total exploration target.
+// A full CoopGameConceptSpec is intentionally detailed. Keep each provider turn
+// small while preserving the same total exploration target.
 export const MAX_CONCEPTS_PER_PROVIDER_CALL = 3;
 
 export interface ConceptExplorerLlm {
@@ -113,13 +112,64 @@ function extractJsonObject(text: string): string {
   throw new Error("CONCEPT_EXPLORER_JSON_NOT_FOUND");
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+/**
+ * Provider-neutral compatibility shim for narrow, harmless schema drift that has
+ * already been observed in production. We deliberately do not invent game-design
+ * content here: optional semantic fields with the wrong primitive type are dropped,
+ * and a singleton risk string is only wrapped into the array shape required by v1.
+ */
+function normalizeConceptBatchShape(value: unknown): unknown {
+  if (!isRecord(value) || !Array.isArray(value.concepts)) return value;
+
+  return {
+    ...value,
+    concepts: value.concepts.map((candidate) => {
+      if (!isRecord(candidate)) return candidate;
+      const normalized: Record<string, unknown> = { ...candidate };
+
+      if (Array.isArray(candidate.playerRoles)) {
+        normalized.playerRoles = candidate.playerRoles.map((role) => {
+          if (!isRecord(role)) return role;
+          const next: Record<string, unknown> = { ...role };
+          // These fields are optional descriptive strings. Gemini occasionally emitted
+          // booleans ("has information/power") instead. Dropping only the invalid
+          // optional value preserves the role/responsibility without fabricating prose.
+          if (typeof next.information === "boolean") delete next.information;
+          if (typeof next.power === "boolean") delete next.power;
+          return next;
+        });
+      }
+
+      if (isRecord(candidate.buildability)) {
+        const buildability: Record<string, unknown> = { ...candidate.buildability };
+        if (typeof buildability.mainRisks === "string") {
+          const risk = buildability.mainRisks.trim();
+          buildability.mainRisks = risk ? [risk.slice(0, 240)] : [];
+        } else if (Array.isArray(buildability.mainRisks)) {
+          buildability.mainRisks = buildability.mainRisks
+            .slice(0, 20)
+            .map((risk) => (typeof risk === "string" ? risk.trim().slice(0, 240) : risk));
+        }
+        normalized.buildability = buildability;
+      }
+
+      return normalized;
+    }),
+  };
+}
+
 function parseConceptBatch(text: string): CoopGameConceptSpecV1[] {
   const json = JSON.parse(extractJsonObject(text)) as unknown;
-  return conceptBatchSchema.parse(json).concepts;
+  const normalized = normalizeConceptBatchShape(json);
+  return conceptBatchSchema.parse(normalized).concepts;
 }
 
 function schemaInstructions(): string {
-  return `Return ONLY one JSON object with this exact top-level shape: {"concepts":[...]}.\nEvery concept MUST satisfy CoopGameConceptSpec v1 with these fields:\n- schema: "coop_game_concept", version: 1, conceptId\n- oneSentencePitch, coreMechanic, coopDependency\n- playerRoles: [{role,responsibility,information?,power?}]\n- playerCount: {min,max,ideal}, all integers 2..4\n- interactionModel: string[]\n- failureMode, socialMoment, gameplayHook, spectacle, setting, artDirection, camera, readability\n- noveltyAxes: at least 2 [{axis,choice,whyDifferent}]\n- buildability: {networking,physics,contentBurden,npcAiDependency,systemicInteractions,mainRisks,mvpRead}\n  networking/physics/contentBurden/systemicInteractions are low|medium|high; npcAiDependency is none|light|heavy\n- referenceInfluences: [{reference,borrowedPrinciple,mustNotCopy}] or []\n- optional metadata object.\nUse stable, concise kebab-case conceptId values unique inside this response.`;
+  return `Return ONLY one JSON object with this exact top-level shape: {"concepts":[...]}.\nEvery concept MUST satisfy CoopGameConceptSpec v1. Field types are strict; do not infer alternate types:\n- schema: literal string "coop_game_concept"\n- version: literal number 1\n- conceptId: string (stable concise kebab-case, unique inside this response)\n- oneSentencePitch: string\n- coreMechanic: string\n- coopDependency: string\n- playerRoles: array of 1..6 objects {role: string, responsibility: string, information?: string, power?: string}\n  IMPORTANT: information and power are optional DESCRIPTIVE STRINGS, never booleans. Omit them if not needed.\n- playerCount: {min: integer 2..4, max: integer 2..4, ideal: integer 2..4}\n- interactionModel: string[]\n- failureMode: string\n- socialMoment: string\n- gameplayHook: string\n- spectacle: string\n- setting: string\n- artDirection: string\n- camera: string\n- readability: string\n- noveltyAxes: array with at least 2 objects {axis: string, choice: string, whyDifferent: string}\n- buildability: {networking: "low"|"medium"|"high", physics: "low"|"medium"|"high", contentBurden: "low"|"medium"|"high", npcAiDependency: "none"|"light"|"heavy", systemicInteractions: "low"|"medium"|"high", mainRisks: string[], mvpRead: string}\n  IMPORTANT: mainRisks is ALWAYS an ARRAY of strings (max 20 items, each concise), even when there is only one risk.\n- referenceInfluences: array of {reference: string, borrowedPrinciple: string, mustNotCopy: string}, or []\n- optional metadata: object.\n\nMinimal type example (content is illustrative only):\n{"concepts":[{"schema":"coop_game_concept","version":1,"conceptId":"example-id","oneSentencePitch":"...","coreMechanic":"...","coopDependency":"...","playerRoles":[{"role":"Role A","responsibility":"...","information":"..."},{"role":"Role B","responsibility":"..."}],"playerCount":{"min":2,"max":2,"ideal":2},"interactionModel":["coordination"],"failureMode":"...","socialMoment":"...","gameplayHook":"...","spectacle":"...","setting":"...","artDirection":"...","camera":"...","readability":"...","noveltyAxes":[{"axis":"dependency_type","choice":"...","whyDifferent":"..."},{"axis":"social_tension","choice":"...","whyDifferent":"..."}],"buildability":{"networking":"low","physics":"medium","contentBurden":"low","npcAiDependency":"none","systemicInteractions":"medium","mainRisks":["risk one"],"mvpRead":"..."},"referenceInfluences":[]}]}`;
 }
 
 function objectivePrompt(
@@ -151,6 +201,17 @@ function addUsage(
   total.totalTokens += response.usage.totalTokens ?? 0;
 }
 
+function validationSummary(error: unknown): string {
+  if (error instanceof z.ZodError) {
+    return error.issues
+      .slice(0, 8)
+      .map((issue) => `${issue.path.join(".") || "root"}: ${issue.message}`)
+      .join(" | ");
+  }
+  if (error instanceof SyntaxError) return "invalid JSON";
+  return error instanceof Error ? error.message.slice(0, 800) : String(error).slice(0, 800);
+}
+
 async function generateTypedBatch(input: {
   llm: ConceptExplorerLlm;
   model: string;
@@ -174,12 +235,15 @@ async function generateTypedBatch(input: {
   addUsage(input.usage, first);
 
   try {
+    // parseConceptBatch performs a narrow deterministic compatibility pass first.
+    // If it succeeds, we avoid paying for a schema-repair model call entirely.
     return parseConceptBatch(first.text);
   } catch (firstError) {
+    const firstIssues = validationSummary(firstError);
     const repair = await input.llm.generate({
       model: repairPolicy.primaryModel,
-      system: `${SYSTEM_PROMPT}\nYou are now doing a schema repair only. Preserve the candidate ideas; fix JSON/schema shape and return only valid JSON.`,
-      prompt: `Repair the following response so it contains ${input.expectedCount} valid CoopGameConceptSpec v1 objects when possible. Do not add commentary.\n\nINVALID RESPONSE:\n${first.text}\n\n${schemaInstructions()}`,
+      system: `${SYSTEM_PROMPT}\nYou are now doing a schema repair only. Preserve the candidate ideas exactly; change only JSON/schema shape or primitive/container types required by the contract. Return only valid JSON.`,
+      prompt: `Repair the following response so it contains ${input.expectedCount} valid CoopGameConceptSpec v1 objects when possible. Do not add commentary and do not redesign the concepts.\n\nVALIDATION ERRORS FROM THE STRICT PARSER:\n${firstIssues}\n\nINVALID RESPONSE:\n${first.text}\n\n${schemaInstructions()}`,
       maxTokens: repairPolicy.maxOutputTokens,
       thinking: repairPolicy.thinking,
       signal: input.signal,
@@ -190,7 +254,7 @@ async function generateTypedBatch(input: {
       return parseConceptBatch(repair.text);
     } catch (repairError) {
       throw new Error(
-        `CONCEPT_EXPLORER_SCHEMA_INVALID: ${repairError instanceof Error ? repairError.message : String(repairError)}; first=${firstError instanceof Error ? firstError.message : String(firstError)}`,
+        `CONCEPT_EXPLORER_SCHEMA_INVALID: repair failed (${validationSummary(repairError)}); first pass (${firstIssues})`,
       );
     }
   }

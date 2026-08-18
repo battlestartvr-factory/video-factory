@@ -151,9 +151,9 @@ export function ChatComposer({
             autoFocus={autoFocus}
             disabled={effectiveDisabled}
             className={cn(
-              "w-full resize-none bg-transparent text-foreground placeholder:text-muted focus:outline-none",
+              "chat-composer-textarea w-full resize-none bg-transparent text-foreground placeholder:text-muted focus:outline-none focus-visible:outline-none focus-visible:ring-0",
               isHero
-                ? "min-h-[88px] px-5 pt-5 pb-2 text-base leading-6 focus-visible:outline-none"
+                ? "min-h-[88px] px-5 pt-5 pb-2 text-base leading-6"
                 : "px-4 pt-3 pb-1 text-sm",
             )}
           />
