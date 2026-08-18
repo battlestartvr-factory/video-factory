@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { z } from "zod";
 import type { KieClaudeGenerateResult, KieClaudeTaskAdapter } from "../models/kie/claude-task";
 import { assessConceptDiversity, type DiversityAssessment } from "./diversity";
+import { getDiscoveryLlmPolicy } from "./model-policy";
 import {
   coopGameConceptSpecV1Schema,
   type CoopGameConceptSpecV1,
@@ -155,12 +156,14 @@ async function generateTypedBatch(input: {
   responseHashes: string[];
   usage: ConceptExplorerResult["usage"];
 }): Promise<CoopGameConceptSpecV1[]> {
+  const explorerPolicy = getDiscoveryLlmPolicy("concept_exploration");
+  const repairPolicy = getDiscoveryLlmPolicy("schema_repair");
   const first = await input.llm.generate({
     model: input.model,
     system: SYSTEM_PROMPT,
     prompt: input.prompt,
-    maxTokens: 8192,
-    thinking: true,
+    maxTokens: explorerPolicy.maxOutputTokens,
+    thinking: explorerPolicy.thinking,
     signal: input.signal,
   });
   input.responseHashes.push(stableHash(first.text));
@@ -170,11 +173,11 @@ async function generateTypedBatch(input: {
     return parseConceptBatch(first.text);
   } catch (firstError) {
     const repair = await input.llm.generate({
-      model: input.model,
+      model: repairPolicy.primaryModel,
       system: `${SYSTEM_PROMPT}\nYou are now doing a schema repair only. Preserve the candidate ideas; fix JSON/schema shape and return only valid JSON.`,
       prompt: `Repair the following response so it contains ${input.expectedCount} valid CoopGameConceptSpec v1 objects when possible. Do not add commentary.\n\nINVALID RESPONSE:\n${first.text}\n\n${schemaInstructions()}`,
-      maxTokens: 8192,
-      thinking: false,
+      maxTokens: repairPolicy.maxOutputTokens,
+      thinking: repairPolicy.thinking,
       signal: input.signal,
     });
     input.responseHashes.push(stableHash(repair.text));
@@ -215,7 +218,8 @@ export async function exploreConcepts(input: {
   maxReplacementAttempts?: number;
   signal?: AbortSignal;
 }): Promise<ConceptExplorerResult> {
-  const model = input.model ?? "claude-sonnet-5";
+  const explorerPolicy = getDiscoveryLlmPolicy("concept_exploration");
+  const model = input.model ?? explorerPolicy.primaryModel;
   const history = input.history ?? [];
   const replacementBuffer = Math.max(0, Math.min(input.replacementBuffer ?? DEFAULT_REPLACEMENT_BUFFER, 4));
   const maxReplacementAttempts = Math.max(
