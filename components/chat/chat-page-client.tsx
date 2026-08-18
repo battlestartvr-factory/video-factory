@@ -34,6 +34,7 @@ interface PendingChatAttempt {
 
 const EMPTY_MESSAGES: ChatMessage[] = [];
 const RECOVERY_POLL_MS = 1_500;
+const AUTO_SCROLL_BOTTOM_THRESHOLD_PX = 96;
 
 function optimisticUserMessage(chatId: string, content: string): ChatMessage {
   return {
@@ -80,15 +81,30 @@ export function ChatPageClient({ chatId: chatIdProp, projectId }: ChatPageClient
   const loading = !!chatId && !loadedChatIds[chatId] && messages.length === 0;
   const recentChats = useRecentChatsOptional();
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const autoScrollEnabledRef = useRef(true);
+  const forceNextScrollRef = useRef(true);
   const fetchGenerationRef = useRef(0);
   const pendingChatAttemptRef = useRef<PendingChatAttempt | null>(null);
   const displayedChat = chat?.id === chatId ? chat : null;
   const latestMessage = lastMessage(messages);
   const busy = sending || recoveringTurn;
 
-  const scrollToBottom = useCallback(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  const scrollToBottom = useCallback((behavior: ScrollBehavior = "auto") => {
+    messagesEndRef.current?.scrollIntoView({ behavior, block: "end" });
   }, []);
+
+  const handleMessagesScroll = useCallback(() => {
+    const element = scrollContainerRef.current;
+    if (!element) return;
+    const distanceFromBottom = element.scrollHeight - element.scrollTop - element.clientHeight;
+    autoScrollEnabledRef.current = distanceFromBottom <= AUTO_SCROLL_BOTTOM_THRESHOLD_PX;
+  }, []);
+
+  useEffect(() => {
+    autoScrollEnabledRef.current = true;
+    forceNextScrollRef.current = true;
+  }, [chatId]);
 
   const applyRemoteChat = useCallback((remoteChat: Chat) => {
     setChat(remoteChat);
@@ -187,8 +203,13 @@ export function ChatPageClient({ chatId: chatIdProp, projectId }: ChatPageClient
     fetchChatSnapshot,
   ]);
 
+  // Live activity should follow the latest message only while the user is already near
+  // the bottom. If they scroll upward to read earlier context, never pull them back down.
   useEffect(() => {
-    scrollToBottom();
+    if (!autoScrollEnabledRef.current && !forceNextScrollRef.current) return;
+    const forced = forceNextScrollRef.current;
+    forceNextScrollRef.current = false;
+    scrollToBottom(forced ? "smooth" : "auto");
   }, [messages, liveActivity, recoveringTurn, scrollToBottom]);
 
   const createChat = async () => {
@@ -236,6 +257,8 @@ export function ChatPageClient({ chatId: chatIdProp, projectId }: ChatPageClient
     options: { modelId?: string; reasoningLevel?: string; files: File[] },
   ): Promise<boolean> => {
     if (busy) return false;
+    autoScrollEnabledRef.current = true;
+    forceNextScrollRef.current = true;
     setSending(true);
     setRecoveringTurn(false);
     setSendError(null);
@@ -486,7 +509,7 @@ export function ChatPageClient({ chatId: chatIdProp, projectId }: ChatPageClient
         </div>
       </header>
 
-      <div className="flex-1 overflow-y-auto">
+      <div ref={scrollContainerRef} onScroll={handleMessagesScroll} className="flex-1 overflow-y-auto">
         {loading && messages.length === 0 ? (
           <div className="space-y-4 p-4"><Skeleton className="h-16 w-full" /><Skeleton className="h-16 w-full" /></div>
         ) : messages.length === 0 && !sendError ? (

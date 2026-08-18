@@ -3,6 +3,7 @@
 import { Loader2, CheckCircle2, XCircle, Clock, AlertCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { TaskCardData } from "@/lib/types/workspace";
+import { DiscoveryTaskCard } from "./discovery-task-card";
 
 const STATUS_CONFIG: Record<string, { label: string; icon: typeof Clock; color: string }> = {
   queued: { label: "В очереди", icon: Clock, color: "text-zinc-400" },
@@ -22,6 +23,14 @@ interface TaskCardProps {
 }
 
 export function TaskCard({ task }: TaskCardProps) {
+  const discoveryRunId =
+    task.action === "game_discovery" && typeof task.settings?.runId === "string"
+      ? task.settings.runId
+      : null;
+  if (discoveryRunId) {
+    return <DiscoveryTaskCard task={task} runId={discoveryRunId} />;
+  }
+
   const config = STATUS_CONFIG[task.status] ?? STATUS_CONFIG.queued;
   const Icon = config.icon;
   const isSpinning = ["processing", "running"].includes(task.status);

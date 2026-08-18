@@ -1,4 +1,5 @@
-export { runUniversalAgent, attachAssistantToRun } from "./agent";
+export { runUniversalAgent } from "./agent";
+export { attachAssistantToRun } from "./attach-assistant";
 export { runAgentToolLoop } from "./loop";
 export { createAgentProvider, resolveAgentModel } from "./provider";
 export { getRegisteredTools, getToolDefinitions, listToolNames } from "./tools";
