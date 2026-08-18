@@ -36,6 +36,9 @@ jobs:
 
       - run: pnpm exec tsc -p tsconfig.worker.json
 
+      - name: Build durable worker image
+        run: docker build --file Dockerfile.worker --tag video-factory-worker:ci .
+
       - run: pnpm test
 
       - run: pnpm build
