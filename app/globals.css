@@ -100,6 +100,14 @@ body {
   outline-offset: 2px;
 }
 
+/* The composer is already a visually bounded control. A second theme-colored
+   rectangle around its raw textarea looks broken and does not add affordance. */
+.chat-composer-textarea:focus-visible {
+  outline: none;
+  outline-offset: 0;
+  box-shadow: none;
+}
+
 /* Scrollbar styling */
 ::-webkit-scrollbar {
   width: 6px;
