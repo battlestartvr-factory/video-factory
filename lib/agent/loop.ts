@@ -7,6 +7,7 @@ import { executeToolCalls, type ExecutedToolCall } from "./tool-runner";
 import type {
   AgentMessage,
   AgentProvider,
+  AgentToolCall,
   AgentToolDefinition,
   AgentUsage,
   ToolContext,
@@ -31,7 +32,40 @@ export interface AgentLoopOutput {
   stopReason: "final" | "tool_limit" | "repeated_failure";
 }
 
+/**
+ * Explicit Stage 4 discovery admission is deterministic. Once intent routing has narrowed
+ * the turn to the single durable discovery tool, asking an LLM to decide whether to call
+ * that same tool adds cost and creates a provider failure point without adding judgment.
+ */
+async function runDeterministicDiscoveryAdmission(
+  input: AgentLoopInput,
+): Promise<AgentLoopOutput | null> {
+  if (input.tools.length !== 1 || input.tools[0]?.name !== "start_game_discovery") return null;
+
+  const call: AgentToolCall = {
+    id: `deterministic-discovery-${input.toolContext.userMessageId}`,
+    name: "start_game_discovery",
+    arguments: {},
+  };
+  const executed = await executeToolCalls([call], input.toolContext);
+  const result = executed[0]?.result;
+  const content = result?.ok
+    ? result.userContent ?? "Запустил Stage 4 discovery batch."
+    : result?.error ?? "Не удалось запустить Stage 4 discovery batch.";
+
+  return {
+    content,
+    messages: [...input.messages],
+    executions: executed,
+    usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+    stopReason: "final",
+  };
+}
+
 export async function runAgentToolLoop(input: AgentLoopInput): Promise<AgentLoopOutput> {
+  const deterministicDiscovery = await runDeterministicDiscoveryAdmission(input);
+  if (deterministicDiscovery) return deterministicDiscovery;
+
   const messages = [...input.messages];
   const executions: ExecutedToolCall[] = [];
   const usage: AgentUsage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
