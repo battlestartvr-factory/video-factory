@@ -198,11 +198,21 @@ export const startGameDiscoveryTool: AgentTool<typeof startGameDiscoverySchema._
           review_url: "/discovery",
           next_gate: "human_reference_approval_pending",
         },
+        task: {
+          action: "game_discovery",
+          factoryJobId: result.factoryJobId,
+          status: "queued",
+          progress: 0,
+          settings: {
+            runId,
+            title,
+            humanGate: "reference_image_approval_required_before_video",
+          },
+        },
         terminate: true,
         userContent:
           `Запустил полноценный Stage 4 discovery batch «${title}». ` +
-          `Research-документы переданы в discovery context. Завод сам пройдёт концепты → diversity → pre-evaluation → gameplay moment → shot → reference images и остановится перед видео. ` +
-          `Следить за прогрессом и утвердить/исправить reference можно в разделе «Поиск игры».`,
+          `Research-документы переданы в discovery context. Прогресс, reference-кадры и human approval будут отображаться прямо в этом чате; переходить на отдельную страницу не обязательно.`,
       };
     } catch (error) {
       return {
