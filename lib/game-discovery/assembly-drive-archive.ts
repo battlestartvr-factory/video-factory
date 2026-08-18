@@ -31,7 +31,8 @@ function resolveStagedFile(relativePath: string): string {
   if (!relativePath || relativePath.startsWith("/") || relativePath.includes("\0")) {
     throw new Error("ASSEMBLY_ARCHIVE_INVALID_PATH");
   }
-  const root = resolve(dataRoot());
+  // This path is a runtime-only mounted staging volume. Turbopack must not trace it into the app bundle.
+  const root = resolve(/* turbopackIgnore: true */ dataRoot());
   const allowedRoot = resolve(root, STAGING_FOLDER);
   const filePath = resolve(root, relativePath);
   if (filePath !== allowedRoot && !filePath.startsWith(`${allowedRoot}${sep}`)) {
@@ -78,7 +79,7 @@ async function completeUploadFromFile(input: {
       "Content-Type": "video/mp4",
       "Content-Length": String(input.sizeBytes),
     },
-    body: createReadStream(input.filePath) as unknown as BodyInit,
+    body: createReadStream(/* turbopackIgnore: true */ input.filePath) as unknown as BodyInit,
     duplex: "half",
   } as RequestInit & { duplex: "half" });
   if (!response.ok) throw new Error(`ASSEMBLY_DRIVE_UPLOAD_FAILED:${response.status}`);
@@ -124,7 +125,7 @@ export async function archiveDiscoveryAssembly(input: {
   }
 
   const filePath = resolveStagedFile(input.artifactRelativePath);
-  const fileStat = await stat(filePath);
+  const fileStat = await stat(/* turbopackIgnore: true */ filePath);
   if (!fileStat.isFile() || fileStat.size <= 0) throw new Error("ASSEMBLY_ARCHIVE_FILE_EMPTY");
 
   const drive = getDriveStorageProvider();
