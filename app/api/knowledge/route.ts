@@ -9,7 +9,7 @@ import {
   listKnowledgeDocuments,
   searchKnowledge,
 } from "@/lib/knowledge";
-import { deleteKnowledgeDocumentWithDriveSync } from "@/lib/knowledge/drive-delete";
+import { deleteKnowledgeDocumentWithVerifiedDriveRemoval } from "@/lib/knowledge/drive-delete-v2";
 
 export async function GET() {
   const requestId = generateRequestId();
@@ -75,7 +75,19 @@ function knowledgeDeleteError(error: unknown, requestId: string) {
         requestId,
       );
     case "DRIVE_DELETE_PERMISSION_DENIED":
-      return apiError(code, "Нет прав на удаление оригинала из Google Drive", 403, requestId);
+      return apiError(
+        code,
+        "Текущая серверная учётная запись Google Drive не владеет файлом и не может удалить его. Запись в базе сохранена",
+        403,
+        requestId,
+      );
+    case "DRIVE_DELETE_NOT_VERIFIABLE":
+      return apiError(
+        code,
+        "Google Drive не позволяет подтвердить состояние оригинала этой учётной записью. Запись в базе сохранена",
+        409,
+        requestId,
+      );
     case "DRIVE_DELETE_NOT_CONFIRMED":
     case "DRIVE_DUPLICATE_DELETE_NOT_CONFIRMED":
       return apiError(
@@ -106,7 +118,7 @@ export async function DELETE(request: Request) {
   if (!id) return apiError("VALIDATION_ERROR", "id обязателен", 400, requestId);
 
   try {
-    const result = await deleteKnowledgeDocumentWithDriveSync(user.id, id);
+    const result = await deleteKnowledgeDocumentWithVerifiedDriveRemoval(user.id, id);
     return apiSuccess({ deleted: true, ...result });
   } catch (error) {
     return knowledgeDeleteError(error, requestId);
