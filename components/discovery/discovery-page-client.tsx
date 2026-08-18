@@ -74,6 +74,11 @@ function stageLabel(stage: string | null): string {
     human_reference_approval_pending: "Нужно ваше утверждение",
     reference_revision_pending: "Ожидается исправление reference",
     video_generation_pending: "Reference утверждён — видео разблокировано",
+    video_generation_waiting: "Генерация gameplay-видео",
+    asset_graph_pending: "Фиксация lineage и AssetGraph",
+    assembly_pending: "Сборка вертикального prototype",
+    prototype_finalization_pending: "Финализация prototype",
+    completed: "Prototype готов",
     reference_rejected_no_video: "Reference отклонён — видео не создаётся",
   };
   return stage ? labels[stage] ?? stage : "—";
@@ -119,6 +124,11 @@ export function DiscoveryPageClient({ initialBatches }: { initialBatches: Discov
       "shot_planning_pending",
       "reference_image_generation_pending",
       "reference_image_waiting",
+      "video_generation_pending",
+      "video_generation_waiting",
+      "asset_graph_pending",
+      "assembly_pending",
+      "prototype_finalization_pending",
     ].includes(currentStage ?? "");
     if (!shouldPoll) return;
     const timer = window.setInterval(() => void loadDetail(selectedId, true), 5_000);
@@ -186,7 +196,7 @@ export function DiscoveryPageClient({ initialBatches }: { initialBatches: Discov
             <h1 className="text-2xl font-semibold text-foreground">Поиск игры</h1>
           </div>
           <p className="mt-1 max-w-3xl text-sm text-muted-foreground">
-            Концепт → gameplay-момент → reference-кадр → ваше решение. Видео не создаётся, пока вы не утвердите конкретный reference.
+            Концепт → gameplay-момент → reference-кадр → ваше решение → gameplay-видео → готовый 9:16 prototype.
           </p>
         </div>
         {selectedId && (
@@ -203,7 +213,7 @@ export function DiscoveryPageClient({ initialBatches }: { initialBatches: Discov
           <div>
             <p className="text-sm font-medium text-foreground">Human approval gate активен</p>
             <p className="mt-1 text-xs leading-5 text-muted-foreground">
-              Reference-картинки делаются в экономичном режиме 1K. Любое видео остаётся заблокированным до решения «Утвердить». Комментарии к правкам структурируются дешёвой моделью и сохраняются как must-show / must-avoid / error tags.
+              Reference-картинки делаются в экономичном режиме 1K. Любое платное gameplay-видео остаётся заблокированным до решения «Утвердить». После approve завод собирает детерминированный 1080×1920 prototype через FFmpeg и сохраняет его в Drive.
             </p>
           </div>
         </div>
@@ -263,6 +273,7 @@ export function DiscoveryPageClient({ initialBatches }: { initialBatches: Discov
                 const moment = object(outputs.gameplay_moment);
                 const shot = object(outputs.gameplay_shot);
                 const referenceRequest = object(outputs.reference_image_request);
+                const prototypeAssembly = object(outputs.prototype_assembly);
                 const generationId = str(referenceRequest.generation_id);
                 const generation = generationId ? generations.get(generationId) : undefined;
                 const imageUrl = generationOutputUrl(generation);
@@ -271,6 +282,11 @@ export function DiscoveryPageClient({ initialBatches }: { initialBatches: Discov
                 const momentId = str(moment.momentId) ?? str(referenceRequest.moment_id) ?? "moment";
                 const shotId = str(shot.shotId) ?? str(referenceRequest.shot_id) ?? "shot";
                 const conceptRunId = str(run.id) ?? "";
+                const prototypeReady = Boolean(str(prototypeAssembly.driveFileId));
+                const prototypeDuration = numberValue(prototypeAssembly.durationSeconds);
+                const prototypeWidth = numberValue(prototypeAssembly.width);
+                const prototypeHeight = numberValue(prototypeAssembly.height);
+                const prototypeFps = numberValue(prototypeAssembly.fps);
                 const preEvalPassed =
                   evaluation.coOpDependency === "pass" &&
                   evaluation.instantReadability === "pass" &&
@@ -286,11 +302,13 @@ export function DiscoveryPageClient({ initialBatches }: { initialBatches: Discov
                             <p className="mt-2 text-sm leading-6 text-muted-foreground"><span className="font-medium text-foreground">Co-op dependency:</span> {str(concept.coopDependency)}</p>
                           )}
                         </div>
-                        {Boolean(evaluation.coOpDependency) && (
+                        {prototypeReady ? (
+                          <Badge variant="success">prototype ready</Badge>
+                        ) : Boolean(evaluation.coOpDependency) ? (
                           <Badge variant={preEvalPassed ? "success" : "warning"}>
                             pre-eval {preEvalPassed ? "pass" : "check"}
                           </Badge>
-                        )}
+                        ) : null}
                       </div>
                     </div>
 
@@ -381,6 +399,33 @@ export function DiscoveryPageClient({ initialBatches }: { initialBatches: Discov
                         </div>
                       )}
                     </div>
+
+                    {prototypeReady && selectedId && (
+                      <div className="border-t border-border bg-background/20 p-4">
+                        <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+                          <div>
+                            <p className="text-sm font-semibold text-foreground">Готовый gameplay prototype</p>
+                            <p className="mt-1 text-xs text-muted-foreground">
+                              Детерминированная FFmpeg-сборка из одобренной gameplay-ветки; durable-копия хранится в Google Drive.
+                            </p>
+                          </div>
+                          <div className="flex flex-wrap gap-2">
+                            {prototypeWidth && prototypeHeight && <Badge variant="secondary">{prototypeWidth}×{prototypeHeight}</Badge>}
+                            {prototypeFps && <Badge variant="secondary">{Math.round(prototypeFps)} fps</Badge>}
+                            {prototypeDuration && <Badge variant="secondary">{prototypeDuration.toFixed(1)} s</Badge>}
+                          </div>
+                        </div>
+                        <div className="max-w-[420px] overflow-hidden rounded-xl border border-border bg-black">
+                          <video
+                            controls
+                            playsInline
+                            preload="metadata"
+                            src={`/api/discovery/batches/${selectedId}/prototypes/${conceptRunId}`}
+                            className="aspect-[9/16] w-full object-contain"
+                          />
+                        </div>
+                      </div>
+                    )}
                   </article>
                 );
               })}
