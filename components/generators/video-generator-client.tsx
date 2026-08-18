@@ -5,6 +5,8 @@ import {
   AlertCircle,
   CheckCircle2,
   Clock3,
+  Download,
+  ExternalLink,
   Film,
   Images,
   Layers3,
@@ -52,6 +54,11 @@ function outputUrls(generation: Generation): string[] {
   return generation.outputs.flatMap((output) =>
     output && typeof output.url === "string" && output.url ? [output.url] : [],
   );
+}
+
+function generationMediaPath(generationId: string, index = 0, download = false): string {
+  const base = `/api/generations/${encodeURIComponent(generationId)}/outputs/${index}`;
+  return download ? `${base}?download=1` : base;
 }
 
 function statusLabel(status: string): string {
@@ -430,11 +437,13 @@ export function VideoGeneratorClient() {
               {history.map((generation) => {
                 const urls = outputUrls(generation);
                 const active = ACTIVE_STATUSES.has(generation.status);
+                const previewUrl = urls[0] ? generationMediaPath(generation.id) : null;
+                const downloadUrl = urls[0] ? generationMediaPath(generation.id, 0, true) : null;
                 return (
                   <article key={generation.id} className="overflow-hidden rounded-2xl border border-border bg-surface">
                     <div className="relative aspect-video bg-black/30">
-                      {urls[0] ? (
-                        <video src={urls[0]} controls playsInline className="h-full w-full object-contain" />
+                      {previewUrl ? (
+                        <video src={previewUrl} controls playsInline preload="metadata" className="h-full w-full object-contain" />
                       ) : active ? (
                         <div className="grid h-full place-items-center text-muted-foreground">
                           <div className="text-center"><Loader2 className="mx-auto h-6 w-6 animate-spin" /><p className="mt-3 text-xs">{statusLabel(generation.status)}</p></div>
@@ -447,9 +456,21 @@ export function VideoGeneratorClient() {
                         {statusLabel(generation.status)}
                       </div>
                     </div>
-                    <div className="p-3.5">
-                      <p className="line-clamp-2 text-sm leading-5 text-foreground">{generation.prompt}</p>
-                      <p className="mt-1 text-[10px] text-muted-foreground">{generation.model_id} · {generation.mode}</p>
+                    <div className="space-y-3 p-3.5">
+                      <div>
+                        <p className="line-clamp-2 text-sm leading-5 text-foreground">{generation.prompt}</p>
+                        <p className="mt-1 text-[10px] text-muted-foreground">{generation.model_id} · {generation.mode}</p>
+                      </div>
+                      {previewUrl && downloadUrl ? (
+                        <div className="flex flex-wrap gap-2">
+                          <a href={previewUrl} target="_blank" rel="noopener noreferrer">
+                            <Button type="button" variant="outline" size="sm"><ExternalLink className="h-3.5 w-3.5" />Открыть</Button>
+                          </a>
+                          <a href={downloadUrl}>
+                            <Button type="button" variant="ghost" size="sm"><Download className="h-3.5 w-3.5" />Скачать</Button>
+                          </a>
+                        </div>
+                      ) : null}
                     </div>
                   </article>
                 );
