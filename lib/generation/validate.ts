@@ -100,7 +100,9 @@ function requiredCapabilitiesForVideoMode(mode: string): (keyof KieModelEntry["c
     case "image-to-video":
       return ["imageToVideo"];
     case "reference-to-video":
-      return ["referenceToVideo"];
+      // Reference mode accepts either the dedicated reference-to-video capability or the
+      // provider's generic multi-reference image input. This is checked explicitly below.
+      return [];
     default:
       return ["textToVideo"];
   }
@@ -109,6 +111,7 @@ function requiredCapabilitiesForVideoMode(mode: string): (keyof KieModelEntry["c
 export function validateImageGenerationRequest(input: {
   modelId?: string;
   inputAssetIds?: string[];
+  referenceCount?: number;
   aspectRatio?: string;
   resolution?: string;
   quality?: MediaQuality;
@@ -117,19 +120,38 @@ export function validateImageGenerationRequest(input: {
   selectionSource?: SelectionSource;
 }): ValidatedImageRequest {
   const inputAssetIds = input.inputAssetIds ?? [];
+  const referenceCount = Math.max(inputAssetIds.length, input.referenceCount ?? 0);
   const mode = inferImageMode(inputAssetIds, input.mode);
 
   const selection = selectImageModel({
     explicitModelId: input.selectionSource === "user" ? input.modelId : undefined,
     uiModelId: input.selectionSource === "ui" ? input.modelId : input.modelId,
     mode,
-    referenceCount: inputAssetIds.length,
+    referenceCount,
+    needsMultiReference: referenceCount > 1,
     needsTypography: mode === "text-to-image",
   });
 
   const model = input.modelId && input.modelId !== "auto"
     ? resolveImageModel(input.modelId)
     : selection.model;
+
+  if (referenceCount > 0 && !model.capabilities.referenceImages && !model.capabilities.imageToImage) {
+    throw new GenerationValidationError(
+      "MODEL_CAPABILITY_MISMATCH",
+      "Выбранная модель не поддерживает визуальные референсы",
+    );
+  }
+  if (
+    referenceCount > 0 &&
+    typeof model.capabilities.maxReferenceImages === "number" &&
+    referenceCount > model.capabilities.maxReferenceImages
+  ) {
+    throw new GenerationValidationError(
+      "VALIDATION_ERROR",
+      `Для ${model.displayName} можно использовать не больше ${model.capabilities.maxReferenceImages} референсов`,
+    );
+  }
 
   const numOutputs = Math.min(
     Math.max(input.outputs ?? 1, 1),
@@ -168,6 +190,7 @@ export function validateImageGenerationRequest(input: {
 export function validateVideoGenerationRequest(input: {
   modelId?: string;
   inputAssetIds?: string[];
+  referenceCount?: number;
   startFrameAssetId?: string;
   endFrameAssetId?: string;
   aspectRatio?: string;
@@ -179,6 +202,7 @@ export function validateVideoGenerationRequest(input: {
   selectionSource?: SelectionSource;
 }): ValidatedVideoRequest {
   const inputAssetIds = input.inputAssetIds ?? [];
+  const referenceCount = Math.max(inputAssetIds.length, input.referenceCount ?? 0);
   const mode = inferVideoMode({
     startFrameAssetId: input.startFrameAssetId,
     endFrameAssetId: input.endFrameAssetId,
@@ -189,23 +213,35 @@ export function validateVideoGenerationRequest(input: {
   const selection = selectVideoModel({
     uiModelId: input.modelId,
     mode,
-    needsEndFrame: Boolean(input.endFrameAssetId),
-    referenceCount: inputAssetIds.length,
+    needsEndFrame: Boolean(input.endFrameAssetId) || mode === "start-end-frames",
+    referenceCount,
   });
 
   const model = input.modelId && input.modelId !== "auto"
     ? resolveVideoModel(input.modelId)
     : selection.model;
 
-  // Check capability mismatch — do not silently swap model
   const required = requiredCapabilitiesForVideoMode(mode);
   const missing = checkModelCapabilityMismatch(model.id, required);
-  if (missing.length && input.modelId && input.modelId !== "auto") {
-    const alt = suggestAlternativeModel("video", required);
+  const referenceModeMissing =
+    mode === "reference-to-video" &&
+    !model.capabilities.referenceToVideo &&
+    !model.capabilities.referenceImages;
+  if ((missing.length || referenceModeMissing) && input.modelId && input.modelId !== "auto") {
+    const alt = mode === "reference-to-video"
+      ? suggestAlternativeModel("video", ["referenceImages"])
+        ?? suggestAlternativeModel("video", ["referenceToVideo"])
+      : suggestAlternativeModel("video", required);
     const altName = alt?.displayName ?? "другую модель";
     throw new GenerationValidationError(
       "MODEL_CAPABILITY_MISMATCH",
       `Для этой операции выбранная модель не поддерживает нужный режим. Могу использовать ${altName}.`,
+    );
+  }
+  if (referenceModeMissing) {
+    throw new GenerationValidationError(
+      "MODEL_CAPABILITY_MISMATCH",
+      "Не найдена видео-модель с поддержкой визуальных референсов",
     );
   }
 
