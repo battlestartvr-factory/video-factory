@@ -181,6 +181,62 @@ export function assertAnthropicMessagesNonEmpty(messages: ClaudeMessageParam[]):
   }
 }
 
+function isSchemaObject(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+/**
+ * KIE's Claude proxy is intentionally fed a conservative Anthropic-compatible JSON
+ * schema subset. z.toJSONSchema adds validation keywords such as format, minLength,
+ * maximum and additionalProperties that are useful locally but have caused upstream
+ * tool-schema rejection on some Claude proxy versions. Runtime Zod validation remains
+ * authoritative after the tool call, so stripping provider-only validation keywords
+ * does not weaken our server-side safety boundary.
+ */
+export function sanitizeAnthropicSchemaNode(value: unknown): Record<string, unknown> {
+  if (!isSchemaObject(value)) return {};
+  const result: Record<string, unknown> = {};
+
+  if (typeof value.type === "string") result.type = value.type;
+  if (typeof value.description === "string" && value.description.trim()) {
+    result.description = value.description;
+  }
+  if (Array.isArray(value.enum)) {
+    result.enum = value.enum.filter(
+      (item) => typeof item === "string" || typeof item === "number" || typeof item === "boolean",
+    );
+  }
+
+  if (isSchemaObject(value.properties)) {
+    const properties: Record<string, unknown> = {};
+    for (const [key, child] of Object.entries(value.properties)) {
+      properties[key] = sanitizeAnthropicSchemaNode(child);
+    }
+    result.properties = properties;
+    if (Array.isArray(value.required)) {
+      result.required = value.required.filter(
+        (item): item is string => typeof item === "string" && Object.hasOwn(properties, item),
+      );
+    }
+  }
+
+  if (isSchemaObject(value.items)) {
+    result.items = sanitizeAnthropicSchemaNode(value.items);
+  }
+
+  // Zod may represent nullable/union inputs using anyOf. Keep only the safe structural
+  // alternatives and drop JSON-Schema-only annotations.
+  if (Array.isArray(value.anyOf)) {
+    const anyOf = value.anyOf
+      .filter(isSchemaObject)
+      .map((item) => sanitizeAnthropicSchemaNode(item))
+      .filter((item) => Object.keys(item).length > 0);
+    if (anyOf.length) result.anyOf = anyOf;
+  }
+
+  return result;
+}
+
 function normalizeAnthropicInputSchema(
   parameters: Record<string, unknown>,
 ): ClaudeTool["input_schema"] {
@@ -191,13 +247,12 @@ function normalizeAnthropicInputSchema(
     );
   }
 
-  const properties =
-    parameters.properties && typeof parameters.properties === "object" && !Array.isArray(parameters.properties)
-      ? (parameters.properties as Record<string, unknown>)
-      : {};
-
-  const required = Array.isArray(parameters.required)
-    ? parameters.required.filter((item): item is string => typeof item === "string")
+  const sanitized = sanitizeAnthropicSchemaNode(parameters);
+  const properties = isSchemaObject(sanitized.properties)
+    ? sanitized.properties
+    : {};
+  const required = Array.isArray(sanitized.required)
+    ? sanitized.required.filter((item): item is string => typeof item === "string")
     : [];
 
   return { type: "object", properties, required };
