@@ -19,8 +19,8 @@ export interface WorkflowServices {
   providerTasks: ProviderTaskRepository;
   generationImages: GenerationImageRepository;
   generationVideos: GenerationVideoRepository;
-  gameDiscovery: GameDiscoveryWorkerRepository;
-  kieClaude: KieClaudeTaskAdapter | null;
+  gameDiscovery?: GameDiscoveryWorkerRepository;
+  kieClaude?: KieClaudeTaskAdapter | null;
   kieMarketTask: KieMarketTaskAdapter | null;
   kieVeoTask: KieVeoTaskAdapter | null;
   appUrl: string;
