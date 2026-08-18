@@ -105,7 +105,8 @@ export function DiscoveryPageClient({ initialBatches }: { initialBatches: Discov
 
   useEffect(() => {
     if (!selectedId) return;
-    void loadDetail(selectedId);
+    const timer = window.setTimeout(() => void loadDetail(selectedId), 0);
+    return () => window.clearTimeout(timer);
   }, [selectedId, loadDetail]);
 
   const currentStage = str(detail?.factoryJob?.current_stage);
@@ -270,6 +271,10 @@ export function DiscoveryPageClient({ initialBatches }: { initialBatches: Discov
                 const momentId = str(moment.momentId) ?? str(referenceRequest.moment_id) ?? "moment";
                 const shotId = str(shot.shotId) ?? str(referenceRequest.shot_id) ?? "shot";
                 const conceptRunId = str(run.id) ?? "";
+                const preEvalPassed =
+                  evaluation.coOpDependency === "pass" &&
+                  evaluation.instantReadability === "pass" &&
+                  evaluation.buildability === "pass";
 
                 return (
                   <article key={conceptRunId} className="overflow-hidden rounded-xl border border-border bg-surface/70">
@@ -282,8 +287,8 @@ export function DiscoveryPageClient({ initialBatches }: { initialBatches: Discov
                           )}
                         </div>
                         {evaluation.coOpDependency && (
-                          <Badge variant={evaluation.coOpDependency === "pass" && evaluation.instantReadability === "pass" && evaluation.buildability === "pass" ? "success" : "warning"}>
-                            pre-eval {evaluation.coOpDependency === "pass" && evaluation.instantReadability === "pass" && evaluation.buildability === "pass" ? "pass" : "check"}
+                          <Badge variant={preEvalPassed ? "success" : "warning"}>
+                            pre-eval {preEvalPassed ? "pass" : "check"}
                           </Badge>
                         )}
                       </div>
