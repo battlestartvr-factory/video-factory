@@ -98,6 +98,17 @@ function joinUrl(baseUrl: string, endpoint: string): string {
   return `${baseUrl.replace(/\/+$/, "")}${endpoint.startsWith("/") ? endpoint : `/${endpoint}`}`;
 }
 
+/**
+ * Older workflow code passed Claude ids directly. Keep those durable jobs restartable
+ * after the routing policy change by translating the old role names at the adapter edge.
+ */
+function resolveDurableModelId(requested: string): string {
+  const resolved = resolveModelId(requested);
+  if (resolved === "claude-sonnet-5") return "gemini-3-pro";
+  if (resolved === "claude-haiku-4-5") return "gemini-3-6-flash";
+  return resolved;
+}
+
 export class KieClaudeTaskAdapter {
   constructor(
     private readonly baseUrl: string,
@@ -113,9 +124,10 @@ export class KieClaudeTaskAdapter {
     thinking?: boolean;
     signal?: AbortSignal;
   }): Promise<KieClaudeGenerateResult> {
-    const model = getKieModelById(resolveModelId(input.model));
+    const effectiveModelId = resolveDurableModelId(input.model);
+    const model = getKieModelById(effectiveModelId);
     if (!model || model.category !== "llm") {
-      throw new KieClaudeTaskError(`KIE LLM model is unavailable: ${input.model}`, false);
+      throw new KieClaudeTaskError(`KIE LLM model is unavailable: ${effectiveModelId}`, false);
     }
 
     const isOpenAiChat = model.adapter === "openai_chat";
