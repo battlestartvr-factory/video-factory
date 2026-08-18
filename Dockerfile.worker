@@ -10,6 +10,7 @@ FROM deps AS builder
 COPY tsconfig.worker.json ./
 COPY lib/orchestrator ./lib/orchestrator
 COPY lib/models/kie ./lib/models/kie
+COPY lib/game-discovery ./lib/game-discovery
 COPY worker ./worker
 RUN pnpm exec tsc -p tsconfig.worker.json
 
