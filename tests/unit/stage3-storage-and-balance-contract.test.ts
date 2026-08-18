@@ -41,9 +41,12 @@ describe("knowledge document Drive delete contract", () => {
 });
 
 describe("durable generation archive contract", () => {
-  it("uses VPS storage only as removable staging before Google Drive upload", () => {
+  it("uses writable container-local storage only as removable staging before Google Drive upload", () => {
     const code = source("lib/generation/drive-archive.ts");
     expect(code).toContain('STAGING_DIR = "generation-archive-staging"');
+    expect(code).toContain('DEFAULT_STAGING_ROOT = "/tmp/ai-factory"');
+    expect(code).toContain("AI_FACTORY_STAGING_ROOT");
+    expect(code).not.toContain("process.env.AI_FACTORY_DATA_ROOT");
     expect(code).toContain("createResumableUpload");
     expect(code).toContain('storageProvider: "google_drive"');
     expect(code).toContain("await rm(tempPath, { force: true })");
@@ -70,6 +73,15 @@ describe("durable generation archive contract", () => {
     expect(providerFallback).toBeGreaterThan(driveBranch);
     expect(code).toContain("fetchDriveOutput");
     expect(code).toContain('url.searchParams.set("alt", "media")');
+  });
+
+  it("makes incomplete Google Drive backfill fail the production deployment", () => {
+    const route = source("app/api/internal/generation-archive/backfill/route.ts");
+    const deploy = source("scripts/deploy.sh");
+    expect(route).toContain("status: failures.length === 0 ? 200 : 500");
+    expect(deploy).toContain("--fail-with-body");
+    expect(deploy).toContain('fail "Media archive backfill failed: $archive_result"');
+    expect(deploy).not.toContain("WARNING: media archive backfill could not be completed");
   });
 });
 
