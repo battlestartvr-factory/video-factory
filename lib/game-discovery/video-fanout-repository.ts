@@ -1,5 +1,6 @@
 import type { OrchestratorRpcClient } from "../orchestrator/rpc";
 import { requireRpcObject } from "../orchestrator/rpc";
+import type { AssetGraphV1 } from "./schemas";
 
 function object(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -124,5 +125,22 @@ export class GameDiscoveryVideoRepository {
       allTerminal: row.all_terminal === true,
       allCompleted: row.all_completed === true,
     };
+  }
+
+  async persistAssetGraph(input: {
+    rootJobId: string;
+    rootCreativeRunId: string;
+    conceptRunId: string;
+    assetGraph: AssetGraphV1;
+  }): Promise<void> {
+    const { error } = await this.client.rpc("orchestrator_persist_gameplay_asset_graph", {
+      payload: {
+        root_job_id: input.rootJobId,
+        root_creative_run_id: input.rootCreativeRunId,
+        concept_run_id: input.conceptRunId,
+        asset_graph: input.assetGraph,
+      },
+    });
+    if (error) throw new Error(`Failed to persist gameplay asset graph: ${error.message}`);
   }
 }
