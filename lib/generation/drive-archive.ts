@@ -3,6 +3,7 @@ import "server-only";
 import { createWriteStream } from "node:fs";
 import { mkdir, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
+import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import {
@@ -182,7 +183,10 @@ export async function archiveGenerationOutput(input: {
   const tempPath = join(stagingDir, `${input.generationId}-${input.outputIndex}-${crypto.randomUUID()}.part`);
 
   try {
-    await pipeline(upstream.body, createWriteStream(tempPath, { flags: "wx" }));
+    await pipeline(
+      Readable.fromWeb(upstream.body as never),
+      createWriteStream(tempPath, { flags: "wx" }),
+    );
     const fileStat = await stat(tempPath);
     const session = await drive.createResumableUpload({
       filename,
