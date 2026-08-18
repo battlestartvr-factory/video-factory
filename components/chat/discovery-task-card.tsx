@@ -209,6 +209,7 @@ export function DiscoveryTaskCard({ task, runId }: DiscoveryTaskCardProps) {
       if (!response.ok || !payload?.ok) {
         throw new Error(payload?.error?.message ?? "Не удалось сохранить решение");
       }
+      setFeedback((prev) => ({ ...prev, [item.generationId]: "" }));
       await load(true);
     } catch (submitError) {
       setError(submitError instanceof Error ? submitError.message : "Не удалось сохранить решение");
@@ -277,7 +278,9 @@ export function DiscoveryTaskCard({ task, runId }: DiscoveryTaskCardProps) {
           </div>
 
           <div className="space-y-4">
-            {references.map((item) => (
+            {references.map((item) => {
+              const itemSubmitting = submitting?.startsWith(`${item.generationId}:`) === true;
+              return (
               <div key={item.generationId} className="rounded-lg border border-border bg-surface/70 p-3">
                 {item.imageUrl ? (
                   // eslint-disable-next-line @next/next/no-img-element
@@ -306,23 +309,25 @@ export function DiscoveryTaskCard({ task, runId }: DiscoveryTaskCardProps) {
                       onChange={(event) => setFeedback((prev) => ({ ...prev, [item.generationId]: event.target.value }))}
                       placeholder="Feedback для Revise / Reject (для Approve не обязателен)"
                       rows={2}
-                      className="mt-3 w-full resize-y rounded-lg border border-border bg-background px-3 py-2 text-xs text-foreground outline-none placeholder:text-muted focus:border-accent"
+                      disabled={itemSubmitting}
+                      className="mt-3 w-full resize-y rounded-lg border border-border bg-background px-3 py-2 text-xs text-foreground outline-none placeholder:text-muted focus:border-accent disabled:opacity-60"
                     />
                     <div className="mt-2 flex flex-wrap gap-2">
-                      <Button size="sm" onClick={() => void submitReview(item, "approve")} disabled={submitting !== null}>
+                      <Button size="sm" onClick={() => void submitReview(item, "approve")} disabled={itemSubmitting}>
                         <Check className="h-3.5 w-3.5" /> Approve
                       </Button>
-                      <Button variant="secondary" size="sm" onClick={() => void submitReview(item, "revise")} disabled={submitting !== null}>
+                      <Button variant="secondary" size="sm" onClick={() => void submitReview(item, "revise")} disabled={itemSubmitting}>
                         Revise
                       </Button>
-                      <Button variant="destructive" size="sm" onClick={() => void submitReview(item, "reject")} disabled={submitting !== null}>
+                      <Button variant="destructive" size="sm" onClick={() => void submitReview(item, "reject")} disabled={itemSubmitting}>
                         Reject
                       </Button>
                     </div>
                   </>
                 )}
               </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       )}
