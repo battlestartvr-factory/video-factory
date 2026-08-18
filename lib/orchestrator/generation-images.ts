@@ -96,14 +96,13 @@ export class GenerationImageRepository {
       const archived: DurableImageOutput[] = [];
       for (let index = 0; index < input.outputs.length; index += 1) {
         const output = input.outputs[index]!;
-        archived.push(
-          await archive.archive({
-            generationId: generation.id,
-            outputIndex: index,
-            sourceUrl: output.providerUrl ?? output.url,
-            kind: "image",
-          }),
-        );
+        const stored = await archive.archive({
+          generationId: generation.id,
+          outputIndex: index,
+          sourceUrl: output.providerUrl ?? output.url,
+          kind: "image",
+        });
+        archived.push({ ...stored, kind: "image" });
       }
       persistedOutputs = archived;
     }
