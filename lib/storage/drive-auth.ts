@@ -12,9 +12,23 @@ function normalizePrivateKey(key: string): string {
   return key.replace(/\\n/g, "\n").replace(/^"|"$/g, "");
 }
 
+function hasCompleteOAuthCredentials(): boolean {
+  return Boolean(
+    (process.env.GOOGLE_DRIVE_CLIENT_ID ?? "").trim() &&
+      (process.env.GOOGLE_DRIVE_CLIENT_SECRET ?? "").trim() &&
+      (process.env.GOOGLE_DRIVE_REFRESH_TOKEN ?? "").trim(),
+  );
+}
+
 export function getDriveAuthMode(): DriveAuthMode {
-  const mode = (process.env.GOOGLE_DRIVE_AUTH_MODE ?? "service_account").trim();
-  return mode === "oauth_user" ? "oauth_user" : "service_account";
+  const requestedMode = (process.env.GOOGLE_DRIVE_AUTH_MODE ?? "").trim();
+
+  // Content Farm uses a user-owned My Drive hierarchy. Complete owner OAuth
+  // credentials take precedence over legacy service-account credentials because
+  // upload/read access alone is not enough to guarantee owner-level trash/delete.
+  if (hasCompleteOAuthCredentials()) return "oauth_user";
+
+  return requestedMode === "oauth_user" ? "oauth_user" : "service_account";
 }
 
 export function createDriveAuthClient(): DriveAuthClient | null {
