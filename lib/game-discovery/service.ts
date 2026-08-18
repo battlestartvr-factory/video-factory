@@ -7,6 +7,7 @@ import type { CreativeRun } from "@/lib/creative/types";
 import { getKieConfig } from "@/lib/env/env.server";
 import { KieClaudeTaskAdapter } from "@/lib/models/kie/claude-task";
 import {
+  fallbackGameplayReferenceFeedback,
   gameplayReferenceFeedbackV1Schema,
   structureGameplayReferenceFeedback,
 } from "./feedback-memory";
@@ -244,25 +245,36 @@ export async function recordGameplayReferenceReview(input: {
   let usage: Record<string, unknown> = {};
 
   if (rawFeedback) {
+    structured = fallbackGameplayReferenceFeedback({ rawFeedback, decision: input.decision });
     const config = getKieConfig();
-    if (!config.configured) throw new Error("KIE_NOT_CONFIGURED");
-    const llm = new KieClaudeTaskAdapter(config.baseUrl, config.apiKey);
-    const result = await structureGameplayReferenceFeedback({
-      llm,
-      rawFeedback,
-      decision: input.decision,
-      conceptSummary:
-        typeof conceptRun.outputs?.coop_game_concept?.oneSentencePitch === "string"
-          ? conceptRun.outputs.coop_game_concept.oneSentencePitch
-          : input.conceptId,
-      shotSummary:
-        typeof conceptRun.outputs?.gameplay_shot?.action === "string"
-          ? conceptRun.outputs.gameplay_shot.action
-          : input.shotId,
-    });
-    structured = result.feedback;
-    model = result.model;
-    usage = result.usage;
+    if (config.configured) {
+      try {
+        const llm = new KieClaudeTaskAdapter(config.baseUrl, config.apiKey);
+        const result = await structureGameplayReferenceFeedback({
+          llm,
+          rawFeedback,
+          decision: input.decision,
+          conceptSummary:
+            typeof conceptRun.outputs?.coop_game_concept?.oneSentencePitch === "string"
+              ? conceptRun.outputs.coop_game_concept.oneSentencePitch
+              : input.conceptId,
+          shotSummary:
+            typeof conceptRun.outputs?.gameplay_shot?.action === "string"
+              ? conceptRun.outputs.gameplay_shot.action
+              : input.shotId,
+        });
+        structured = result.feedback;
+        model = result.model;
+        usage = result.usage;
+      } catch (error) {
+        usage = {
+          feedback_structuring_fallback: true,
+          reason: error instanceof Error ? error.message.slice(0, 500) : String(error).slice(0, 500),
+        };
+      }
+    } else {
+      usage = { feedback_structuring_fallback: true, reason: "KIE_NOT_CONFIGURED" };
+    }
   } else {
     structured = gameplayReferenceFeedbackV1Schema.parse({
       schema: "gameplay_reference_feedback",
