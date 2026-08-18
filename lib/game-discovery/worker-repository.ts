@@ -21,6 +21,20 @@ function array(value: unknown): unknown[] {
   return Array.isArray(value) ? value : [];
 }
 
+function object(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+function strings(value: unknown): string[] {
+  return array(value).filter((item): item is string => typeof item === "string" && item.length > 0);
+}
+
+function text(value: unknown): string | null {
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
 export interface PersistedConceptRun {
   runId: string;
   conceptId: string;
@@ -50,11 +64,43 @@ export interface PersistedVisualStage {
   referenceApprovalRequired: boolean;
 }
 
+export interface ReferenceImageStageItem {
+  shotId: string;
+  conceptId: string;
+  momentId: string;
+  conceptRunId: string;
+  generationId: string;
+  factoryJobId: string;
+  status: string;
+  outputs: Array<Record<string, unknown>>;
+  errorMessage: string | null;
+  modelId: string | null;
+}
+
+export interface ReferenceImageStage {
+  items: ReferenceImageStageItem[];
+  requestCount: number;
+  allTerminal: boolean;
+  allCompleted: boolean;
+}
+
+export interface ReferenceApprovalItem extends ReferenceImageStageItem {
+  decision: "approve" | "reject" | "revise" | null;
+  reviewId: string | null;
+  rawFeedback: string | null;
+  structuredFeedback: Record<string, unknown>;
+}
+
+export interface ReferenceApprovalStage {
+  items: ReferenceApprovalItem[];
+  allReviewed: boolean;
+  allApproved: boolean;
+}
+
 function parseConceptRuns(value: unknown): PersistedConceptRun[] {
   return array(value)
     .map((item) => {
-      if (!item || typeof item !== "object" || Array.isArray(item)) return null;
-      const record = item as Record<string, unknown>;
+      const record = object(item);
       return typeof record.run_id === "string" && typeof record.concept_id === "string"
         ? { runId: record.run_id, conceptId: record.concept_id }
         : null;
@@ -62,14 +108,40 @@ function parseConceptRuns(value: unknown): PersistedConceptRun[] {
     .filter((item): item is PersistedConceptRun => item !== null);
 }
 
-function object(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : {};
-}
+function parseReferenceItem(value: unknown, approval = false): ReferenceImageStageItem | ReferenceApprovalItem | null {
+  const row = object(value);
+  const shotId = text(row.shot_id);
+  const conceptId = text(row.concept_id);
+  const momentId = text(row.moment_id);
+  const conceptRunId = text(row.concept_run_id);
+  const generationId = text(row.generation_id);
+  const factoryJobId = text(row.factory_job_id) ?? "";
+  const status = text(approval ? row.generation_status : row.status);
+  if (!shotId || !conceptId || !momentId || !conceptRunId || !generationId || !status) return null;
 
-function strings(value: unknown): string[] {
-  return array(value).filter((item): item is string => typeof item === "string" && item.length > 0);
+  const base: ReferenceImageStageItem = {
+    shotId,
+    conceptId,
+    momentId,
+    conceptRunId,
+    generationId,
+    factoryJobId,
+    status,
+    outputs: array(row.outputs).map(object),
+    errorMessage: text(row.error_message),
+    modelId: text(row.model_id),
+  };
+  if (!approval) return base;
+
+  const decision = row.decision;
+  return {
+    ...base,
+    decision:
+      decision === "approve" || decision === "reject" || decision === "revise" ? decision : null,
+    reviewId: text(row.review_id),
+    rawFeedback: text(row.raw_feedback),
+    structuredFeedback: object(row.structured_feedback),
+  };
 }
 
 export class GameDiscoveryWorkerRepository {
@@ -140,6 +212,75 @@ export class GameDiscoveryWorkerRepository {
     };
   }
 
+  async createReferenceImage(input: {
+    rootJobId: string;
+    rootCreativeRunId: string;
+    requestId: string;
+    conceptId: string;
+    momentId: string;
+    shotId: string;
+    prompt: string;
+    modelId?: string;
+  }): Promise<{ generationId: string; factoryJobId: string; duplicate: boolean }> {
+    const { data, error } = await this.client.rpc("orchestrator_create_gameplay_reference_image", {
+      payload: {
+        root_job_id: input.rootJobId,
+        root_creative_run_id: input.rootCreativeRunId,
+        request_id: input.requestId,
+        concept_id: input.conceptId,
+        moment_id: input.momentId,
+        shot_id: input.shotId,
+        prompt: input.prompt,
+        model_id: input.modelId ?? "nano-banana-2",
+        settings: { aspectRatio: "9:16", effectiveQuality: "1K" },
+      },
+    });
+    if (error) throw new Error(`Failed to admit gameplay reference image: ${error.message}`);
+    const row = requireRpcObject(data, "gameplay reference image admission");
+    const generation = object(row.generation);
+    if (typeof generation.id !== "string" || typeof row.factory_job_id !== "string") {
+      throw new Error("Invalid gameplay reference image admission response");
+    }
+    return {
+      generationId: generation.id,
+      factoryJobId: row.factory_job_id,
+      duplicate: row.duplicate === true,
+    };
+  }
+
+  async getReferenceImageStage(input: { rootCreativeRunId: string }): Promise<ReferenceImageStage> {
+    const { data, error } = await this.client.rpc("orchestrator_get_gameplay_reference_image_stage", {
+      payload: { root_creative_run_id: input.rootCreativeRunId },
+    });
+    if (error) throw new Error(`Failed to inspect gameplay reference images: ${error.message}`);
+    const row = requireRpcObject(data, "gameplay reference image stage");
+    return {
+      items: array(row.items)
+        .map((item) => parseReferenceItem(item))
+        .filter((item): item is ReferenceImageStageItem => item !== null),
+      requestCount: typeof row.request_count === "number" ? row.request_count : 0,
+      allTerminal: row.all_terminal === true,
+      allCompleted: row.all_completed === true,
+    };
+  }
+
+  async getReferenceApprovalStage(input: {
+    rootCreativeRunId: string;
+  }): Promise<ReferenceApprovalStage> {
+    const { data, error } = await this.client.rpc("orchestrator_get_gameplay_reference_approval_stage", {
+      payload: { root_creative_run_id: input.rootCreativeRunId },
+    });
+    if (error) throw new Error(`Failed to inspect gameplay reference approvals: ${error.message}`);
+    const row = requireRpcObject(data, "gameplay reference approval stage");
+    return {
+      items: array(row.items)
+        .map((item) => parseReferenceItem(item, true))
+        .filter((item): item is ReferenceApprovalItem => item !== null),
+      allReviewed: row.all_reviewed === true,
+      allApproved: row.all_approved === true,
+    };
+  }
+
   async getFeedbackMemory(input: { rootCreativeRunId: string }): Promise<DiscoveryFeedbackMemory> {
     const { data, error } = await this.client.rpc("orchestrator_get_game_discovery_feedback_memory", {
       payload: { root_creative_run_id: input.rootCreativeRunId },
@@ -174,8 +315,7 @@ export class GameDiscoveryWorkerRepository {
     const row = requireRpcObject(data, "game concept history");
     const concepts: CoopGameConceptSpecV1[] = [];
     for (const item of array(row.items)) {
-      if (!item || typeof item !== "object" || Array.isArray(item)) continue;
-      const concept = (item as Record<string, unknown>).concept;
+      const concept = object(item).concept;
       const parsed = coopGameConceptSpecV1Schema.safeParse(concept);
       if (parsed.success) concepts.push(parsed.data);
     }
