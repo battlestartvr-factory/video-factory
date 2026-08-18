@@ -1,6 +1,8 @@
 import type { GenerationImageRepository } from "../../lib/orchestrator/generation-images";
+import type { GenerationVideoRepository } from "../../lib/orchestrator/generation-videos";
 import type { ProviderTaskRepository } from "../../lib/orchestrator/provider-tasks";
 import type { KieMarketTaskAdapter } from "../../lib/models/kie/market-task";
+import type { KieVeoTaskAdapter } from "../../lib/models/kie/veo-task";
 
 export type DurableTickStatus =
   | "queued"
@@ -14,7 +16,9 @@ export type DurableTickStatus =
 export interface WorkflowServices {
   providerTasks: ProviderTaskRepository;
   generationImages: GenerationImageRepository;
+  generationVideos: GenerationVideoRepository;
   kieMarketTask: KieMarketTaskAdapter | null;
+  kieVeoTask: KieVeoTaskAdapter | null;
   appUrl: string;
 }
 
