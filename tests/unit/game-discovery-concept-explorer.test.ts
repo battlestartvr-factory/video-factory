@@ -291,6 +291,6 @@ describe("Stage 4 Concept Explorer", () => {
     expect(result.rawResponseHashes).toHaveLength(2);
     expect(calls).toBe(2);
     expect(prompts[1]).toContain("VALIDATION ERRORS FROM THE STRICT PARSER");
-    expect(prompts[1]).toContain("invalid JSON");
+    expect(prompts[1]).toContain("CONCEPT_EXPLORER_JSON_NOT_FOUND");
   });
 });
