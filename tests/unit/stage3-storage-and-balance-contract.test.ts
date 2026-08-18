@@ -27,6 +27,17 @@ describe("knowledge document Drive delete contract", () => {
     expect(databaseDelete).toBeGreaterThan(driveFailure);
     expect(fn).toContain("drive_delete_failed: true");
   });
+
+  it("blocks user deletion when a Drive-backed row cannot be cleaned remotely", () => {
+    const route = source("app/api/knowledge/route.ts");
+    const deleteHandler = route.slice(route.indexOf("export async function DELETE"));
+    const guard = deleteHandler.indexOf("document.drive_file_id && !isDriveStorageConfigured()");
+    const deleteCall = deleteHandler.indexOf("await deleteKnowledgeDocument(user.id, id)");
+
+    expect(guard).toBeGreaterThan(-1);
+    expect(deleteCall).toBeGreaterThan(guard);
+    expect(deleteHandler).toContain("Google Drive недоступен: документ не удалён");
+  });
 });
 
 describe("durable generation archive contract", () => {
