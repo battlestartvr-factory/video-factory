@@ -133,11 +133,64 @@ function response(concepts: CoopGameConceptSpecV1[]) {
   };
 }
 
+function geminiSchemaDrift(concepts: CoopGameConceptSpecV1[]) {
+  const drifted = JSON.parse(JSON.stringify({ concepts })) as {
+    concepts: Array<Record<string, unknown>>;
+  };
+  for (const candidate of drifted.concepts) {
+    const roles = candidate.playerRoles as Array<Record<string, unknown>>;
+    for (const role of roles) {
+      role.information = true;
+      role.power = false;
+    }
+    const buildability = candidate.buildability as Record<string, unknown>;
+    buildability.mainRisks = "A single readable implementation risk that Gemini returned as a scalar string.";
+  }
+  return {
+    text: JSON.stringify(drifted),
+    usage: { inputTokens: 10, outputTokens: 20, totalTokens: 30 },
+    stopReason: "end_turn",
+    responsePayload: {},
+  };
+}
+
 describe("Stage 4 Concept Explorer", () => {
   it("parses strict concept JSON even when wrapped in a JSON code fence", () => {
     const parsed = parseConceptBatch(`\`\`\`json\n${JSON.stringify({ concepts: [first] })}\n\`\`\``);
     expect(parsed).toHaveLength(1);
     expect(parsed[0]?.conceptId).toBe("shared-crank");
+  });
+
+  it("normalizes observed Gemini primitive/container drift without paying for schema repair", async () => {
+    let calls = 0;
+    const prompts: string[] = [];
+    const llm = {
+      generate: async (input: { prompt: string }) => {
+        calls += 1;
+        prompts.push(input.prompt);
+        if (calls > 1) throw new Error("schema repair should not be needed for known drift");
+        return geminiSchemaDrift([first, replacement]);
+      },
+    };
+
+    const result = await exploreConcepts({
+      llm,
+      objective,
+      replacementBuffer: 0,
+      maxReplacementAttempts: 0,
+    });
+
+    expect(result.accepted).toHaveLength(2);
+    expect(result.usage.totalTokens).toBe(30);
+    expect(calls).toBe(1);
+    expect(result.accepted[0]?.playerRoles[0]?.information).toBeUndefined();
+    expect(result.accepted[0]?.playerRoles[0]?.power).toBeUndefined();
+    expect(result.accepted[0]?.buildability.mainRisks).toEqual([
+      "A single readable implementation risk that Gemini returned as a scalar string.",
+    ]);
+    expect(prompts[0]).toContain("information?: string, power?: string");
+    expect(prompts[0]).toContain("mainRisks: string[]");
+    expect(prompts[0]).toContain("never booleans");
   });
 
   it("rejects a deterministic near-duplicate and uses a bounded replacement call", async () => {
@@ -212,9 +265,11 @@ describe("Stage 4 Concept Explorer", () => {
 
   it("repairs malformed provider output once before accepting typed concepts", async () => {
     let calls = 0;
+    const prompts: string[] = [];
     const llm = {
-      generate: async () => {
+      generate: async (input: { prompt: string }) => {
         calls += 1;
+        prompts.push(input.prompt);
         if (calls === 1) {
           return {
             ...response([first, replacement]),
@@ -235,5 +290,7 @@ describe("Stage 4 Concept Explorer", () => {
     expect(result.accepted).toHaveLength(2);
     expect(result.rawResponseHashes).toHaveLength(2);
     expect(calls).toBe(2);
+    expect(prompts[1]).toContain("VALIDATION ERRORS FROM THE STRICT PARSER");
+    expect(prompts[1]).toContain("invalid JSON");
   });
 });
