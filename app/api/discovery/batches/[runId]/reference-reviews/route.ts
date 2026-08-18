@@ -10,7 +10,7 @@ import {
 const reviewSchema = z
   .object({
     conceptRunId: z.string().uuid(),
-    generationId: z.string().uuid().nullable().optional(),
+    generationId: z.string().uuid(),
     conceptId: z.string().trim().min(1).max(160),
     momentId: z.string().trim().min(1).max(160),
     shotId: z.string().trim().min(1).max(160),
@@ -67,7 +67,7 @@ export async function POST(
       userId: user.id,
       rootRunId: runId,
       conceptRunId: parsed.data.conceptRunId,
-      generationId: parsed.data.generationId ?? null,
+      generationId: parsed.data.generationId,
       conceptId: parsed.data.conceptId,
       momentId: parsed.data.momentId,
       shotId: parsed.data.shotId,
