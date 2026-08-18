@@ -246,6 +246,19 @@ export interface KnowledgeChunk {
   created_at: string;
 }
 
+export interface GenerationOutput {
+  url?: string;
+  kind?: string;
+  mimeType?: string;
+  providerUrl?: string;
+  storageProvider?: "google_drive" | string;
+  driveFileId?: string;
+  driveWebUrl?: string | null;
+  filename?: string;
+  sizeBytes?: number | null;
+  archivedAt?: string;
+}
+
 export interface Generation {
   id: string;
   user_id: string;
@@ -266,7 +279,7 @@ export interface Generation {
   chat_id: string | null;
   message_id: string | null;
   status: GenerationStatus;
-  outputs: Array<{ url?: string; kind?: string; mimeType?: string }>;
+  outputs: GenerationOutput[];
   error_message: string | null;
   created_at: string;
   updated_at: string;
