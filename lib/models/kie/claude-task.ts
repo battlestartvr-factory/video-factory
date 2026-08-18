@@ -60,6 +60,23 @@ function extractText(payload: Record<string, unknown>): string {
     .trim();
 }
 
+function safeProviderErrorDetail(payload: Record<string, unknown>): string | null {
+  const error = asObject(payload.error);
+  const candidates = [error.message, payload.message, payload.detail, error.type];
+  for (const candidate of candidates) {
+    if (typeof candidate !== "string") continue;
+    const cleaned = candidate.replace(/\s+/g, " ").trim();
+    if (!cleaned) continue;
+    // Provider diagnostics are persisted in durable workflow events. Bound them and
+    // strip obvious auth material while retaining the useful upstream reason.
+    const redacted = cleaned
+      .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer [redacted]")
+      .replace(/(api[_ -]?key\s*[:=]\s*)[^\s,;]+/gi, "$1[redacted]");
+    return redacted.slice(0, 500);
+  }
+  return null;
+}
+
 export class KieClaudeTaskAdapter {
   constructor(
     private readonly baseUrl: string,
@@ -105,8 +122,9 @@ export class KieClaudeTaskAdapter {
 
     const payload = await parsePayload(response);
     if (!response.ok) {
+      const detail = safeProviderErrorDetail(payload);
       throw new KieClaudeTaskError(
-        `KIE Claude request failed (HTTP ${response.status})`,
+        `KIE Claude request failed (HTTP ${response.status})${detail ? `: ${detail}` : ""}`,
         retryableHttpStatus(response.status),
         response.status,
       );
