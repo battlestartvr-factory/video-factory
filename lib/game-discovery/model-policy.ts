@@ -24,7 +24,10 @@ const POLICIES: Record<DiscoveryLlmTask, DiscoveryLlmPolicy> = {
     task: "concept_exploration",
     primaryModel: "claude-sonnet-5",
     tier: "creative",
-    thinking: true,
+    // Stage 4 asks for large, strict JSON payloads. KIE's extended-thinking path can
+    // hold these requests long enough for the upstream gateway to return HTTP 500.
+    // Standard Sonnet is the production-safe path and is also what the chat UI uses.
+    thinking: false,
     maxOutputTokens: 8192,
     maxCallsPerBatch: 4,
     fallbackModels: [],
@@ -54,7 +57,9 @@ const POLICIES: Record<DiscoveryLlmTask, DiscoveryLlmPolicy> = {
     task: "gameplay_moment_planning",
     primaryModel: "claude-sonnet-5",
     tier: "creative",
-    thinking: true,
+    // Keep the durable pipeline on the same proven KIE Claude request mode as chat.
+    // The structured planning prompt already provides the required deliberation frame.
+    thinking: false,
     maxOutputTokens: 6144,
     maxCallsPerBatch: 2,
     fallbackModels: [],
