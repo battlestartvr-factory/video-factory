@@ -27,6 +27,12 @@ function compactIntent(value: string): string {
   return cleaned.length <= 4_000 ? cleaned : `${cleaned.slice(0, 3_997)}…`;
 }
 
+function boundedBrief(value: string): string {
+  return value.length <= MAX_USER_BRIEF_CHARS
+    ? value
+    : `${value.slice(0, MAX_USER_BRIEF_CHARS)}\n[user brief truncated by chat launcher]`;
+}
+
 export const startGameDiscoveryTool: AgentTool<typeof startGameDiscoverySchema._output> = {
   name: "start_game_discovery",
   description:
@@ -35,7 +41,7 @@ export const startGameDiscoveryTool: AgentTool<typeof startGameDiscoverySchema._
   risk: "safe",
   async handler(input, ctx) {
     const service = createSupabaseServiceClient();
-    const selectColumns = "id,filename,mime_type,metadata,created_at";
+    const selectColumns = "id,message_id,filename,mime_type,metadata,created_at";
     const currentAttachments = await service
       .from("chat_attachments")
       .select(selectColumns)
@@ -54,6 +60,7 @@ export const startGameDiscoveryTool: AgentTool<typeof startGameDiscoverySchema._
     }
 
     let attachmentRows = currentAttachments.data ?? [];
+    let reusedPreviousResearch = false;
     // A failed durable run should be restartable from the same chat with a short command.
     // If that new message has no file attached, reuse the latest archived research files
     // from this chat instead of forcing the user to upload the same multi-MB document again.
@@ -73,6 +80,30 @@ export const startGameDiscoveryTool: AgentTool<typeof startGameDiscoverySchema._
         };
       }
       attachmentRows = recentAttachments.data ?? [];
+      reusedPreviousResearch = attachmentRows.length > 0;
+    }
+
+    // When the user says only "повтори запуск" after a failed run, retain the detailed
+    // brief from the message that originally carried the research attachment. Otherwise
+    // a convenient retry would silently replace the actual discovery requirements with
+    // the two-word retry command.
+    let effectiveUserMessage = ctx.userMessage;
+    const sourceMessageId = attachmentRows[0]?.message_id;
+    if (
+      reusedPreviousResearch &&
+      typeof sourceMessageId === "string" &&
+      sourceMessageId !== ctx.userMessageId
+    ) {
+      const { data: sourceMessage } = await service
+        .from("chat_messages")
+        .select("content")
+        .eq("id", sourceMessageId)
+        .eq("chat_id", ctx.chatId)
+        .eq("role", "user")
+        .maybeSingle();
+      if (typeof sourceMessage?.content === "string" && sourceMessage.content.trim()) {
+        effectiveUserMessage = sourceMessage.content;
+      }
     }
 
     const researchDocuments: Array<Record<string, unknown>> = [];
@@ -138,18 +169,14 @@ export const startGameDiscoveryTool: AgentTool<typeof startGameDiscoverySchema._
       });
     }
 
-    const userBrief =
-      ctx.userMessage.length <= MAX_USER_BRIEF_CHARS
-        ? ctx.userMessage
-        : `${ctx.userMessage.slice(0, MAX_USER_BRIEF_CHARS)}\n[user brief truncated by chat launcher]`;
-
+    const userBrief = boundedBrief(effectiveUserMessage);
     const title = compactTitle(input.title ?? "Поиск новой co-op игры");
     const objective: DiscoveryObjectiveSpecV1 = {
       schema: "discovery_objective",
       version: 1,
       objectiveId: `chat-${ctx.userMessageId}`,
       title,
-      searchIntent: compactIntent(input.search_intent ?? ctx.userMessage),
+      searchIntent: compactIntent(input.search_intent ?? effectiveUserMessage),
       playerCount: { min: 2, max: 4 },
       platform: "pc_steam",
       desiredNovelty: input.desired_novelty ?? "explore",
@@ -165,6 +192,9 @@ export const startGameDiscoveryTool: AgentTool<typeof startGameDiscoverySchema._
         source: "chat_stage4_discovery",
         chatId: ctx.chatId,
         userMessageId: ctx.userMessageId,
+        sourceUserMessageId:
+          typeof sourceMessageId === "string" ? sourceMessageId : ctx.userMessageId,
+        retryInstruction: reusedPreviousResearch ? ctx.userMessage : null,
         userBrief,
         researchDocuments,
         humanGate: "reference_image_approval_required_before_video",
@@ -188,6 +218,7 @@ export const startGameDiscoveryTool: AgentTool<typeof startGameDiscoverySchema._
           root_creative_run_id: runId,
           factory_job_id: result.factoryJobId,
           duplicate: result.duplicate,
+          reused_previous_research: reusedPreviousResearch,
           research_documents: researchDocuments.map((document) => ({
             attachment_id: document.attachmentId,
             filename: document.filename,
@@ -212,7 +243,8 @@ export const startGameDiscoveryTool: AgentTool<typeof startGameDiscoverySchema._
         terminate: true,
         userContent:
           `Запустил полноценный Stage 4 discovery batch «${title}». ` +
-          `Research-документы переданы в discovery context. Прогресс, reference-кадры и human approval будут отображаться прямо в этом чате; переходить на отдельную страницу не обязательно.`,
+          `${reusedPreviousResearch ? "Исходный brief и research восстановлены из этого чата. " : "Research-документы переданы в discovery context. "}` +
+          `Прогресс, reference-кадры и human approval будут отображаться прямо в этом чате; переходить на отдельную страницу не обязательно.`,
       };
     } catch (error) {
       return {
