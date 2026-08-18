@@ -12,6 +12,13 @@ const EFFORT_REASONING = {
   },
 };
 
+const KIE_CLAUDE_REASONING = {
+  control: "binary" as const,
+  levels: ["standard", "thinking"] as const,
+  default: "standard" as const,
+  mapping: { standard: "disabled", thinking: "enabled" },
+};
+
 export const LLM_MODELS: KieModelEntry[] = [
   {
     id: "gemini-3-6-flash",
@@ -98,33 +105,55 @@ export const LLM_MODELS: KieModelEntry[] = [
     ],
   },
   {
-    id: "claude-sonnet-4-5",
-    displayName: "Claude Sonnet 4.5",
+    id: "claude-sonnet-5",
+    displayName: "Claude Sonnet 5",
     provider: "kie",
     category: "llm",
-    adapter: "claude_sonnet",
+    adapter: "claude_messages",
     endpoint: "/claude/v1/messages",
-    providerModel: "claude-sonnet-4-5",
+    providerModel: "claude-sonnet-5",
     capabilities: {
       chat: true,
       vision: true,
       toolCalling: true,
     },
-    reasoning: {
-      control: "binary",
-      levels: ["standard", "thinking"],
-      default: "standard",
-      mapping: { standard: "disabled", thinking: "enabled" },
-    },
+    reasoning: KIE_CLAUDE_REASONING,
     enabled: true,
-    aliases: ["claude-sonnet-5"],
+    aliases: ["claude-sonnet-4-5", "claude-sonnet-4-6", "claude-sonnet-latest"],
     useCases: [
+      "agentic work",
+      "сложный reasoning",
+      "coding",
       "creative writing",
       "сценарии",
-      "посты",
-      "структурирование",
       "длинные тексты",
-      "agentic work",
+      "tool calling",
+      "vision",
+    ],
+  },
+  {
+    id: "claude-haiku-4-5",
+    displayName: "Claude Haiku 4.5",
+    provider: "kie",
+    category: "llm",
+    adapter: "claude_messages",
+    endpoint: "/claude/v1/messages",
+    providerModel: "claude-haiku-4-5",
+    capabilities: {
+      chat: true,
+      vision: true,
+      toolCalling: true,
+    },
+    reasoning: KIE_CLAUDE_REASONING,
+    enabled: true,
+    aliases: ["claude-haiku-latest"],
+    useCases: [
+      "быстрый чат",
+      "high-volume agent tasks",
+      "tool calling",
+      "быстрый анализ",
+      "vision",
+      "экономичные подзадачи",
     ],
   },
 ];
