@@ -5,13 +5,11 @@ import { knowledgeUploadSchema, knowledgeQuerySchema } from "@/lib/validation/wo
 import { isAllowedMime } from "@/lib/attachments/mime";
 import {
   addKnowledgeDocument,
-  deleteKnowledgeDocument,
-  getKnowledgeDocument,
   getOrCreateKnowledgeBase,
   listKnowledgeDocuments,
   searchKnowledge,
 } from "@/lib/knowledge";
-import { isDriveStorageConfigured } from "@/lib/storage/drive-provider";
+import { deleteKnowledgeDocumentWithDriveSync } from "@/lib/knowledge/drive-delete";
 
 export async function GET() {
   const requestId = generateRequestId();
@@ -56,6 +54,48 @@ export async function POST(request: Request) {
   }
 }
 
+function knowledgeDeleteError(error: unknown, requestId: string) {
+  const code = error instanceof Error ? error.message : "DELETE_FAILED";
+
+  switch (code) {
+    case "DOCUMENT_NOT_FOUND":
+      return apiError("NOT_FOUND", "Документ не найден", 404, requestId);
+    case "GOOGLE_DRIVE_NOT_CONFIGURED":
+      return apiError(
+        code,
+        "Google Drive недоступен: документ оставлен в базе, чтобы не потерять ссылку на оригинал",
+        503,
+        requestId,
+      );
+    case "DRIVE_FILE_ID_MISSING":
+      return apiError(
+        code,
+        "Не удалось определить файл Google Drive. Документ не удалён из базы, чтобы не оставить файл-сироту",
+        409,
+        requestId,
+      );
+    case "DRIVE_DELETE_PERMISSION_DENIED":
+      return apiError(code, "Нет прав на удаление оригинала из Google Drive", 403, requestId);
+    case "DRIVE_DELETE_NOT_CONFIRMED":
+    case "DRIVE_DUPLICATE_DELETE_NOT_CONFIRMED":
+      return apiError(
+        code,
+        "Google Drive не подтвердил удаление оригинала. Запись в базе сохранена",
+        409,
+        requestId,
+      );
+    case "DRIVE_DELETE_FAILED":
+      return apiError(
+        code,
+        "Не удалось удалить оригинал из Google Drive. Запись в базе сохранена",
+        502,
+        requestId,
+      );
+    default:
+      return apiError("DELETE_FAILED", "Не удалось удалить документ из базы знаний и Google Drive", 500, requestId);
+  }
+}
+
 export async function DELETE(request: Request) {
   const requestId = generateRequestId();
   const user = await getSessionUser();
@@ -66,24 +106,10 @@ export async function DELETE(request: Request) {
   if (!id) return apiError("VALIDATION_ERROR", "id обязателен", 400, requestId);
 
   try {
-    const document = await getKnowledgeDocument(user.id, id);
-    if (!document) return apiError("NOT_FOUND", "Документ не найден", 404, requestId);
-
-    // A Drive-backed record is deliberately kept if Drive cleanup cannot run.
-    // This prevents losing the only pointer to an orphaned remote file.
-    if (document.drive_file_id && !isDriveStorageConfigured()) {
-      return apiError(
-        "GOOGLE_DRIVE_NOT_CONFIGURED",
-        "Google Drive недоступен: документ не удалён, чтобы не оставить файл-сироту",
-        503,
-        requestId,
-      );
-    }
-
-    await deleteKnowledgeDocument(user.id, id);
-    return apiSuccess({ deleted: true });
-  } catch {
-    return apiError("DELETE_FAILED", "Не удалось удалить документ из базы знаний и Google Drive", 500, requestId);
+    const result = await deleteKnowledgeDocumentWithDriveSync(user.id, id);
+    return apiSuccess({ deleted: true, ...result });
+  } catch (error) {
+    return knowledgeDeleteError(error, requestId);
   }
 }
 
