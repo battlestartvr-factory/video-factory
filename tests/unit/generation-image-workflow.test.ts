@@ -3,6 +3,7 @@ import type {
   DurableImageGeneration,
   GenerationImageRepository,
 } from "@/lib/orchestrator/generation-images";
+import type { GenerationVideoRepository } from "@/lib/orchestrator/generation-videos";
 import type { ProviderTaskRepository } from "@/lib/orchestrator/provider-tasks";
 import {
   KieMarketTaskError,
@@ -93,7 +94,9 @@ function services(input: {
     value: {
       providerTasks,
       generationImages,
+      generationVideos: {} as GenerationVideoRepository,
       kieMarketTask: market,
+      kieVeoTask: null,
       appUrl: "https://factory.example.test",
     } satisfies WorkflowServices,
     mocks: {
@@ -248,7 +251,11 @@ describe("generation_image@1 lifecycle", () => {
     expect(setup.mocks.complete).toHaveBeenCalledOnce();
   });
 
-  it("is registered alongside the free core smoke workflow", () => {
-    expect(listRegisteredWorkflows()).toEqual(["core_smoke@1", "generation_image@1"]);
+  it("registers image and video durable generation workflows", () => {
+    expect(listRegisteredWorkflows()).toEqual([
+      "core_smoke@1",
+      "generation_image@1",
+      "generation_video@1",
+    ]);
   });
 });
