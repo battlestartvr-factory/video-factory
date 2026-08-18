@@ -89,7 +89,7 @@ export async function POST(request: Request) {
       },
     },
     {
-      status: failures.length === 0 ? 200 : 207,
+      status: failures.length === 0 ? 200 : 500,
       headers: { "Cache-Control": "no-store" },
     },
   );
