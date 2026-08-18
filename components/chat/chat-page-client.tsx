@@ -25,6 +25,13 @@ interface ChatPageClientProps {
   projectId?: string;
 }
 
+interface PendingChatAttempt {
+  chat: Chat;
+  filesKey: string;
+  attachmentIds: string[];
+  uploadTokens: string[];
+}
+
 const EMPTY_MESSAGES: ChatMessage[] = [];
 
 function optimisticUserMessage(chatId: string, content: string): ChatMessage {
@@ -38,12 +45,14 @@ function optimisticUserMessage(chatId: string, content: string): ChatMessage {
   };
 }
 
+function getFilesKey(files: File[]): string {
+  return files.map((file) => `${file.name}:${file.size}:${file.lastModified}:${file.type}`).join("|");
+}
+
 export function ChatPageClient({ chatId: chatIdProp, projectId }: ChatPageClientProps) {
   const router = useRouter();
   const params = useParams();
-  const routeChatId =
-    chatIdProp ??
-    (typeof params.chatId === "string" ? params.chatId : undefined);
+  const routeChatId = chatIdProp ?? (typeof params.chatId === "string" ? params.chatId : undefined);
   const [pendingChatId, setPendingChatId] = useState<string | undefined>();
   const chatId = routeChatId ?? pendingChatId;
   const [chat, setChat] = useState<Chat | null>(null);
@@ -60,6 +69,7 @@ export function ChatPageClient({ chatId: chatIdProp, projectId }: ChatPageClient
   const recentChats = useRecentChatsOptional();
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fetchGenerationRef = useRef(0);
+  const pendingChatAttemptRef = useRef<PendingChatAttempt | null>(null);
   const displayedChat = chat?.id === chatId ? chat : null;
 
   const scrollToBottom = useCallback(() => {
@@ -119,6 +129,7 @@ export function ChatPageClient({ chatId: chatIdProp, projectId }: ChatPageClient
     });
     const data = await res.json();
     if (data.ok) {
+      pendingChatAttemptRef.current = null;
       setPendingChatId(data.data.id);
       setChat(data.data);
       recentChats?.prependChat({ id: data.data.id, title: data.data.title });
@@ -127,18 +138,23 @@ export function ChatPageClient({ chatId: chatIdProp, projectId }: ChatPageClient
     }
   };
 
-  const uploadAttachments = async (activeChatId: string, files: File[]): Promise<string[]> => {
+  const uploadAttachments = async (
+    activeChatId: string,
+    files: File[],
+    uploadTokens: string[],
+  ): Promise<string[]> => {
     const ids: string[] = [];
-    for (const file of files) {
+    for (const [index, file] of files.entries()) {
       const form = new FormData();
       form.append("file", file);
       const res = await fetch(`/api/chats/${activeChatId}/attachments`, {
         method: "POST",
+        headers: uploadTokens[index] ? { "X-Upload-Token": uploadTokens[index] } : undefined,
         body: form,
       });
-      const data = await res.json();
-      if (!data.ok || !data.data?.attachmentId) {
-        throw new Error(data.error?.message ?? `Не удалось загрузить ${file.name}`);
+      const data = await res.json().catch(() => null);
+      if (!res.ok || !data?.ok || !data.data?.attachmentId) {
+        throw new Error(data?.error?.message ?? `Не удалось загрузить ${file.name}`);
       }
       ids.push(data.data.attachmentId as string);
     }
@@ -148,74 +164,103 @@ export function ChatPageClient({ chatId: chatIdProp, projectId }: ChatPageClient
   const handleSend = async (
     content: string,
     options: { modelId?: string; reasoningLevel?: string; files: File[] },
-  ) => {
-    if (sending) return;
+  ): Promise<boolean> => {
+    if (sending) return false;
+    setSending(true);
     setSendError(null);
     setLiveActivity([]);
 
+    const newChatTurn = !chatId;
+    const currentFilesKey = getFilesKey(options.files);
     let activeChatId = chatId;
-    if (!activeChatId) {
-      const res = await fetch("/api/chats", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ projectId: projectId ?? null, modelId: options.modelId }),
-      });
-      const data = await res.json();
-      if (!data.ok) {
-        setSendError({ code: data.error?.code, message: data.error?.message ?? t("common.error") });
-        return;
-      }
-      activeChatId = data.data.id as string;
+    let provisionalChat: Chat | null = null;
+    let optimistic: ChatMessage | null = null;
+    let accepted = false;
+
+    const commitNewChat = () => {
+      if (!newChatTurn || !activeChatId || !provisionalChat || accepted) return;
+      accepted = true;
+      pendingChatAttemptRef.current = null;
       setPendingChatId(activeChatId);
-      setChat(data.data);
-      recentChats?.prependChat({ id: data.data.id, title: data.data.title });
-    }
-
-    if (!activeChatId) return;
-    setSending(true);
-
-    let attachmentIds: string[] = [];
-    try {
-      if (options.files.length) {
-        setLiveActivity([{ type: "attachment.upload", label: "● Загружаю и разбираю источник…", status: "running" }]);
-        attachmentIds = await uploadAttachments(activeChatId, options.files);
-        setLiveActivity([{ type: "attachment.uploaded", label: "✓ Источник готов", status: "completed" }]);
-      }
-    } catch (error) {
-      setSendError({ message: error instanceof Error ? error.message : "Не удалось загрузить документ" });
-      setSending(false);
-      setLiveActivity([]);
-      return;
-    }
-
-    const optimistic = optimisticUserMessage(activeChatId, content);
-    setMessagesByChat((prev) => ({
-      ...prev,
-      [activeChatId!]: mergeMessagesById(prev[activeChatId!] ?? [], [optimistic]),
-    }));
-
-    const appendActivity = (event: StreamEvent) => {
-      if (!event.label && event.type !== "agent.run.started") return;
-      setLiveActivity((prev) => {
-        const next: AgentUiEvent = {
-          type: event.type,
-          toolName: event.toolName,
-          label: event.label ?? (event.type === "agent.run.started" ? "● Думаю…" : undefined),
-          status: event.type.includes("failed")
-            ? "failed"
-            : event.type.includes("completed") || event.summary?.startsWith("✓")
-              ? "completed"
-              : "running",
-        };
-        const key = `${next.type}-${next.toolName ?? ""}-${next.label ?? ""}`;
-        const filtered = prev.filter(
-          (item) => `${item.type}-${item.toolName ?? ""}-${item.label ?? ""}` !== key,
-        );
-        return [...filtered, next];
-      });
+      setChat(provisionalChat);
+      recentChats?.prependChat({ id: provisionalChat.id, title: provisionalChat.title });
+      router.push(`/chat/${activeChatId}`);
     };
 
     try {
+      let pendingAttempt = newChatTurn ? pendingChatAttemptRef.current : null;
+      if (!activeChatId) {
+        if (pendingAttempt) {
+          activeChatId = pendingAttempt.chat.id;
+          provisionalChat = pendingAttempt.chat;
+        } else {
+          const res = await fetch("/api/chats", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ projectId: projectId ?? null, modelId: options.modelId }),
+          });
+          const data = await res.json();
+          if (!data.ok) {
+            setSendError({ code: data.error?.code, message: data.error?.message ?? t("common.error") });
+            return false;
+          }
+          provisionalChat = data.data as Chat;
+          activeChatId = provisionalChat.id;
+          pendingAttempt = {
+            chat: provisionalChat,
+            filesKey: currentFilesKey,
+            attachmentIds: [],
+            uploadTokens: options.files.map(() => crypto.randomUUID()),
+          };
+          pendingChatAttemptRef.current = pendingAttempt;
+        }
+      }
+
+      if (!activeChatId) return false;
+
+      let attachmentIds: string[] = [];
+      if (pendingAttempt && pendingAttempt.filesKey !== currentFilesKey) {
+        pendingAttempt.filesKey = currentFilesKey;
+        pendingAttempt.attachmentIds = [];
+        pendingAttempt.uploadTokens = options.files.map(() => crypto.randomUUID());
+      }
+      if (pendingAttempt?.attachmentIds.length === options.files.length) {
+        attachmentIds = pendingAttempt.attachmentIds;
+      } else if (options.files.length) {
+        setLiveActivity([{ type: "attachment.upload", label: "● Загружаю и разбираю источник…", status: "running" }]);
+        const tokens = pendingAttempt?.uploadTokens.length === options.files.length
+          ? pendingAttempt.uploadTokens
+          : options.files.map(() => crypto.randomUUID());
+        if (pendingAttempt) pendingAttempt.uploadTokens = tokens;
+        attachmentIds = await uploadAttachments(activeChatId, options.files, tokens);
+        if (pendingAttempt) pendingAttempt.attachmentIds = attachmentIds;
+        setLiveActivity([{ type: "attachment.uploaded", label: "✓ Источник готов", status: "completed" }]);
+      }
+
+      optimistic = optimisticUserMessage(activeChatId, content);
+      setMessagesByChat((prev) => ({
+        ...prev,
+        [activeChatId!]: mergeMessagesById(prev[activeChatId!] ?? [], [optimistic!]),
+      }));
+
+      const appendActivity = (event: StreamEvent) => {
+        if (!event.label && event.type !== "agent.run.started") return;
+        setLiveActivity((prev) => {
+          const next: AgentUiEvent = {
+            type: event.type,
+            toolName: event.toolName,
+            label: event.label ?? (event.type === "agent.run.started" ? "● Думаю…" : undefined),
+            status: event.type.includes("failed")
+              ? "failed"
+              : event.type.includes("completed") || event.summary?.startsWith("✓")
+                ? "completed"
+                : "running",
+          };
+          const key = `${next.type}-${next.toolName ?? ""}-${next.label ?? ""}`;
+          return [...prev.filter((item) => `${item.type}-${item.toolName ?? ""}-${item.label ?? ""}` !== key), next];
+        });
+      };
+
       const res = await fetch(`/api/chats/${activeChatId}/messages?stream=1`, {
         method: "POST",
         cache: "no-store",
@@ -232,6 +277,7 @@ export function ChatPageClient({ chatId: chatIdProp, projectId }: ChatPageClient
         const reader = res.body.getReader();
         const decoder = new TextDecoder();
         let buffer = "";
+        let messageAccepted = false;
         let turnResult: { userMessage: ChatMessage; assistantMessage: ChatMessage } | null = null;
 
         while (true) {
@@ -247,7 +293,10 @@ export function ChatPageClient({ chatId: chatIdProp, projectId }: ChatPageClient
             if (!payload) continue;
             try {
               const event = JSON.parse(payload) as StreamEvent;
-              if (event.type === "turn.completed" && event.content) {
+              if (event.type === "message.accepted") {
+                messageAccepted = true;
+                commitNewChat();
+              } else if (event.type === "turn.completed" && event.content) {
                 turnResult = JSON.parse(event.content) as { userMessage: ChatMessage; assistantMessage: ChatMessage };
               } else {
                 appendActivity(event);
@@ -263,36 +312,50 @@ export function ChatPageClient({ chatId: chatIdProp, projectId }: ChatPageClient
             ...prev,
             [activeChatId!]: replaceOptimisticUserMessage(
               prev[activeChatId!] ?? [],
-              optimistic.id,
+              optimistic!.id,
               [turnResult!.userMessage, turnResult!.assistantMessage],
             ),
           }));
-        } else {
-          setSendError({ message: t("common.error") });
+          commitNewChat();
+          return true;
+        }
+        if (messageAccepted) {
+          setSendError({ message: "Сообщение сохранено, но поток ответа модели прервался. Обновите чат, чтобы проверить ответ." });
+          return true;
         }
       } else {
-        const data = await res.json();
-        if (data.ok) {
+        const data = await res.json().catch(() => null);
+        if (res.ok && data?.ok) {
           const userMessage = data.data.userMessage as ChatMessage;
           const assistantMessage = data.data.assistantMessage as ChatMessage;
           setMessagesByChat((prev) => ({
             ...prev,
             [activeChatId!]: replaceOptimisticUserMessage(
               prev[activeChatId!] ?? [],
-              optimistic.id,
+              optimistic!.id,
               [userMessage, assistantMessage],
             ),
           }));
-        } else {
-          setSendError({ code: data.error?.code, message: data.error?.message ?? t("common.error") });
+          commitNewChat();
+          return true;
         }
+        setSendError({ code: data?.error?.code, message: data?.error?.message ?? t("common.error") });
       }
-    } catch {
-      setSendError({ message: t("common.error") });
+
+      if (optimistic) {
+        setMessagesByChat((prev) => ({
+          ...prev,
+          [activeChatId!]: (prev[activeChatId!] ?? []).filter((item) => item.id !== optimistic!.id),
+        }));
+      }
+      if (!sendError) setSendError({ message: t("common.error") });
+      return false;
+    } catch (error) {
+      setSendError({ message: error instanceof Error ? error.message : t("common.error") });
+      return false;
     } finally {
       setSending(false);
       setLiveActivity([]);
-      if (!chatId && activeChatId) router.push(`/chat/${activeChatId}`);
     }
   };
 
@@ -302,9 +365,7 @@ export function ChatPageClient({ chatId: chatIdProp, projectId }: ChatPageClient
         <div className="flex flex-1 items-center justify-center px-2 pb-[14vh] pt-8 sm:px-4">
           <div className="w-full max-w-4xl">
             <div className="mx-auto mb-6 max-w-3xl px-4">
-              <h1 className="text-center text-2xl font-semibold tracking-tight text-foreground sm:text-3xl">
-                Над чем поработаем?
-              </h1>
+              <h1 className="text-center text-2xl font-semibold tracking-tight text-foreground sm:text-3xl">Над чем поработаем?</h1>
             </div>
             <ChatComposer onSend={handleSend} disabled={sending} variant="hero" autoFocus />
             {sendError ? <div className="mx-auto mt-4 max-w-3xl px-4"><ErrorCard error={sendError} /></div> : null}
