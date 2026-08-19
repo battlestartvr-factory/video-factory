@@ -222,6 +222,48 @@ function normalizeClutter(value: unknown): unknown {
   return ["low", "medium", "high"].includes(key) ? key : value;
 }
 
+function evidenceText(normalized: Record<string, unknown>): string {
+  return [
+    normalized.currentPlayerAction,
+    normalized.teammateRole,
+    normalized.coreAction,
+    normalized.gameResponse,
+    normalized.primaryFocus,
+    normalized.secondaryFocus,
+    normalized.gameplayDescription,
+    normalized.whyThisLooksLikeGameplay,
+  ]
+    .filter((value): value is string => typeof value === "string")
+    .join(" ")
+    .toLowerCase();
+}
+
+const EXPLICIT_SHARED_OBJECT_EVIDENCE =
+  /\b(shared (?:object|item|load|cargo)|same (?:object|item|load|cargo)|both players|two players|jointly|tether|rope|chain|winch|carry together|lift together|pull together|push together)\b/i;
+const EXPLICIT_COOP_DEPENDENCY_EVIDENCE =
+  /\b(depend|depends|dependency|needs|requires|support|supports|stabiliz|counter[- ]?pull|hold(?:s|ing)? .* while|rescue|revive|tether|rope|chain|winch|shared (?:object|item|load|cargo)|same (?:object|item|load|cargo)|simultaneous|coordinate|coordination)\b/i;
+const EXPLICIT_COORDINATION_EVIDENCE =
+  /\b(coordinate|coordination|simultaneous|together|counter[- ]?pull|support|stabiliz|tether|rope|chain|winch|rescue|revive)\b/i;
+
+function applyCoopEvidenceConsistency(normalized: Record<string, unknown>): void {
+  const text = evidenceText(normalized);
+  if (normalized.sharedObjectVisible === true && !EXPLICIT_SHARED_OBJECT_EVIDENCE.test(text)) {
+    normalized.sharedObjectVisible = false;
+  }
+
+  const dependencyExplicit =
+    EXPLICIT_COOP_DEPENDENCY_EVIDENCE.test(text) ||
+    normalized.rescueVisible === true ||
+    normalized.informationAsymmetryVisible === true;
+  if (normalized.coopDependencyVisible === true && !dependencyExplicit) {
+    normalized.coopDependencyVisible = false;
+  }
+
+  if (normalized.coordinationVisible === true && !EXPLICIT_COORDINATION_EVIDENCE.test(text)) {
+    normalized.coordinationVisible = false;
+  }
+}
+
 const BOOLEAN_FIELDS = [
   "playableCharacterVisible",
   "handsVisible",
@@ -278,6 +320,7 @@ export function normalizeGameplayReferenceCaptionPayload(value: unknown): unknow
     normalized[field] = normalizeEvidenceBoolean(normalized[field]);
   }
   for (const field of OPTIONAL_TEXT_FIELDS) normalized[field] = normalizeOptionalText(normalized[field]);
+  applyCoopEvidenceConsistency(normalized);
 
   return normalized;
 }
@@ -319,7 +362,7 @@ export function materializeGameplayReferenceSpec(input: {
 }
 
 export function buildGameplayReferenceCaptionPrompt(gameName: string): string {
-  return `Analyze this image as a candidate REAL PC GAMEPLAY reference for ${gameName}. Return one JSON object only, with no prose or markdown.\n\nDo not infer marketing intent from the game name. Inspect only what is visibly supported by the frame. A gameplay screenshot is not key art, concept art, a cinematic trailer frame, photo mode, or a detached spectator composition.\n\nRequired fields:\n- cameraType: first_person | third_person_follow | over_shoulder | top_down | fixed_gameplay | other\n- cameraDistance, cameraHeight, fovEstimate, playableCharacterVisible, handsVisible, heldToolVisible, crosshairVisible, hudVisible\n- controllablePlayerObvious, howPlayerControlIsVisible, currentPlayerAction, visibleInputAffordance, playerTarget, gameResponse\n- teammateCountVisible, teammateDistance, teammateRole, coopDependencyVisible, sharedObjectVisible, informationAsymmetryVisible, rescueVisible, coordinationVisible\n- coreAction, mechanicTags[], interactionModel[], dangerSource, failureRisk, successState, physicsInteraction, environmentType\n- primaryFocus, secondaryFocus, readableWithoutContext, visibleGoal, visibleRisk, uiSupportsAction, visualClutter: low | medium | high\n- artDirection, realismLevel, productionScopeFeel: indie | AA | AAA, stylizationTags[]\n- gameplayDescription: concrete description of what the controllable player is doing now, what is in front of them, what a teammate is doing, where the risk is, and what UI/affordance helps read the action\n- whyThisLooksLikeGameplay: concrete evidence that the camera, player embodiment, interaction distance, affordance, teammate framing, and world response read as active gameplay.\n\nType rules: all visibility/readability flags must be JSON booleans true/false, never descriptive strings. If visibility/readability is uncertain, use false. fovEstimate must be a JSON number in degrees or null, never a string. visibleInputAffordance must always be a string; use the literal string ${GAMEPLAY_REFERENCE_NONE_VISIBLE} if no explicit input affordance is visible. Use null only for genuinely unobservable optional text/number values. Do not invent a HUD, input, teammate, risk, or physical response that is not visible.`;
+  return `Analyze this image as a candidate REAL PC GAMEPLAY reference for ${gameName}. Return one JSON object only, with no prose or markdown.\n\nDo not infer marketing intent from the game name. Inspect only what is visibly supported by the frame. A gameplay screenshot is not key art, concept art, a cinematic trailer frame, photo mode, or a detached spectator composition.\n\nRequired fields:\n- cameraType: first_person | third_person_follow | over_shoulder | top_down | fixed_gameplay | other\n- cameraDistance, cameraHeight, fovEstimate, playableCharacterVisible, handsVisible, heldToolVisible, crosshairVisible, hudVisible\n- controllablePlayerObvious, howPlayerControlIsVisible, currentPlayerAction, visibleInputAffordance, playerTarget, gameResponse\n- teammateCountVisible, teammateDistance, teammateRole, coopDependencyVisible, sharedObjectVisible, informationAsymmetryVisible, rescueVisible, coordinationVisible\n- coreAction, mechanicTags[], interactionModel[], dangerSource, failureRisk, successState, physicsInteraction, environmentType\n- primaryFocus, secondaryFocus, readableWithoutContext, visibleGoal, visibleRisk, uiSupportsAction, visualClutter: low | medium | high\n- artDirection, realismLevel, productionScopeFeel: indie | AA | AAA, stylizationTags[]\n- gameplayDescription: concrete description of what the controllable player is doing now, what is in front of them, what a teammate is doing, where the risk is, and what UI/affordance helps read the action\n- whyThisLooksLikeGameplay: concrete evidence that the camera, player embodiment, interaction distance, affordance, teammate framing, and world response read as active gameplay.\n\nType rules: all visibility/readability flags must be JSON booleans true/false, never descriptive strings. If visibility/readability is uncertain, use false. A teammate being present is NOT enough to mark coopDependencyVisible, sharedObjectVisible, or coordinationVisible true; those require visually explicit dependency such as both players acting on the same object, a tether/rope/chain, support/stabilization, rescue/revive, simultaneous action, or another directly visible dependency. fovEstimate must be a JSON number in degrees or null, never a string. visibleInputAffordance must always be a string; use the literal string ${GAMEPLAY_REFERENCE_NONE_VISIBLE} if no explicit input affordance is visible. Use null only for genuinely unobservable optional text/number values. Do not invent a HUD, input, teammate, risk, or physical response that is not visible.`;
 }
 
 export function buildGameplayReferenceEmbeddingText(reference: GameplayReferenceSpecV1): string {
