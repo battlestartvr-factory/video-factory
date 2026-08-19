@@ -1,5 +1,6 @@
 import { coreSmokeV1 } from "./core-smoke-v1";
 import { gameDiscoveryBatchStage4DurableV1 } from "./game-discovery-batch-stage4-durable-v1";
+import { gameplayReferenceIndexV1 } from "./gameplay-reference-index-v1";
 import { generationImageV1 } from "./generation-image-v1";
 import { generationVideoV1 } from "./generation-video-v1";
 import type { WorkflowTickHandler } from "./types";
@@ -7,6 +8,7 @@ import type { WorkflowTickHandler } from "./types";
 const registry = new Map<string, WorkflowTickHandler>([
   ["core_smoke@1", coreSmokeV1],
   ["game_discovery_batch@1", gameDiscoveryBatchStage4DurableV1],
+  ["gameplay_reference_index@1", gameplayReferenceIndexV1],
   ["generation_image@1", generationImageV1],
   ["generation_video@1", generationVideoV1],
 ]);
