@@ -103,6 +103,15 @@ docker compose -f "$COMPOSE_FILE" build --pull
 log "Starting services"
 docker compose -f "$COMPOSE_FILE" up -d --remove-orphans
 
+log "Validating and reloading Caddy configuration"
+if ! docker compose -f "$COMPOSE_FILE" exec -T caddy caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile; then
+  fail "Caddy configuration validation failed"
+fi
+if ! docker compose -f "$COMPOSE_FILE" exec -T caddy caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile; then
+  fail "Caddy configuration reload failed"
+fi
+log "Caddy configuration reloaded"
+
 log "Verifying shared assembly workspace permissions"
 if ! docker compose -f "$COMPOSE_FILE" exec -T worker sh -lc '
   set -eu

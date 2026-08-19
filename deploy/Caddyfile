@@ -1,11 +1,5 @@
 # Production reverse proxy — TLS via Caddy automatic HTTPS (Let's Encrypt).
 
-# Legacy/typo hostname used by old bookmarks. Keep it harmless and route users
-# to the canonical production hostname instead of leaving them on a 502 page.
-battlestartvr-factory.duckdns.org {
-	redir https://battlestart-factory.duckdns.org{uri} permanent
-}
-
 battlestart-factory.duckdns.org {
 	encode gzip zstd
 
