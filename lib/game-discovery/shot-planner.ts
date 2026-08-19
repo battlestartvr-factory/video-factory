@@ -1,6 +1,10 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import type { KieClaudeGenerateResult, KieClaudeTaskAdapter } from "../models/kie/claude-task";
+import {
+  attachGameplayAuthenticitySpec,
+  gameplayAuthenticitySpecFromShot,
+} from "./gameplay-authenticity";
 import { getDiscoveryLlmPolicy } from "./model-policy";
 import {
   shotSpecV1Schema,
@@ -56,11 +60,28 @@ function extractJson(text: string): string {
 }
 
 function parse(text: string): ShotSpecV1[] {
-  return shotBatchSchema.parse(JSON.parse(extractJson(text)) as unknown).shots;
+  const shots = shotBatchSchema.parse(JSON.parse(extractJson(text)) as unknown).shots;
+  return shots.map((shot) => attachGameplayAuthenticitySpec(shot));
+}
+
+function authenticityInstructions(): string {
+  return `Every shot.metadata MUST contain gameplayAuthenticityPlan with this exact typed evidence contract:\n{
+  "schema":"gameplay_authenticity_plan","version":1,"shotId":"<same shotId>","momentId":"<same momentId>",
+  "controllablePlayer":{"role":"...","obvious":true,"viewpointPlausiblyPlayable":true,"scriptedCharactersOnly":false},
+  "camera":{"type":"first_person|third_person_follow|over_shoulder|top_down|fixed_gameplay|cinematic|spectator|drone|marketing_wide|detached_other","physicallyAttached":true,"gameplayCameraJustified":true,"visibleEvidence":"..."},
+  "playerInput":{"input":"specific mouse/keyboard/controller input or held action","visibleEvidence":"how the viewer can infer it","visible":true},
+  "playerAction":{"action":"what the controllable player does","target":"what they act on"},
+  "worldResponse":{"response":"immediate visible game-world response","causalResponseVisible":true},
+  "gameplayAffordances":[{"type":"hands|held_tool|crosshair|interaction_outline|stamina|angle_meter|inventory_hotbar|object_state|contextual_prompt|other","visible":true,"meaningful":true,"informationUsedByPlayer":"what decision/action this UI or object state supports"}],
+  "coop":{"dependencyVisible":true,"teammateFunction":"specific dependent function","visualEvidence":"how dependency is visible without narration"},
+  "physics":{"event":"...","consistent":true,"affectedEntities":["..."],"exceptions":[{"entity":"...","reason":"...","visualEvidence":"visible anchor/harness/clamp/etc"}]},
+  "readability":{"primaryActionReadable":true,"visibleGoal":true,"riskExpected":true,"visibleRisk":true,"visualClutter":"low|medium|high"}
+}.
+Do NOT invent a decorative HUD as an affordance. If a UI element does not carry information the player uses, set meaningful:false. Any entity exempt from the same physics event must have a visible physical reason.`;
 }
 
 function schemaInstructions(): string {
-  return `Return ONLY JSON {"shots":[...]}. Each shot must satisfy Gameplay Shot v1 exactly:\n- schema:"gameplay_shot", version:1, shotId, momentId, order:0\n- durationSec:5\n- purpose:"mechanic"|"failure"|"payoff" (prefer mechanic/failure for first evidence)\n- actors:string[] with all mechanically relevant player roles visible\n- action, camera, environment\n- continuity:{preserve:[]}\n- expectedEvidence:string[]\n- generationPlan:{keyframeRequired:true,imageModel:"nano-banana-2",videoModel:"kling-3",videoMode:"image-to-video",aspectRatio:"9:16",durationSec:5}\n- optional metadata object.\nFor each moment, copy EVERY string from moment.requiredVisualEvidence verbatim into shot.expectedEvidence. Produce exactly one shot per moment.`;
+  return `Return ONLY JSON {"shots":[...]}. Each shot must satisfy Gameplay Shot v1 exactly:\n- schema:"gameplay_shot", version:1, shotId, momentId, order:0\n- durationSec:5\n- purpose:"mechanic"|"failure"|"payoff" (prefer mechanic/failure for first evidence)\n- actors:string[] with all mechanically relevant player roles visible or represented inside the playable frame\n- action, camera, environment\n- continuity:{preserve:[]}\n- expectedEvidence:string[]\n- generationPlan:{keyframeRequired:true,imageModel:"nano-banana-2",videoModel:"kling-3",videoMode:"image-to-video",aspectRatio:"9:16",durationSec:5}\n- metadata.gameplayAuthenticityPlan is REQUIRED.\nFor each moment, copy EVERY string from moment.requiredVisualEvidence verbatim into shot.expectedEvidence. Produce exactly one shot per moment.\n\n${authenticityInstructions()}`;
 }
 
 function prompt(input: {
@@ -69,7 +90,7 @@ function prompt(input: {
   moments: GameplayMomentSpecV1[];
   feedback: DiscoveryFeedbackMemory;
 }): string {
-  return `Plan one five-second fake-gameplay evidence shot for each selected gameplay moment. This is not a trailer shot. It is a cheap reference-image/video anchor whose only job is to make the co-op mechanic understandable.\n\nDISCOVERY OBJECTIVE:\n${JSON.stringify(input.objective, null, 2)}\n\nSELECTED CONCEPTS:\n${JSON.stringify(input.concepts, null, 2)}\n\nGAMEPLAY MOMENTS:\n${JSON.stringify(input.moments, null, 2)}\n\nPERSISTED HUMAN FEEDBACK MEMORY:\n${JSON.stringify(input.feedback, null, 2)}\n\nRules:\n- show all player roles whose simultaneous actions prove the dependency;\n- prioritize readable gameplay framing over cinematic composition;\n- the visible consequence must fit inside one 5s shot;\n- preserve the game concept; do not invent a prettier replacement mechanic;\n- obey mustShow and mustAvoid feedback; explicit previous error tags are warnings against repeating rejected patterns;\n- expectedEvidence must include every requiredVisualEvidence item verbatim so coverage is mechanically auditable.\n\n${schemaInstructions()}`;
+  return `Plan one five-second fake-gameplay evidence shot for each selected gameplay moment. This is not a trailer shot. It must be plausible as a frame recorded by a person actively playing the game.\n\nDISCOVERY OBJECTIVE:\n${JSON.stringify(input.objective, null, 2)}\n\nSELECTED CONCEPTS:\n${JSON.stringify(input.concepts, null, 2)}\n\nGAMEPLAY MOMENTS:\n${JSON.stringify(input.moments, null, 2)}\n\nPERSISTED HUMAN FEEDBACK MEMORY:\n${JSON.stringify(input.feedback, null, 2)}\n\nRules:\n- choose an explicit controllable player; the camera belongs to that player's gameplay viewpoint;\n- default to first-person, third-person follow, or over-the-shoulder; top-down/fixed are allowed only when actually justified by the game design;\n- forbid cinematic, spectator, drone, marketing-wide, detached observer framing;\n- expose a visible PLAYER INPUT -> PLAYER ACTION -> WORLD RESPONSE chain;\n- include at least one meaningful gameplay affordance such as hands, held tool, crosshair, interaction outline, meter, hotbar, contextual prompt, or object state;\n- show why the teammate exists without pulling the camera into a wide marketing composition;\n- if physics affects one object/person but not another, show the physical reason for the exception;\n- show all mechanically necessary player roles or their direct visible evidence;\n- the visible consequence must fit inside one 5s shot;\n- preserve the game concept; do not invent a prettier replacement mechanic;\n- obey mustShow and mustAvoid feedback; explicit previous error tags are warnings against repeating rejected patterns;\n- expectedEvidence must include every requiredVisualEvidence item verbatim so coverage is mechanically auditable.\n\n${schemaInstructions()}`;
 }
 
 function validateCoverage(
@@ -106,10 +127,29 @@ function validateCoverage(
     ) {
       issues.push(`invalid_smoke_generation_plan:${moment.momentId}`);
     }
+
+    try {
+      const authenticity = gameplayAuthenticitySpecFromShot(shot);
+      if (authenticity.shotId !== shot.shotId || authenticity.momentId !== shot.momentId) {
+        issues.push(`authenticity_lineage_mismatch:${moment.momentId}`);
+      }
+      for (const failure of authenticity.hardFailures) {
+        issues.push(`gameplay_authenticity_failure:${moment.momentId}:${failure}`);
+      }
+      if (!authenticity.passed) {
+        issues.push(
+          `gameplay_authenticity_score_failed:${moment.momentId}:${authenticity.averageScore.toFixed(3)}`,
+        );
+      }
+    } catch (error) {
+      issues.push(
+        `gameplay_authenticity_contract_invalid:${moment.momentId}:${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
   }
 
   if (byMoment.size !== moments.length) issues.push(`shot_count_mismatch:${byMoment.size}/${moments.length}`);
-  return issues;
+  return [...new Set(issues)];
 }
 
 async function generateAndParse(input: {
@@ -142,7 +182,7 @@ async function generateAndParse(input: {
     const repair = await input.llm.generate({
       model: input.repairModel,
       system: "Repair JSON/schema only. Preserve the shot plan semantics. Return JSON only.",
-      prompt: `Repair the following shot response into valid ShotSpec v1 objects. Do not redesign the shots.\n\nINVALID RESPONSE:\n${response.text}\n\n${schemaInstructions()}`,
+      prompt: `Repair the following shot response into valid ShotSpec v1 objects including the required gameplayAuthenticityPlan evidence. Do not redesign the shots.\n\nINVALID RESPONSE:\n${response.text}\n\n${schemaInstructions()}`,
       maxTokens: repairPolicy.maxOutputTokens,
       thinking: false,
       signal: input.signal,
@@ -176,7 +216,7 @@ export async function planGameplayShots(input: {
   const hashes: string[] = [];
   const usage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
   const system =
-    "You are the economical Shot Planner inside an AI Co-op Game Discovery Factory. Plan readable gameplay evidence, not cinematic advertising. The first reference still must expose the mechanic clearly enough for a human to approve or reject before video generation.";
+    "You are the economical Shot Planner inside an AI Co-op Game Discovery Factory. Plan readable, physically plausible gameplay evidence, not cinematic advertising. You must make the controllable player, player input, world response and teammate dependency explicit enough for deterministic code to audit before any image provider is called.";
   const basePrompt = prompt({ ...input, feedback });
 
   let shots = await generateAndParse({
@@ -201,7 +241,7 @@ export async function planGameplayShots(input: {
       llm: input.llm,
       model: fallbackModel,
       system,
-      prompt: `${basePrompt}\n\nThe cheap draft failed deterministic evidence checks. Fix these exact issues, not the concept:\n${JSON.stringify(issues, null, 2)}`,
+      prompt: `${basePrompt}\n\nThe cheap draft failed deterministic gameplay-authenticity/evidence checks. Revise the shot itself so these exact defects are visibly solved. Do not merely change booleans in metadata and do not replace the concept:\n${JSON.stringify(issues, null, 2)}`,
       maxTokens: policy.maxOutputTokens,
       thinking: true,
       signal: input.signal,
@@ -212,7 +252,9 @@ export async function planGameplayShots(input: {
     issues = validateCoverage(shots, input.moments);
   }
 
-  if (issues.length) throw new Error(`SHOT_PLANNER_EVIDENCE_INVALID:${issues.join("|")}`);
+  if (issues.length) {
+    throw new Error(`SHOT_PLANNER_GAMEPLAY_AUTHENTICITY_INVALID:${issues.join("|")}`);
+  }
 
   const byMoment = new Map(shots.map((shot) => [shot.momentId, shot]));
   return {
