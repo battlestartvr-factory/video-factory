@@ -260,6 +260,22 @@ async function processClaimedDelivery(input: {
   }
 }
 
+function gameplayReferenceSyncIntervalMs(): number {
+  const raw = Number(process.env.GAMEPLAY_REFERENCE_DRIVE_SYNC_MS ?? 60_000);
+  if (!Number.isFinite(raw)) return 60_000;
+  return Math.max(Math.trunc(raw), 15_000);
+}
+
+function gameplayReferenceSyncBatchSize(): number {
+  const raw = Number(process.env.GAMEPLAY_REFERENCE_DRIVE_SYNC_MAX_NEW ?? 8);
+  if (!Number.isFinite(raw)) return 8;
+  return Math.min(Math.max(Math.trunc(raw), 1), 32);
+}
+
+function workerInternalAppUrl(): string {
+  return (process.env.WORKER_APP_INTERNAL_URL ?? "http://app:3000").trim() || "http://app:3000";
+}
+
 export async function runWorker(): Promise<void> {
   const config = loadWorkerConfig();
   const rpcClient = createWorkerRpcClient(config.supabaseUrl, config.serviceRoleKey);
@@ -285,6 +301,7 @@ export async function runWorker(): Promise<void> {
   let stopping = false;
   let activeAbort: AbortController | null = null;
   let watchdogInFlight = false;
+  let gameplayReferenceSyncInFlight = false;
 
   const stop = (signal: string) => {
     if (stopping) return;
@@ -342,8 +359,66 @@ export async function runWorker(): Promise<void> {
     }
   };
 
+  const runGameplayReferenceSync = async () => {
+    if (gameplayReferenceSyncInFlight || stopping) return;
+    gameplayReferenceSyncInFlight = true;
+    try {
+      const response = await fetch(`${workerInternalAppUrl()}/api/internal/gameplay-reference-sync`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${config.serviceRoleKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ maxNewFiles: gameplayReferenceSyncBatchSize() }),
+      });
+      const text = await response.text();
+      let payload: Record<string, unknown> = {};
+      try {
+        const parsed = JSON.parse(text) as unknown;
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+          payload = parsed as Record<string, unknown>;
+        }
+      } catch {
+        // Keep logs bounded and do not copy an upstream HTML body.
+      }
+      if (!response.ok || payload.ok !== true) {
+        throw new Error(
+          `GAMEPLAY_REFERENCE_DRIVE_SYNC_HTTP_FAILED:${String(payload.code ?? response.status)}`,
+        );
+      }
+      const data =
+        payload.data && typeof payload.data === "object" && !Array.isArray(payload.data)
+          ? (payload.data as Record<string, unknown>)
+          : {};
+      if (
+        Number(data.registered ?? 0) > 0 ||
+        Number(data.indexJobsEnqueued ?? 0) > 0 ||
+        Number(data.exactDuplicates ?? 0) > 0 ||
+        Number(data.failed ?? 0) > 0
+      ) {
+        workerLog("info", "gameplay_reference.drive_sync", {
+          worker_id: config.workerId,
+          ...data,
+        });
+      }
+    } catch (error) {
+      workerLog("error", "gameplay_reference.drive_sync_failed", {
+        worker_id: config.workerId,
+        error: errorPayload(error),
+      });
+    } finally {
+      gameplayReferenceSyncInFlight = false;
+    }
+  };
+
   await runWatchdog();
   const watchdogTimer = setInterval(() => void runWatchdog(), config.watchdogMs);
+
+  await runGameplayReferenceSync();
+  const gameplayReferenceSyncTimer = setInterval(
+    () => void runGameplayReferenceSync(),
+    gameplayReferenceSyncIntervalMs(),
+  );
 
   workerLog("info", "orchestrator.worker.started", {
     worker_id: config.workerId,
@@ -353,6 +428,8 @@ export async function runWorker(): Promise<void> {
     visibility_seconds: config.visibilitySeconds,
     watchdog_ms: config.watchdogMs,
     max_attempts: config.maxAttempts,
+    gameplay_reference_drive_sync_ms: gameplayReferenceSyncIntervalMs(),
+    gameplay_reference_drive_sync_max_new: gameplayReferenceSyncBatchSize(),
   });
 
   try {
@@ -430,6 +507,7 @@ export async function runWorker(): Promise<void> {
   } finally {
     clearInterval(workerHeartbeatTimer);
     clearInterval(watchdogTimer);
+    clearInterval(gameplayReferenceSyncTimer);
     workerLog("info", "orchestrator.worker.stopped", { worker_id: config.workerId });
   }
 }
