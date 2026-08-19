@@ -3,6 +3,7 @@ import type { DriveStorageProvider } from "@/lib/storage/drive-provider";
 import { getDriveStorageProvider } from "@/lib/storage/drive-provider";
 
 export const GAMEPLAY_REFERENCE_LIBRARY_ROOT_SEGMENTS = [
+  "AI Co-op Game Discovery Factory",
   "References",
   "Gameplay",
 ] as const;
@@ -50,10 +51,7 @@ export function resolveGameplayReferenceMediaFolderSegments(
   gameName: string,
   mediaFolder: GameplayReferenceMediaFolder,
 ): string[] {
-  return [
-    ...resolveGameplayReferenceGameFolderSegments(gameName),
-    mediaFolder,
-  ];
+  return [...resolveGameplayReferenceGameFolderSegments(gameName), mediaFolder];
 }
 
 export interface GameplayReferenceGameFolderIds {
