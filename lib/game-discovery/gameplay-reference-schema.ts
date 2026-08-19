@@ -16,6 +16,7 @@ export const gameplayReferenceSourceTypeSchema = z.enum([
   "official_gameplay_trailer",
   "developer_youtube",
   "gameplay_capture",
+  "manual_drive_upload",
   "other",
 ]);
 
