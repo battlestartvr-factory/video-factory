@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { compileGameplayPromptPlan } from "../../lib/game-discovery/prompt-compiler";
 import { stage4GameplayReferenceSetSchema } from "../../lib/game-discovery/gameplay-reference-stage4";
+import type {
+  CoopGameConceptSpecV1,
+  GameplayMomentSpecV1,
+  ShotSpecV1,
+} from "../../lib/game-discovery/schemas";
 
 const refs = stage4GameplayReferenceSetSchema.parse({
   schema: "stage4_gameplay_reference_set",
@@ -13,8 +18,10 @@ const refs = stage4GameplayReferenceSetSchema.parse({
     driveFileId: `drive-${i}`,
     score: 0.8,
     whySelected: ["match"],
-    gameplayDescription: "A player-bound camera shows an active input, a target and a visible world response while a teammate remains inside playable distance.",
-    whyThisLooksLikeGameplay: "The camera and affordance belong to the controllable player and the world responds to the visible action.",
+    gameplayDescription:
+      "A player-bound camera shows an active input, a target and a visible world response while a teammate remains inside playable distance.",
+    whyThisLooksLikeGameplay:
+      "The camera and affordance belong to the controllable player and the world responds to the visible action.",
   })),
 });
 
@@ -27,7 +34,7 @@ const concept = {
   coopDependency: "One cuts while one stabilizes.",
   artDirection: "Stylized indie / AA.",
   readability: "Tool, teammate, target and response are readable.",
-} as any;
+} as unknown as CoopGameConceptSpecV1;
 
 const moment = {
   schema: "gameplay_moment",
@@ -39,7 +46,7 @@ const moment = {
   coopDependencyEvidence: "The stabilizer counters the cutter's world change.",
   socialTension: "The load starts sliding.",
   requiredVisualEvidence: ["held tool", "target clamp", "teammate", "tilt response"],
-} as any;
+} as unknown as GameplayMomentSpecV1;
 
 const shot = {
   schema: "gameplay_shot",
@@ -53,7 +60,7 @@ const shot = {
   expectedEvidence: ["held tool", "target clamp", "teammate", "tilt response"],
   durationSec: 5,
   generationPlan: { imageModel: "nano-banana-2", videoModel: "kling-3" },
-} as any;
+} as unknown as ShotSpecV1;
 
 describe("gameplay prompt reference lineage", () => {
   it("explains ordered reference purposes and persists the selected set", () => {
@@ -61,7 +68,8 @@ describe("gameplay prompt reference lineage", () => {
     expect(plan.imagePrompt).toContain("PURPOSE-LABELED REAL GAMEPLAY REFERENCES");
     expect(plan.imagePrompt).toContain("Reference A — GAMEPLAY_CAMERA");
     expect(plan.imagePrompt).toContain("captured while a person is actively playing");
-    expect((plan.metadata as any).gameplay_reference_set).toEqual(refs);
-    expect((plan.metadata as any).gameplay_reference_count).toBe(4);
+    const metadata = plan.metadata as Record<string, unknown>;
+    expect(metadata.gameplay_reference_set).toEqual(refs);
+    expect(metadata.gameplay_reference_count).toBe(4);
   });
 });
