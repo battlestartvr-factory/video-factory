@@ -142,7 +142,7 @@ describe("Stage 4 game discovery schemas", () => {
         imageModel: "gpt-image-2" as const,
         videoModel: "kling-3",
         videoMode: "image-to-video" as const,
-        aspectRatio: "9:16" as const,
+        aspectRatio: "16:9" as const,
         durationSec: 5,
       },
     };
