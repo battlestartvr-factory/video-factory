@@ -194,7 +194,7 @@ const shotGenerationPlanSchema = z
       .optional(),
     videoModel: shortText,
     videoMode: z.enum(["text-to-video", "image-to-video"]),
-    aspectRatio: z.literal("9:16"),
+    aspectRatio: z.literal("16:9"),
     durationSec: z.number().min(3).max(15),
   })
   .strict()
