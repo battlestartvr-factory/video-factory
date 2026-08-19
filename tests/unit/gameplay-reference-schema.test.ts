@@ -77,6 +77,8 @@ function validImageReference() {
   };
 }
 
+const archiveRoot = ["AI Co-op Game Discovery Factory", "References", "Gameplay"];
+
 describe("Gameplay Reference Library v1 foundation", () => {
   it("validates a concrete real-gameplay image reference", () => {
     const parsed = gameplayReferenceSpecV1Schema.parse(validImageReference());
@@ -134,8 +136,7 @@ describe("Gameplay Reference Library v1 foundation", () => {
     expect(GAMEPLAY_REFERENCE_SEED_GAMES_V1).toContain("Abiotic Factor");
 
     expect(resolveGameplayReferenceMediaFolderSegments("Future Game", "Screenshots")).toEqual([
-      "References",
-      "Gameplay",
+      ...archiveRoot,
       "Games",
       "Future Game",
       "Screenshots",
@@ -161,16 +162,17 @@ describe("Gameplay Reference Library v1 foundation", () => {
       games: ["R.E.P.O.", "PEAK"],
     });
 
-    expect(hierarchy.gameplayRootFolderId).toBe("id:References/Gameplay");
+    expect(hierarchy.gameplayRootFolderId).toBe(
+      "id:AI Co-op Game Discovery Factory/References/Gameplay",
+    );
     expect(hierarchy.games["R.E.P.O."].screenshotsFolderId).toBe(
-      "id:References/Gameplay/Games/R.E.P.O./Screenshots",
+      "id:AI Co-op Game Discovery Factory/References/Gameplay/Games/R.E.P.O./Screenshots",
     );
     expect(hierarchy.games.PEAK.gameplayClipsFolderId).toBe(
-      "id:References/Gameplay/Games/PEAK/Gameplay Clips",
+      "id:AI Co-op Game Discovery Factory/References/Gameplay/Games/PEAK/Gameplay Clips",
     );
     expect(ensureFolderPath).toHaveBeenCalledWith([
-      "References",
-      "Gameplay",
+      ...archiveRoot,
       "Games",
       "R.E.P.O.",
       "Other References",
