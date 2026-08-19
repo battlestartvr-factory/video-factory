@@ -22,6 +22,8 @@ export class KieMarketTaskError extends Error {
     message: string,
     readonly retryable: boolean,
     readonly ambiguousSubmit = false,
+    readonly providerCode: number | string | null = null,
+    readonly providerMessage: string | null = null,
   ) {
     super(message);
     this.name = "KieMarketTaskError";
@@ -51,6 +53,13 @@ function parseResultUrls(value: unknown): string[] {
 
 function retryableHttpStatus(status: number): boolean {
   return status === 408 || status === 429 || status >= 500;
+}
+
+function safeProviderMessage(payload: Record<string, unknown>): string | null {
+  const value = payload.msg ?? payload.message;
+  if (typeof value !== "string") return null;
+  const normalized = value.replace(/\s+/g, " ").trim();
+  return normalized ? normalized.slice(0, 1_000) : null;
 }
 
 async function parseJsonResponse(response: Response): Promise<Record<string, unknown>> {
@@ -104,11 +113,18 @@ export class KieMarketTaskAdapter {
     }
 
     const payload = await parseJsonResponse(response);
+    const providerMessage = safeProviderMessage(payload);
+    const rawCode = payload.code;
+    const providerCode =
+      typeof rawCode === "number" || typeof rawCode === "string" ? rawCode : null;
+
     if (!response.ok) {
       throw new KieMarketTaskError(
-        `KIE createTask failed (HTTP ${response.status})`,
+        `KIE createTask failed (HTTP ${response.status})${providerMessage ? `: ${providerMessage}` : ""}`,
         retryableHttpStatus(response.status),
         false,
+        providerCode,
+        providerMessage,
       );
     }
 
@@ -117,8 +133,11 @@ export class KieMarketTaskAdapter {
     const taskId = typeof data.taskId === "string" ? data.taskId : null;
     if (code !== 200 || !taskId) {
       throw new KieMarketTaskError(
-        `KIE createTask returned no accepted task id (code=${String(code)})`,
+        `KIE createTask rejected (code=${String(code)})${providerMessage ? `: ${providerMessage}` : ""}`,
         false,
+        false,
+        providerCode,
+        providerMessage,
       );
     }
 
