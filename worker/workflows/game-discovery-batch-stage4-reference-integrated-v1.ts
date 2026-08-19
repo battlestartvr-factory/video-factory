@@ -1,16 +1,19 @@
 import { createHash } from "node:crypto";
+import {
+  buildGameplayVideoMotionPlan,
+  gameplayAuthenticitySpecFromShot,
+  type GameplayAuthenticitySpecV1,
+  type GameplayVideoMotionPlanV1,
+} from "../../lib/game-discovery/gameplay-authenticity";
 import { compileGameplayPromptPlans } from "../../lib/game-discovery/prompt-compiler";
 import {
   stage4GameplayReferenceSetSchema,
   type Stage4GameplayReferenceSet,
 } from "../../lib/game-discovery/gameplay-reference-stage4";
-import {
-  coopGameConceptSpecV1Schema,
-  gameplayMomentSpecV1Schema,
-  shotSpecV1Schema,
-  type CoopGameConceptSpecV1,
-  type GameplayMomentSpecV1,
-  type ShotSpecV1,
+import type {
+  CoopGameConceptSpecV1,
+  GameplayMomentSpecV1,
+  ShotSpecV1,
 } from "../../lib/game-discovery/schemas";
 import { DurableWorkflowError } from "../../lib/orchestrator/retry";
 import { gameDiscoveryBatchStage4DurableV1 } from "./game-discovery-batch-stage4-durable-v1";
@@ -67,7 +70,7 @@ async function callStage4ReferenceService<T>(body: Record<string, unknown>, sign
   try {
     payload = JSON.parse(raw) as typeof payload;
   } catch {
-    // Keep errors deterministic; do not expose an upstream HTML body.
+    // Keep errors deterministic; do not expose upstream HTML.
   }
   if (!response.ok || payload.ok !== true || !payload.data) {
     throw new Error(
@@ -84,12 +87,7 @@ async function retrieveReferenceSet(input: {
   signal: AbortSignal;
 }): Promise<Stage4GameplayReferenceSet> {
   const data = await callStage4ReferenceService<{ referenceSet: unknown }>(
-    {
-      action: "retrieve",
-      concept: input.concept,
-      moment: input.moment,
-      shot: input.shot,
-    },
+    { action: "retrieve", concept: input.concept, moment: input.moment, shot: input.shot },
     input.signal,
   );
   return stage4GameplayReferenceSetSchema.parse(data.referenceSet);
@@ -122,14 +120,73 @@ function persistenceError(code: string, error: unknown): DurableWorkflowError {
   });
 }
 
+function gateFailureOutcome(input: {
+  context: WorkflowTickContext;
+  stage: "pre_image" | "pre_video";
+  failures: string[];
+  specs?: Record<string, GameplayAuthenticitySpecV1>;
+  motionPlans?: Record<string, GameplayVideoMotionPlanV1>;
+}): WorkflowTickOutcome {
+  return {
+    status: "failed",
+    currentStage: `gameplay_authenticity_${input.stage}_failed`,
+    progress: input.stage === "pre_image" ? 72 : 90,
+    state: {
+      ...input.context.state,
+      gameplay_authenticity_failure: true,
+      gameplay_authenticity_failure_stage: input.stage,
+      gameplay_authenticity_defects: input.failures,
+      gameplay_authenticity_specs: input.specs ?? {},
+      gameplay_video_motion_plans: input.motionPlans ?? {},
+      image_generation_locked: input.stage === "pre_image",
+      video_generation_locked: true,
+      cost_avoided_by_pre_generation_rejection: true,
+    },
+    error: {
+      code: "GAMEPLAY_AUTHENTICITY_GATE_FAILED",
+      message: input.failures.join(" | ").slice(0, 2_000),
+      retryable: false,
+    },
+    stateReason: `gameplay_authenticity_${input.stage}_rejected_before_provider`,
+    eventType: "discovery.gameplay_authenticity_failed",
+    eventPayload: {
+      stage: input.stage,
+      defects: input.failures,
+      provider_call_blocked: true,
+      cost_avoided_by_pre_generation_rejection: true,
+    },
+  };
+}
+
+function evaluateShotSet(shots: ShotSpecV1[]): {
+  specs: Record<string, GameplayAuthenticitySpecV1>;
+  failures: string[];
+} {
+  const specs: Record<string, GameplayAuthenticitySpecV1> = {};
+  const failures: string[] = [];
+  for (const shot of shots) {
+    try {
+      const spec = gameplayAuthenticitySpecFromShot(shot);
+      specs[shot.shotId] = spec;
+      if (!spec.passed) {
+        failures.push(
+          `${shot.shotId}:score=${spec.averageScore.toFixed(3)}:${spec.hardFailures.join(",") || "score_threshold"}`,
+        );
+      }
+    } catch (error) {
+      failures.push(
+        `${shot.shotId}:contract_invalid:${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+  return { specs, failures };
+}
+
 async function ensurePromptReferenceSets(
   context: WorkflowTickContext,
   outcome: WorkflowTickOutcome,
 ): Promise<WorkflowTickOutcome> {
-  if (
-    outcome.status !== "waiting" ||
-    outcome.currentStage !== "reference_image_generation_pending"
-  ) {
+  if (outcome.status !== "waiting" || outcome.currentStage !== "reference_image_generation_pending") {
     return outcome;
   }
 
@@ -153,8 +210,21 @@ async function ensurePromptReferenceSets(
   }
 
   if (!visual.shots.length || visual.promptPlans.length !== visual.shots.length) return outcome;
-  const alreadyIntegrated = visual.promptPlans.every((plan) =>
-    Boolean(referenceSetFromPromptMetadata(plan.metadata)),
+  const preImageGate = evaluateShotSet(visual.shots);
+  if (preImageGate.failures.length) {
+    return gateFailureOutcome({
+      context,
+      stage: "pre_image",
+      failures: preImageGate.failures,
+      specs: preImageGate.specs,
+    });
+  }
+
+  const alreadyIntegrated = visual.promptPlans.every(
+    (plan) =>
+      Boolean(referenceSetFromPromptMetadata(plan.metadata)) &&
+      plan.metadata?.gameplay_authenticity_gate_passed === true &&
+      plan.metadata?.video_authenticity_gate_passed === true,
   );
   if (alreadyIntegrated) return outcome;
 
@@ -167,12 +237,7 @@ async function ensurePromptReferenceSets(
     if (!moment) throw new Error(`GAMEPLAY_REFERENCE_MOMENT_NOT_FOUND:${shot.momentId}`);
     const concept = conceptById.get(moment.conceptId);
     if (!concept) throw new Error(`GAMEPLAY_REFERENCE_CONCEPT_NOT_FOUND:${moment.conceptId}`);
-    referenceSets[shot.shotId] = await retrieveReferenceSet({
-      concept,
-      moment,
-      shot,
-      signal: context.signal,
-    });
+    referenceSets[shot.shotId] = await retrieveReferenceSet({ concept, moment, shot, signal: context.signal });
   }
 
   const promptPlans = compileGameplayPromptPlans({
@@ -214,15 +279,18 @@ async function ensurePromptReferenceSets(
       prompt_plans: promptPlans,
       gameplay_reference_sets: referenceSets,
       gameplay_reference_integration_version: 1,
+      gameplay_authenticity_specs: preImageGate.specs,
+      gameplay_authenticity_gate_passed: true,
       gameplay_reference_count: Object.values(referenceSets).reduce(
         (total, set) => total + set.references.length,
         0,
       ),
     },
-    stateReason: "s4_gameplay_references_retrieved_and_compiled",
+    stateReason: "s4_gameplay_references_and_authenticity_compiled",
     eventType: "discovery.gameplay_references_compiled",
     eventPayload: {
       shot_ids: visual.shots.map((shot) => shot.shotId),
+      gameplay_authenticity_gate_passed: true,
       reference_counts: Object.fromEntries(
         Object.entries(referenceSets).map(([shotId, set]) => [shotId, set.references.length]),
       ),
@@ -236,13 +304,9 @@ async function ensurePromptReferenceSets(
   };
 }
 
-async function handleReferenceImageAdmission(
-  context: WorkflowTickContext,
-): Promise<WorkflowTickOutcome> {
+async function handleReferenceImageAdmission(context: WorkflowTickContext): Promise<WorkflowTickOutcome> {
   const rootCreativeRunId = text(context.state.creative_run_id);
-  if (!rootCreativeRunId) {
-    throw new Error("GAMEPLAY_REFERENCE_ROOT_RUN_MISSING");
-  }
+  if (!rootCreativeRunId) throw new Error("GAMEPLAY_REFERENCE_ROOT_RUN_MISSING");
   const repo = repository(context);
   let visual;
   let referenceStage;
@@ -258,6 +322,15 @@ async function handleReferenceImageAdmission(
   if (!visual.shots.length || visual.promptPlans.length !== visual.shots.length) {
     throw new Error("GAMEPLAY_REFERENCE_IMAGE_PLAN_MISSING");
   }
+  const preImageGate = evaluateShotSet(visual.shots);
+  if (preImageGate.failures.length) {
+    return gateFailureOutcome({
+      context,
+      stage: "pre_image",
+      failures: preImageGate.failures,
+      specs: preImageGate.specs,
+    });
+  }
 
   const existingShotIds = new Set(referenceStage.items.map((item) => item.shotId));
   const admissions: Array<{
@@ -271,6 +344,14 @@ async function handleReferenceImageAdmission(
     if (existingShotIds.has(shot.shotId)) continue;
     const promptPlan = visual.promptPlans.find((plan) => plan.shotId === shot.shotId);
     if (!promptPlan?.imagePrompt) throw new Error(`GAMEPLAY_REFERENCE_IMAGE_PROMPT_MISSING:${shot.shotId}`);
+    if (promptPlan.metadata?.gameplay_authenticity_gate_passed !== true) {
+      return gateFailureOutcome({
+        context,
+        stage: "pre_image",
+        failures: [`${shot.shotId}:prompt_compiler_authenticity_gate_missing`],
+        specs: preImageGate.specs,
+      });
+    }
     const referenceSet = referenceSetFromPromptMetadata(promptPlan.metadata);
     if (!referenceSet || referenceSet.references.length < 4) {
       throw new Error(`GAMEPLAY_REFERENCE_IMAGE_SET_MISSING:${shot.shotId}`);
@@ -317,19 +398,88 @@ async function handleReferenceImageAdmission(
       reference_image_admissions: admissions,
       reference_revision_number: visual.referenceRevisionNumber,
       reference_approval_required: true,
+      gameplay_authenticity_specs: preImageGate.specs,
+      gameplay_authenticity_gate_passed: true,
       video_generation_locked: true,
       gameplay_reference_gate_required: true,
     },
-    stateReason: "s4_reference_images_admitted_with_gameplay_references",
+    stateReason: "s4_reference_images_admitted_after_authenticity_gate",
     eventType: "discovery.reference_images_admitted",
     eventPayload: {
       admitted_count: admissions.length,
       expected_count: visual.shots.length,
-      reference_counts: Object.fromEntries(
-        admissions.map((item) => [item.shotId, item.referenceCount]),
-      ),
+      gameplay_authenticity_gate_passed: true,
+      reference_counts: Object.fromEntries(admissions.map((item) => [item.shotId, item.referenceCount])),
       reference_revision_number: visual.referenceRevisionNumber,
       video_generation_locked: true,
+    },
+  };
+}
+
+async function handlePreVideoGate(context: WorkflowTickContext): Promise<WorkflowTickOutcome> {
+  const rootCreativeRunId = text(context.state.creative_run_id);
+  if (!rootCreativeRunId) throw new Error("GAMEPLAY_VIDEO_GATE_ROOT_RUN_MISSING");
+  const visual = await repository(context).getVisualStage({ rootCreativeRunId });
+  const evaluated = evaluateShotSet(visual.shots);
+  const motionPlans: Record<string, GameplayVideoMotionPlanV1> = {};
+  const failures = [...evaluated.failures];
+
+  for (const shot of visual.shots) {
+    const spec = evaluated.specs[shot.shotId];
+    if (!spec) continue;
+    try {
+      const motionPlan = buildGameplayVideoMotionPlan(shot, spec);
+      motionPlans[shot.shotId] = motionPlan;
+      if (!motionPlan.passed) {
+        failures.push(`${shot.shotId}:${motionPlan.gateFailures.join(",")}`);
+      }
+      const promptPlan = visual.promptPlans.find((plan) => plan.shotId === shot.shotId);
+      if (!promptPlan?.videoPrompt.includes(
+        "camera remains physically attached to the playable character for the entire clip",
+      )) {
+        failures.push(`${shot.shotId}:video_prompt_camera_contract_missing`);
+      }
+    } catch (error) {
+      failures.push(
+        `${shot.shotId}:motion_plan_invalid:${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+
+  if (failures.length) {
+    return gateFailureOutcome({
+      context,
+      stage: "pre_video",
+      failures: [...new Set(failures)],
+      specs: evaluated.specs,
+      motionPlans,
+    });
+  }
+
+  const gatedContext: WorkflowTickContext = {
+    ...context,
+    state: {
+      ...context.state,
+      gameplay_authenticity_specs: evaluated.specs,
+      gameplay_video_motion_plans: motionPlans,
+      gameplay_video_authenticity_gate_passed: true,
+      could_this_exact_shot_be_recorded_by_a_player: true,
+    },
+  };
+  const outcome = await gameDiscoveryBatchStage4DurableV1(gatedContext);
+  return {
+    ...outcome,
+    state: {
+      ...(outcome.state ?? gatedContext.state),
+      gameplay_authenticity_specs: evaluated.specs,
+      gameplay_video_motion_plans: motionPlans,
+      gameplay_video_authenticity_gate_passed: true,
+      could_this_exact_shot_be_recorded_by_a_player: true,
+    },
+    eventPayload: {
+      ...(outcome.eventPayload ?? {}),
+      gameplay_video_authenticity_gate_passed: true,
+      camera_physically_attached: true,
     },
   };
 }
@@ -337,6 +487,9 @@ async function handleReferenceImageAdmission(
 export const gameDiscoveryBatchStage4ReferenceIntegratedV1: WorkflowTickHandler = async (context) => {
   if (context.currentStage === "reference_image_generation_pending") {
     return handleReferenceImageAdmission(context);
+  }
+  if (context.currentStage === "video_generation_pending") {
+    return handlePreVideoGate(context);
   }
 
   const outcome = await gameDiscoveryBatchStage4DurableV1(context);
