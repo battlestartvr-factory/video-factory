@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { gameDiscoveryBatchStage4V1 } from "../../worker/workflows/game-discovery-batch-stage4-v1";
 import type { WorkflowTickContext } from "../../worker/workflows/types";
+import { validGameplayAuthenticityPlan } from "./gameplay-authenticity-fixtures";
 
 const objective = {
   schema: "discovery_objective" as const,
@@ -35,8 +36,8 @@ const concept = {
   spectacle: "Cargo narrowly misses a machine.",
   setting: "Industrial bay.",
   artDirection: "Readable stylized industrial game art.",
-  camera: "Elevated third-person gameplay camera.",
-  readability: "Both players and the cargo stay visible.",
+  camera: "Third-person follow gameplay camera attached to the Driver.",
+  readability: "Driver, Rigger and cargo stay visible in playable space.",
   noveltyAxes: [
     { axis: "dependency_type", choice: "split-control", whyDifferent: "Divided controls." },
     { axis: "social_tension", choice: "trust-stop", whyDifferent: "Trust a stop call." },
@@ -69,7 +70,7 @@ const moment = {
   socialTension: "Rigger urgently calls stop.",
   failureBeat: "Cargo clips a machine.",
   expectedViewerUnderstanding: "Two people control different dimensions of one object.",
-  cameraIntent: "Show both players, cable and cargo.",
+  cameraIntent: "Third-person follow camera attached to Driver; Rigger and cargo remain in playable distance.",
   requiredVisualEvidence: ["both players visibly operating different controls"],
 };
 
@@ -82,8 +83,8 @@ const oldShot = {
   durationSec: 5,
   purpose: "mechanic" as const,
   actors: ["Driver", "Rigger"],
-  action: "Cargo swings while both players act.",
-  camera: "Readable gameplay camera.",
+  action: "Driver controls travel while Rigger changes tension on the same moving cargo.",
+  camera: "Third-person follow camera physically attached to Driver.",
   environment: "Industrial bay.",
   continuity: { preserve: [] },
   expectedEvidence: ["both players visibly operating different controls"],
@@ -94,6 +95,15 @@ const oldShot = {
     videoMode: "image-to-video" as const,
     aspectRatio: "9:16" as const,
     durationSec: 5,
+  },
+  metadata: {
+    gameplayAuthenticityPlan: validGameplayAuthenticityPlan({
+      shotId: "old-shot",
+      momentId: "moment-1",
+      playerRole: "Driver",
+      teammateRole: "Rigger",
+      cameraType: "third_person_follow",
+    }),
   },
 };
 
@@ -111,12 +121,22 @@ const oldPrompt = {
 };
 
 function newShotResponse() {
+  const shotId = "revised-shot";
   return JSON.stringify({
     shots: [
       {
         ...oldShot,
-        shotId: "revised-shot",
+        shotId,
         action: "Driver visibly moves the trolley while Rigger visibly operates a separate tension control.",
+        metadata: {
+          gameplayAuthenticityPlan: validGameplayAuthenticityPlan({
+            shotId,
+            momentId: "moment-1",
+            playerRole: "Driver",
+            teammateRole: "Rigger",
+            cameraType: "third_person_follow",
+          }),
+        },
       },
     ],
   });
@@ -215,7 +235,14 @@ describe("Stage 4 reference revision loop", () => {
       expect.objectContaining({
         promptPlans: [expect.objectContaining({ shotId: "revised-shot" })],
         result: expect.objectContaining({
-          shots: [expect.objectContaining({ shotId: "revised-shot" })],
+          shots: [
+            expect.objectContaining({
+              shotId: "revised-shot",
+              metadata: expect.objectContaining({
+                gameplayAuthenticity: expect.objectContaining({ passed: true }),
+              }),
+            }),
+          ],
         }),
       }),
     );
