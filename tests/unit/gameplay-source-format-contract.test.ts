@@ -35,18 +35,23 @@ describe("desktop gameplay source format", () => {
     expect(shotSpecV1Schema.safeParse(validShot("9:16")).success).toBe(false);
   });
 
-  it("keeps portrait conversion downstream of image/video generation", async () => {
-    const [planner, referenceRoute, migration] = await Promise.all([
+  it("keeps portrait conversion downstream and requests a 2K widescreen reference still", async () => {
+    const [planner, referenceRoute, widescreenMigration, reference2kMigration] = await Promise.all([
       readFile("lib/game-discovery/shot-planner.ts", "utf8"),
       readFile("app/api/internal/gameplay-reference-stage4/route.ts", "utf8"),
       readFile("supabase/migrations/20260819102500_gameplay_widescreen_source_v1.sql", "utf8"),
+      readFile("supabase/migrations/20260819110500_gameplay_reference_2k_v1.sql", "utf8"),
     ]);
     expect(planner).toContain('aspectRatio:"16:9"');
     expect(planner).toContain("normal widescreen 16:9 desktop PC capture");
     expect(referenceRoute).toContain('aspectRatio: "16:9"');
-    expect(migration).toContain("'aspectRatio','16:9'");
-    expect(migration).toContain("'effectiveQuality','pro'");
-    expect(migration).toContain("'source_capture_format','desktop_pc_16x9'");
+    expect(referenceRoute).toContain('effectiveQuality: "2K"');
+    expect(widescreenMigration).toContain("'aspectRatio','16:9'");
+    expect(widescreenMigration).toContain("'effectiveQuality','pro'");
+    expect(widescreenMigration).toContain("'source_capture_format','desktop_pc_16x9'");
+    expect(reference2kMigration).toContain("'aspectRatio','16:9'");
+    expect(reference2kMigration).toContain("'effectiveQuality','2K'");
+    expect(reference2kMigration).toContain("'effective_quality','2K'");
   });
 
   it("preserves full gameplay evidence in a landscape master and blurred-fill social edit", async () => {
