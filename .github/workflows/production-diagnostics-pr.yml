@@ -1,0 +1,63 @@
+name: Production Diagnostics PR
+
+on:
+  pull_request:
+    branches:
+      - fix-inline-prototype-and-production-502
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Prepare SSH key
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_SSH_KEY_B64: ${{ secrets.DEPLOY_SSH_KEY_B64 }}
+        run: |
+          set -euo pipefail
+          [[ -n "${DEPLOY_HOST:-}" && -n "${DEPLOY_USER:-}" ]] || { echo "DEPLOY_HOST and DEPLOY_USER are required" >&2; exit 1; }
+          [[ -n "${DEPLOY_SSH_KEY_B64:-}" || -n "${DEPLOY_SSH_KEY:-}" ]] || { echo "Deploy SSH key is required" >&2; exit 1; }
+          install -m 700 -d ~/.ssh
+          if [[ -n "${DEPLOY_SSH_KEY_B64:-}" ]]; then
+            printf '%s' "$DEPLOY_SSH_KEY_B64" | base64 --decode > ~/.ssh/deploy_key
+          else
+            printf '%s\n' "$DEPLOY_SSH_KEY" | tr -d '\r' > ~/.ssh/deploy_key
+          fi
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keygen -y -f ~/.ssh/deploy_key >/dev/null
+
+      - name: Collect production diagnostics
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new -o BatchMode=yes \
+            "${DEPLOY_USER}@${DEPLOY_HOST}" bash -s <<'REMOTE'
+          set +e
+          cd /opt/ai-factory/app || exit 2
+          echo '=== TIME ==='
+          date -u
+          echo '=== GIT ==='
+          git rev-parse HEAD
+          echo '=== COMPOSE PS ==='
+          docker compose ps
+          echo '=== APP HEALTH DIRECT ==='
+          curl -sv --max-time 8 http://127.0.0.1:3000/api/health 2>&1
+          echo '=== CADDY HEALTH PROXY ==='
+          curl -sv --max-time 8 http://127.0.0.1/api/health 2>&1
+          echo '=== APP LOGS ==='
+          docker compose logs --tail=250 app 2>&1
+          echo '=== CADDY LOGS ==='
+          docker compose logs --tail=150 caddy 2>&1
+          echo '=== WORKER LOGS ==='
+          docker compose logs --tail=80 worker 2>&1
+          echo '=== RESOURCE SNAPSHOT ==='
+          df -h / /srv/ai-factory 2>&1
+          free -m 2>&1
+          echo '=== APP CONTAINER STATE ==='
+          docker compose ps -a app 2>&1
+          REMOTE
