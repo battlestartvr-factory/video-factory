@@ -24,6 +24,38 @@ describe("KieMarketTaskAdapter", () => {
     expect(result.taskId).toBe("task_123");
   });
 
+  it("preserves safe KIE application rejection diagnostics", async () => {
+    const adapter = new KieMarketTaskAdapter(
+      "https://api.kie.ai",
+      "secret",
+      vi.fn(async () =>
+        new Response(
+          JSON.stringify({
+            code: 422,
+            msg: "aspect ratio conflicts with uploaded first frame",
+            data: null,
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+      ) as unknown as typeof fetch,
+    );
+
+    await expect(
+      adapter.submit({
+        model: "kling-3.0/video",
+        callbackUrl: "https://factory.example/callback",
+        providerInput: { image_urls: ["https://example.test/frame.png"] },
+      }),
+    ).rejects.toMatchObject({
+      retryable: false,
+      ambiguousSubmit: false,
+      providerCode: 422,
+      providerMessage: "aspect ratio conflicts with uploaded first frame",
+      message:
+        "KIE createTask rejected (code=422): aspect ratio conflicts with uploaded first frame",
+    });
+  });
+
   it("marks createTask transport failures as ambiguous so callers never blind-retry the paid POST", async () => {
     const adapter = new KieMarketTaskAdapter(
       "https://api.kie.ai",
