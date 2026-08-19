@@ -40,6 +40,20 @@ interface ReferenceItem {
   decision: string | null;
 }
 
+interface PrototypeItem {
+  conceptRunId: string;
+  conceptId: string;
+  pitch: string | null;
+  videoUrl: string;
+  driveWebUrl: string | null;
+  filename: string | null;
+  durationSeconds: number | null;
+  width: number | null;
+  height: number | null;
+  fps: number | null;
+  sizeBytes: number | null;
+}
+
 const POLL_MS = 5_000;
 const TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled"]);
 
@@ -59,6 +73,12 @@ function str(value: unknown): string | null {
 
 function num(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function formatBytes(value: number | null): string | null {
+  if (!value || value <= 0) return null;
+  if (value < 1024 * 1024) return `${Math.round(value / 1024)} KB`;
+  return `${(value / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 function stageLabel(stage: string | null): string {
@@ -182,6 +202,33 @@ export function DiscoveryTaskCard({ task, runId }: DiscoveryTaskCardProps) {
     }
     return result;
   }, [detail]);
+
+  const prototypes = useMemo<PrototypeItem[]>(() => {
+    if (!detail) return [];
+    const result: PrototypeItem[] = [];
+    for (const run of detail.conceptRuns ?? []) {
+      const conceptRunId = str(run.id);
+      if (!conceptRunId) continue;
+      const outputs = object(run.outputs);
+      const assembly = object(outputs.prototype_assembly);
+      if (assembly.schema !== "gameplay_short_assembly" || !str(assembly.driveFileId)) continue;
+      const concept = object(outputs.coop_game_concept);
+      result.push({
+        conceptRunId,
+        conceptId: str(assembly.conceptId) ?? str(concept.conceptId) ?? "concept",
+        pitch: str(concept.oneSentencePitch),
+        videoUrl: `/api/discovery/batches/${encodeURIComponent(runId)}/prototypes/${encodeURIComponent(conceptRunId)}`,
+        driveWebUrl: str(assembly.driveWebUrl),
+        filename: str(assembly.filename),
+        durationSeconds: num(assembly.durationSeconds),
+        width: num(assembly.width),
+        height: num(assembly.height),
+        fps: num(assembly.fps),
+        sizeBytes: num(assembly.sizeBytes),
+      });
+    }
+    return result;
+  }, [detail, runId]);
 
   const submitReview = async (item: ReferenceItem, decision: "approve" | "revise" | "reject") => {
     const text = feedback[item.generationId]?.trim() ?? "";
@@ -326,6 +373,73 @@ export function DiscoveryTaskCard({ task, runId }: DiscoveryTaskCardProps) {
                   </>
                 )}
               </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {jobStatus === "completed" && prototypes.length > 0 && (
+        <div className="border-t border-border bg-surface/40 p-4">
+          <div className="mb-3">
+            <p className="text-sm font-medium text-foreground">Prototype video готов</p>
+            <p className="mt-1 text-xs leading-5 text-muted-foreground">
+              Финальный vertical prototype можно посмотреть прямо здесь, не выходя из чата.
+            </p>
+          </div>
+
+          <div className="space-y-4">
+            {prototypes.map((item) => {
+              const metadata = [
+                item.durationSeconds ? `${item.durationSeconds.toFixed(1).replace(/\.0$/, "")} сек` : null,
+                item.width && item.height ? `${item.width}×${item.height}` : null,
+                item.fps ? `${item.fps.toFixed(1).replace(/\.0$/, "")} FPS` : null,
+                formatBytes(item.sizeBytes),
+              ].filter((value): value is string => Boolean(value));
+
+              return (
+                <div key={item.conceptRunId} className="rounded-lg border border-border bg-surface/70 p-3">
+                  <div className="mx-auto aspect-[9/16] max-h-[70vh] w-full max-w-[360px] overflow-hidden rounded-lg border border-border bg-black">
+                    <video
+                      controls
+                      playsInline
+                      preload="metadata"
+                      src={item.videoUrl}
+                      className="h-full w-full bg-black object-contain"
+                    >
+                      Ваш браузер не поддерживает встроенное видео.
+                    </video>
+                  </div>
+
+                  <div className="mt-3">
+                    <p className="text-xs font-medium text-foreground">{item.pitch ?? item.conceptId}</p>
+                    {metadata.length > 0 && (
+                      <p className="mt-1 text-[11px] text-muted-foreground">{metadata.join(" · ")}</p>
+                    )}
+                    {item.filename && <p className="mt-1 truncate text-[11px] text-muted">{item.filename}</p>}
+                  </div>
+
+                  <div className="mt-3 flex flex-wrap gap-2 text-xs">
+                    <a
+                      href={item.videoUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="rounded-md border border-border px-2.5 py-1.5 text-foreground transition hover:bg-surface-elevated"
+                    >
+                      Открыть видео отдельно
+                    </a>
+                    {item.driveWebUrl && (
+                      <a
+                        href={item.driveWebUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="rounded-md border border-border px-2.5 py-1.5 text-muted-foreground transition hover:bg-surface-elevated hover:text-foreground"
+                      >
+                        Google Drive
+                      </a>
+                    )}
+                  </div>
+                </div>
               );
             })}
           </div>
