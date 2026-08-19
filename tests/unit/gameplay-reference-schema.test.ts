@@ -3,6 +3,7 @@ import {
   gameplayReferencePurposeSchema,
   gameplayReferenceSpecV1Schema,
 } from "../../lib/game-discovery/gameplay-reference-schema";
+import type { DriveStorageProvider } from "../../lib/storage/drive-provider";
 import {
   GAMEPLAY_REFERENCE_SEED_GAMES_V1,
   ensureGameplayReferenceLibraryHierarchy,
@@ -143,7 +144,17 @@ describe("Gameplay Reference Library v1 foundation", () => {
 
   it("materializes the Drive hierarchy idempotently through the existing storage provider contract", async () => {
     const ensureFolderPath = vi.fn(async (segments: string[]) => `id:${segments.join("/")}`);
-    const provider = { ensureFolderPath } as any;
+    const provider = {
+      authMode: "service_account" as const,
+      isConfigured: () => true,
+      ensureFolderPath,
+      createResumableUpload: vi.fn(),
+      completeResumableUpload: vi.fn(),
+      finalizeUpload: vi.fn(),
+      downloadFile: vi.fn(),
+      deleteFile: vi.fn(),
+      getFileMetadata: vi.fn(),
+    } satisfies DriveStorageProvider;
 
     const hierarchy = await ensureGameplayReferenceLibraryHierarchy({
       provider,
