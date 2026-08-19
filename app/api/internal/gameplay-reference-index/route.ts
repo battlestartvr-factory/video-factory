@@ -4,6 +4,7 @@ import {
   isGameplayReferenceCaptionOutputError,
   persistGameplayReferenceCaptionFailureEvidence,
 } from "@/lib/game-discovery/gameplay-reference-caption-failure";
+import { claimGameplayReferenceCaptionAttempt } from "@/lib/game-discovery/gameplay-reference-caption-permit";
 import { indexGameplayReference } from "@/lib/game-discovery/gameplay-reference-service";
 import { repairGameplayReferenceFromStoredCaption } from "@/lib/game-discovery/gameplay-reference-stored-repair";
 import { resolveSupabaseServiceRoleKey } from "@/lib/supabase/service-config";
@@ -35,11 +36,19 @@ export async function POST(request: Request) {
   }
 
   try {
-    // Cost-control rule: a failed row with stored raw model output is always reparsed first.
-    // Only a reference without reparable stored evidence may reach the provider path.
-    const spec =
-      (await repairGameplayReferenceFromStoredCaption(referenceId)) ??
-      (await indexGameplayReference({ referenceId }));
+    // Cost-control order is deliberate:
+    // 1) reuse already-paid raw caption evidence whenever deterministic repair can do so;
+    // 2) otherwise atomically consume the single external-call permit;
+    // 3) only the permit owner may reach the vision provider.
+    //
+    // A worker that dies after step 2 leaves the row in `captioning`. Stale-lease recovery will
+    // call this route again, but the second permit claim fails closed before another provider call.
+    let spec = await repairGameplayReferenceFromStoredCaption(referenceId);
+    if (!spec) {
+      await claimGameplayReferenceCaptionAttempt(referenceId);
+      spec = await indexGameplayReference({ referenceId });
+    }
+
     return NextResponse.json(
       {
         ok: true,
@@ -79,7 +88,8 @@ export async function POST(request: Request) {
     const status =
       code === "GAMEPLAY_REFERENCE_NOT_FOUND"
         ? 404
-        : code === "GAMEPLAY_REFERENCE_ALREADY_INDEXED"
+        : code === "GAMEPLAY_REFERENCE_ALREADY_INDEXED" ||
+            code === "GAMEPLAY_REFERENCE_CAPTION_PERMIT_DENIED"
           ? 409
           : code.includes("NOT_CONFIGURED") || code.includes("SERVICE_TOKEN_MISSING")
             ? 503
