@@ -112,7 +112,7 @@ function validShotResponse() {
           imageModel: "nano-banana-2",
           videoModel: "kling-3",
           videoMode: "image-to-video",
-          aspectRatio: "9:16",
+          aspectRatio: "16:9",
           durationSec: 5,
         },
         metadata: {
