@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { AgentProvider } from "../../lib/agent/types";
+import type { AgentProvider, AgentRequest } from "../../lib/agent/types";
 import {
   captionGameplayReferenceImage,
   GAMEPLAY_REFERENCE_CAPTION_MODEL,
@@ -63,12 +63,16 @@ function validCaptionJson() {
 describe("cheap gameplay reference captioner", () => {
   it("uses one vision model call and no repair call when deterministic validation succeeds", async () => {
     const upload = vi.fn(async () => "https://example.test/reference.jpg");
-    const run = vi.fn(async () => ({
-      content: validCaptionJson(),
-      toolCalls: [],
-      usage: { promptTokens: 100, completionTokens: 200, totalTokens: 300 },
-      finishReason: "stop" as const,
-    }));
+    const requests: AgentRequest[] = [];
+    const run: AgentProvider["run"] = async (request) => {
+      requests.push(request);
+      return {
+        content: validCaptionJson(),
+        toolCalls: [],
+        usage: { promptTokens: 100, completionTokens: 200, totalTokens: 300 },
+        finishReason: "stop",
+      };
+    };
     const provider = { run } satisfies AgentProvider;
 
     const result = await captionGameplayReferenceImage({
@@ -82,14 +86,15 @@ describe("cheap gameplay reference captioner", () => {
     });
 
     expect(upload).toHaveBeenCalledTimes(1);
-    expect(run).toHaveBeenCalledTimes(1);
+    expect(requests).toHaveLength(1);
     expect(result.model).toBe(GAMEPLAY_REFERENCE_CAPTION_MODEL);
     expect(result.usage.totalTokens).toBe(300);
     expect(result.caption.cameraType).toBe("first_person");
 
-    const request = run.mock.calls[0][0];
-    expect(request.tools).toEqual([]);
-    expect(request.messages[0]?.content).toEqual(
+    const request = requests[0];
+    expect(request).toBeDefined();
+    expect(request!.tools).toEqual([]);
+    expect(request!.messages[0]?.content).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ type: "text" }),
         expect.objectContaining({
@@ -101,12 +106,16 @@ describe("cheap gameplay reference captioner", () => {
   });
 
   it("fails after the single paid call when semantic/schema output is invalid", async () => {
-    const run = vi.fn(async () => ({
-      content: JSON.stringify({ cameraType: "cinematic" }),
-      toolCalls: [],
-      usage: {},
-      finishReason: "stop" as const,
-    }));
+    let calls = 0;
+    const run: AgentProvider["run"] = async () => {
+      calls += 1;
+      return {
+        content: JSON.stringify({ cameraType: "cinematic" }),
+        toolCalls: [],
+        usage: {},
+        finishReason: "stop",
+      };
+    };
 
     await expect(
       captionGameplayReferenceImage({
@@ -119,7 +128,7 @@ describe("cheap gameplay reference captioner", () => {
         provider: { run },
       }),
     ).rejects.toThrow();
-    expect(run).toHaveBeenCalledTimes(1);
+    expect(calls).toBe(1);
   });
 });
 
