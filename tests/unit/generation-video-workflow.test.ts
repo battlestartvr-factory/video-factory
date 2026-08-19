@@ -5,10 +5,11 @@ import type {
   GenerationVideoRepository,
 } from "@/lib/orchestrator/generation-videos";
 import type { ProviderTaskRepository } from "@/lib/orchestrator/provider-tasks";
-import type { KieMarketTaskAdapter } from "@/lib/models/kie/market-task";
+import { KieMarketTaskError, type KieMarketTaskAdapter } from "@/lib/models/kie/market-task";
 import type { KieVeoTaskAdapter } from "@/lib/models/kie/veo-task";
 import {
   buildVideoProviderRequest,
+  compactKlingProviderPrompt,
   generationVideoV1,
 } from "@/worker/workflows/generation-video-v1";
 import type { WorkflowServices } from "@/worker/workflows/types";
@@ -176,6 +177,47 @@ describe("generation_video@1 provider mapping", () => {
     });
   });
 
+  it("lets a Kling image-to-video start frame define the aspect ratio", () => {
+    const request = buildVideoProviderRequest(
+      generation({
+        mode: "image-to-video",
+        settings: {
+          aspectRatio: "16:9",
+          durationSec: 5,
+          effectiveQuality: "pro",
+          sound: false,
+          numOutputs: 1,
+        },
+        referenceAssets: [{ url: "https://example.test/widescreen.png", role: "start_frame" }],
+      }),
+    );
+
+    expect(request).toMatchObject({
+      adapter: "market",
+      model: "kling-3.0/video",
+      input: {
+        image_urls: ["https://example.test/widescreen.png"],
+        duration: "5",
+        mode: "pro",
+        multi_shots: false,
+      },
+    });
+    expect(request.input.aspect_ratio).toBeUndefined();
+  });
+
+  it("bounds the Kling provider prompt while preserving the gameplay beat and hard camera tail", () => {
+    const hardCamera =
+      "camera remains physically attached to the playable character for the entire clip";
+    const prompt = `START ACTIVE GAMEPLAY ${"foreground mechanics ".repeat(120)} ${hardCamera}. END CONTINUOUS CAPTURE`;
+    const compacted = compactKlingProviderPrompt(prompt);
+
+    expect(compacted.length).toBeLessThanOrEqual(2_000);
+    expect(compacted).toContain("START ACTIVE GAMEPLAY");
+    expect(compacted).toContain(hardCamera);
+    expect(compacted).toContain("END CONTINUOUS CAPTURE");
+    expect(compacted).toContain("provider-safe compacted context");
+  });
+
   it("maps Seedance first and last frames into reference image URLs", () => {
     expect(
       buildVideoProviderRequest(
@@ -293,6 +335,31 @@ describe("generation_video@1 lifecycle", () => {
     expect(outcome.status).toBe("waiting");
     expect(outcome.state?.ambiguous_submit).toBe(true);
     expect(marketSubmit).not.toHaveBeenCalled();
+  });
+
+  it("persists KIE application rejection details without retrying the paid submit", async () => {
+    const marketSubmit = vi.fn().mockRejectedValue(
+      new KieMarketTaskError(
+        "KIE createTask rejected (code=422): invalid image input",
+        false,
+        false,
+        422,
+        "invalid image input",
+      ),
+    );
+    const setup = createServices({ marketSubmit });
+
+    const outcome = await generationVideoV1(context(setup.value));
+    expect(outcome.status).toBe("failed");
+    expect(setup.mocks.recordSubmitFailure).toHaveBeenCalledWith({
+      providerTaskId: "pt-video-1",
+      error: expect.objectContaining({
+        provider_code: 422,
+        provider_message: "invalid image input",
+        ambiguous_submit: false,
+      }),
+    });
+    expect(marketSubmit).toHaveBeenCalledOnce();
   });
 
   it("reconciles a persisted Market task to video completion without another submit", async () => {
