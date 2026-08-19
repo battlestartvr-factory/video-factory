@@ -6,6 +6,7 @@ import type {
   GameplayMomentSpecV1,
   ShotSpecV1,
 } from "../../lib/game-discovery/schemas";
+import { validGameplayAuthenticityPlan } from "./gameplay-authenticity-fixtures";
 
 const refs = stage4GameplayReferenceSetSchema.parse({
   schema: "stage4_gameplay_reference_set",
@@ -53,13 +54,32 @@ const shot = {
   version: 1,
   shotId: "s1",
   momentId: "m1",
+  order: 0,
+  purpose: "mechanic",
   action: "The player holds a cutting tool on the clamp.",
   actors: ["cutter", "stabilizer"],
   camera: "First-person player-bound camera.",
   environment: "Industrial salvage platform.",
   expectedEvidence: ["held tool", "target clamp", "teammate", "tilt response"],
+  continuity: { preserve: [] },
   durationSec: 5,
-  generationPlan: { imageModel: "nano-banana-2", videoModel: "kling-3" },
+  generationPlan: {
+    keyframeRequired: true,
+    imageModel: "nano-banana-2",
+    videoModel: "kling-3",
+    videoMode: "image-to-video",
+    aspectRatio: "9:16",
+    durationSec: 5,
+  },
+  metadata: {
+    gameplayAuthenticityPlan: validGameplayAuthenticityPlan({
+      shotId: "s1",
+      momentId: "m1",
+      playerRole: "cutter",
+      teammateRole: "stabilizer",
+      cameraType: "first_person",
+    }),
+  },
 } as unknown as ShotSpecV1;
 
 describe("gameplay prompt reference lineage", () => {
@@ -68,8 +88,12 @@ describe("gameplay prompt reference lineage", () => {
     expect(plan.imagePrompt).toContain("PURPOSE-LABELED REAL GAMEPLAY REFERENCES");
     expect(plan.imagePrompt).toContain("Reference A — GAMEPLAY_CAMERA");
     expect(plan.imagePrompt).toContain("captured while a person is actively playing");
+    expect(plan.videoPrompt).toContain(
+      "camera remains physically attached to the playable character for the entire clip",
+    );
     const metadata = plan.metadata as Record<string, unknown>;
     expect(metadata.gameplay_reference_set).toEqual(refs);
     expect(metadata.gameplay_reference_count).toBe(4);
+    expect(metadata.gameplay_authenticity_gate_passed).toBe(true);
   });
 });

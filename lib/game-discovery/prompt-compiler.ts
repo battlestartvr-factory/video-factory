@@ -1,5 +1,9 @@
 import { createHash } from "node:crypto";
 import {
+  buildGameplayVideoMotionPlan,
+  gameplayAuthenticitySpecFromShot,
+} from "./gameplay-authenticity";
+import {
   renderGameplayReferenceInstructionBlock,
   type Stage4GameplayReferenceSet,
 } from "./gameplay-reference-stage4";
@@ -12,7 +16,7 @@ import {
   type ShotSpecV1,
 } from "./schemas";
 
-export const GAMEPLAY_PROMPT_COMPILER_VERSION = "gameplay_prompt_compiler_v2";
+export const GAMEPLAY_PROMPT_COMPILER_VERSION = "gameplay_prompt_compiler_v3";
 
 function stableHash(value: unknown): string {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex");
@@ -44,6 +48,19 @@ export function compileGameplayPromptPlan(input: {
     throw new Error(`PROMPT_COMPILER_CONCEPT_MISMATCH:${moment.momentId}:${concept.conceptId}`);
   }
 
+  const authenticity = gameplayAuthenticitySpecFromShot(shot);
+  if (!authenticity.passed) {
+    throw new Error(
+      `PROMPT_COMPILER_GAMEPLAY_AUTHENTICITY_FAILED:${shot.shotId}:${authenticity.hardFailures.join(",")}`,
+    );
+  }
+  const motionPlan = buildGameplayVideoMotionPlan(shot, authenticity);
+  if (!motionPlan.passed) {
+    throw new Error(
+      `PROMPT_COMPILER_VIDEO_AUTHENTICITY_FAILED:${shot.shotId}:${motionPlan.gateFailures.join(",")}`,
+    );
+  }
+
   const mustShow = clean([
     ...moment.requiredVisualEvidence,
     ...shot.expectedEvidence,
@@ -57,14 +74,23 @@ export function compileGameplayPromptPlan(input: {
     "do not add decorative effects that obscure the gameplay consequence",
     "do not copy the identity, characters, level, branded UI, props or mechanic of any gameplay reference",
     "do not let an art-direction reference override gameplay camera grammar",
+    "do not add decorative HUD that is unrelated to player decisions or the visible action",
+    "do not detach the camera from the controllable player",
     ...feedback.mustAvoid,
     ...feedback.errorTags.map((tag) => `do not repeat rejected error pattern: ${tag}`),
   ]);
   const referenceBlock = renderGameplayReferenceInstructionBlock(gameplayReferences);
+  const affordanceBlock = authenticity.gameplayAffordances
+    .filter((item) => item.visible && item.meaningful)
+    .map((item) => `${item.type}: ${item.informationUsedByPlayer}`)
+    .join("\n");
 
-  const imagePrompt = `FAKE GAMEPLAY REFERENCE STILL — approval checkpoint before any video generation.\n\nGAME CONCEPT:\n${concept.oneSentencePitch}\n\nCORE MECHANIC:\n${concept.coreMechanic}\n\nCO-OP DEPENDENCY:\n${concept.coopDependency}\n\nSCENE SETUP:\n${moment.setup}\n\nSHOT ACTION:\n${shot.action}\n\nVISIBLE ACTORS:\n${shot.actors.join(", ")}\n\nCAMERA / GAMEPLAY FRAMING:\n${shot.camera}\n\nENVIRONMENT:\n${shot.environment}\n\nART DIRECTION:\n${concept.artDirection}\n\nREADABILITY REQUIREMENT:\n${concept.readability}\n\nPURPOSE-LABELED REAL GAMEPLAY REFERENCES:\nThe attached reference images are ordered exactly as Reference A, Reference B, and so on below. Each image has a narrow role. Respect the role firewall.\n\n${referenceBlock}\n\nTHE STILL MUST VISIBLY PROVE:\n${mustShow.map((item, index) => `${index + 1}. ${item}`).join("\n")}\n\nMake this look like a plausible in-engine PC co-op gameplay screenshot captured while a person is actively playing, not key art, a trailer frame, a spectator shot, or a promotional composition. The viewer should understand who they control, what input-driven action is occurring, why the teammate matters, and what the world is doing in response.`;
+  const imagePrompt = `FAKE GAMEPLAY REFERENCE STILL — approval checkpoint before any video generation.\n\nGAME CONCEPT:\n${concept.oneSentencePitch}\n\nCORE MECHANIC:\n${concept.coreMechanic}\n\nCO-OP DEPENDENCY:\n${concept.coopDependency}\n\nSCENE SETUP:\n${moment.setup}\n\nSHOT ACTION:\n${shot.action}\n\nCONTROLLABLE PLAYER:\n${authenticity.controllablePlayer.role}. This player must be visually obvious from a plausible gameplay viewpoint.\n\nPLAYER INPUT -> ACTION -> WORLD RESPONSE:\nINPUT: ${authenticity.playerInput.input}\nVISIBLE INPUT EVIDENCE: ${authenticity.playerInput.visibleEvidence}\nPLAYER ACTION: ${authenticity.playerAction.action}\nTARGET: ${authenticity.playerAction.target}\nWORLD RESPONSE: ${authenticity.worldResponse.response}\n\nMEANINGFUL GAMEPLAY AFFORDANCES:\n${affordanceBlock}\n\nCO-OP FUNCTION:\n${authenticity.coop.teammateFunction}\nVISIBLE CO-OP EVIDENCE: ${authenticity.coop.visualEvidence}\n\nPHYSICS CONTRACT:\n${authenticity.physics.event}\nAffected entities: ${authenticity.physics.affectedEntities.join(", ")}\n${authenticity.physics.exceptions.length ? `Visually explained exceptions: ${authenticity.physics.exceptions.map((item) => `${item.entity}: ${item.reason}; visible evidence: ${item.visualEvidence}`).join(" | ")}` : "No unexplained physics exceptions."}\n\nVISIBLE ACTORS:\n${shot.actors.join(", ")}\n\nCAMERA / GAMEPLAY FRAMING:\n${shot.camera}\nCamera type: ${authenticity.camera.type}; it is physically attached to the controllable player's gameplay viewpoint. Evidence: ${authenticity.camera.visibleEvidence}\n\nENVIRONMENT:\n${shot.environment}\n\nART DIRECTION:\n${concept.artDirection}\nDefault visual target is stylized indie / AA, not photoreal expensive AAA cinematic polish unless the concept explicitly requires otherwise.\n\nREADABILITY REQUIREMENT:\n${concept.readability}\n\nPURPOSE-LABELED REAL GAMEPLAY REFERENCES:\nThe attached reference images are ordered exactly as Reference A, Reference B, and so on below. Each image has a narrow role. Respect the role firewall.\n\n${referenceBlock}\n\nTHE STILL MUST VISIBLY PROVE:\n${mustShow.map((item, index) => `${index + 1}. ${item}`).join("\n")}\n\nMake this exact image plausibly look like an in-engine PC co-op gameplay screenshot captured while a person is actively playing. It must not read as key art, a trailer frame, a spectator shot, a staged animation, or a promotional composition.`;
 
-  const videoPrompt = `Animate the approved gameplay reference still into one continuous ${shot.durationSec}-second fake-gameplay shot. Preserve character identities, positions, environment, art direction, interactable objects, and camera logic from the approved reference image.\n\nACTION:\n${shot.action}\n\nGAMEPLAY MOMENT HYPOTHESIS:\n${moment.hypothesis}\n\nCO-OP DEPENDENCY EVIDENCE:\n${moment.coopDependencyEvidence}\n\nSOCIAL TENSION:\n${moment.socialTension}\n\nVISIBLE EVIDENCE THAT MUST REMAIN LEGIBLE:\n${evidenceBlock(shot)}\n\nCAMERA:\n${shot.camera}\n\nDo not introduce a new mechanic, new location, camera cut, trailer montage, or unrelated spectacle. The purpose is to test whether the mechanic reads as gameplay.`;
+  const beatBlock = motionPlan.beats
+    .map((beat) => `${beat.startSec.toFixed(1)}–${beat.endSec.toFixed(1)} sec — ${beat.description}`)
+    .join("\n");
+  const videoPrompt = `Animate the approved gameplay reference still into one continuous 5-second capture of one active gameplay session. Preserve character identities, positions, environment, art direction, interactable objects, meaningful HUD/affordances, and the approved player-camera composition.\n\nHARD CAMERA CONTRACT:\ncamera remains physically attached to the playable character for the entire clip\nNo cinematic reframing, camera orbit, dolly shot, cutaway, dramatic zoom, detached camera, spectator movement, or automatic hero framing.\n\nPLAYABLE 5-SECOND BEAT:\n${beatBlock}\n\nCONTROLLABLE PLAYER INPUT:\n${authenticity.playerInput.input}\n\nACTION:\n${authenticity.playerAction.action}\n\nWORLD RESPONSE CAUSED BY THAT ACTION:\n${authenticity.worldResponse.response}\n\nTEAMMATE DEPENDENCY:\n${authenticity.coop.teammateFunction}\n${authenticity.coop.visualEvidence}\n\nGAMEPLAY MOMENT HYPOTHESIS:\n${moment.hypothesis}\n\nVISIBLE EVIDENCE THAT MUST REMAIN LEGIBLE:\n${evidenceBlock(shot)}\n\nCAMERA:\n${shot.camera}\n\nThe result must plausibly be five seconds a player could obtain by pressing Record while actually playing. Do not introduce a new mechanic, new location, camera cut, trailer montage, unrelated spectacle, or character animation that is not a consequence of player input/gameplay state.`;
 
   const compilerInputsHash = stableHash({
     compiler: GAMEPLAY_PROMPT_COMPILER_VERSION,
@@ -73,6 +99,8 @@ export function compileGameplayPromptPlan(input: {
     shot,
     feedback,
     gameplayReferences: gameplayReferences ?? null,
+    authenticity,
+    motionPlan,
   });
 
   return promptPlanV1Schema.parse({
@@ -94,6 +122,10 @@ export function compileGameplayPromptPlan(input: {
       gameplay_reference_set: gameplayReferences ?? null,
       gameplay_reference_count: gameplayReferences?.references.length ?? 0,
       gameplay_reference_roles: gameplayReferences?.references.map((item) => item.purpose) ?? [],
+      gameplay_authenticity: authenticity,
+      gameplay_video_motion_plan: motionPlan,
+      gameplay_authenticity_gate_passed: true,
+      video_authenticity_gate_passed: true,
     },
   });
 }

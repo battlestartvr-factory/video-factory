@@ -7,6 +7,7 @@ import type {
   DiscoveryObjectiveSpecV1,
   GameplayMomentSpecV1,
 } from "../../lib/game-discovery/schemas";
+import { validGameplayAuthenticityPlan } from "./gameplay-authenticity-fixtures";
 
 const objective: DiscoveryObjectiveSpecV1 = {
   schema: "discovery_objective",
@@ -41,8 +42,8 @@ const concept: CoopGameConceptSpecV1 = {
   spectacle: "A huge suspended load narrowly misses machinery.",
   setting: "Compact industrial repair bay.",
   artDirection: "Readable stylized industrial game art.",
-  camera: "Third-person elevated gameplay camera showing both stations and the load.",
-  readability: "Both players, the cable, cargo and collision target remain visible.",
+  camera: "Third-person follow gameplay camera attached to the Driver.",
+  readability: "Driver, Rigger, cable, cargo and collision target remain visible in playable space.",
   noveltyAxes: [
     { axis: "dependency_type", choice: "split-control", whyDifferent: "One object has divided controls." },
     { axis: "social_tension", choice: "trust-stop", whyDifferent: "One player must trust the other's stop call." },
@@ -75,7 +76,7 @@ const moment: GameplayMomentSpecV1 = {
   socialTension: "Rigger urgently calls stop while the Driver is still moving.",
   failureBeat: "Cargo clips a fragile machine if coordination is late.",
   expectedViewerUnderstanding: "Two people control different dimensions of one dangerous object.",
-  cameraIntent: "Keep both players, cargo and target visible in one gameplay frame.",
+  cameraIntent: "Third-person follow camera attached to Driver with Rigger and cargo ahead in playable space.",
   requiredVisualEvidence: [
     "both control stations visible",
     "cargo visibly swinging toward fragile machinery",
@@ -84,19 +85,21 @@ const moment: GameplayMomentSpecV1 = {
 };
 
 function validShotResponse() {
+  const shotId = "split-crane-swing-shot-0";
+  const momentId = "split-crane-swing";
   return JSON.stringify({
     shots: [
       {
         schema: "gameplay_shot",
         version: 1,
-        shotId: "split-crane-swing-shot-0",
-        momentId: "split-crane-swing",
+        shotId,
+        momentId,
         order: 0,
         durationSec: 5,
         purpose: "mechanic",
         actors: ["Driver", "Rigger"],
         action: "Driver moves right as Rigger tightens the cable while the cargo swings toward the machine.",
-        camera: "Elevated third-person gameplay camera with both stations and cargo visible.",
+        camera: "Third-person follow camera physically attached to Driver; Rigger, cargo and target remain ahead in playable distance.",
         environment: "Compact industrial repair bay with one fragile machine beside the cargo path.",
         continuity: { preserve: [] },
         expectedEvidence: [
@@ -111,6 +114,15 @@ function validShotResponse() {
           videoMode: "image-to-video",
           aspectRatio: "9:16",
           durationSec: 5,
+        },
+        metadata: {
+          gameplayAuthenticityPlan: validGameplayAuthenticityPlan({
+            shotId,
+            momentId,
+            playerRole: "Driver",
+            teammateRole: "Rigger",
+            cameraType: "third_person_follow",
+          }),
         },
       },
     ],
@@ -157,6 +169,10 @@ describe("Stage 4 token economy and visual approval planning", () => {
     expect(calls).toEqual([{ model: "gemini-3-6-flash", thinking: false }]);
     expect(result.escalated).toBe(false);
     expect(result.shots[0]?.expectedEvidence).toEqual(moment.requiredVisualEvidence);
+    expect(result.shots[0]?.metadata?.gameplayAuthenticity).toMatchObject({
+      passed: true,
+      hardFailures: [],
+    });
   });
 
   it("compiles approval-first image/video prompts without another LLM call", () => {
@@ -174,10 +190,16 @@ describe("Stage 4 token economy and visual approval planning", () => {
 
     expect(plan.imagePrompt).toContain("approval checkpoint before any video generation");
     expect(plan.imagePrompt).toContain("players must look like they are operating controls, not posing");
+    expect(plan.imagePrompt).toContain("PLAYER INPUT -> ACTION -> WORLD RESPONSE");
+    expect(plan.videoPrompt).toContain(
+      "camera remains physically attached to the playable character for the entire clip",
+    );
     expect(plan.negativeConstraints).toContain("wide cinematic establishing shot");
     expect(plan.metadata).toMatchObject({
       reference_approval_required: true,
       human_feedback_applied: true,
+      gameplay_authenticity_gate_passed: true,
+      video_authenticity_gate_passed: true,
     });
     expect(plan.compilerInputsHash.length).toBeGreaterThanOrEqual(16);
   });
