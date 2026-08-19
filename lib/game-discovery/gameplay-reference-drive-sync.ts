@@ -67,7 +67,10 @@ export function gameplayReferenceGameIdFromFolderName(gameName: string): string 
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "")
     .slice(0, 96);
-  const digest = createHash("sha256").update(gameName.trim().toLowerCase()).digest("hex").slice(0, 8);
+  const digest = createHash("sha256")
+    .update(gameName.trim().toLowerCase())
+    .digest("hex")
+    .slice(0, 8);
   return `drive-${slug || "game"}-${digest}`;
 }
 
@@ -243,16 +246,17 @@ async function enqueuePendingDriveReferences(limit: number): Promise<{
   for (const row of data ?? []) {
     const referenceId = typeof row.reference_id === "string" ? row.reference_id : "";
     if (!referenceId) continue;
-    const { data: result, error: enqueueError } = await supabase.rpc(
+    const { data: rpcResult, error: enqueueError } = await supabase.rpc(
       "gameplay_reference_enqueue_index_v1",
       { p_reference_id: referenceId },
     );
     if (enqueueError) {
       throw new Error(`GAMEPLAY_REFERENCE_INDEX_ENQUEUE_FAILED:${enqueueError.message}`);
     }
-    const payload = result && typeof result === "object" && !Array.isArray(result)
-      ? (result as Record<string, unknown>)
-      : {};
+    const payload =
+      rpcResult && typeof rpcResult === "object" && !Array.isArray(rpcResult)
+        ? (rpcResult as Record<string, unknown>)
+        : {};
     if (payload.enqueued === true) enqueued += 1;
     if (payload.reason === "active_job_exists") active += 1;
   }
@@ -282,14 +286,42 @@ export async function syncGameplayReferenceDrive(input?: {
   const { data: ledgerRows, error: ledgerError } = await supabase
     .from("gameplay_reference_drive_ingest")
     .select("drive_file_id");
-  if (ledgerError) throw new Error(`GAMEPLAY_REFERENCE_DRIVE_LEDGER_QUERY_FAILED:${ledgerError.message}`);
+  if (ledgerError) {
+    throw new Error(`GAMEPLAY_REFERENCE_DRIVE_LEDGER_QUERY_FAILED:${ledgerError.message}`);
+  }
   const knownDriveFiles = new Set((ledgerRows ?? []).map((row) => String(row.drive_file_id)));
-
   const candidates = discovery.images.filter((file) => !knownDriveFiles.has(file.id));
   result.discovered = candidates.length;
 
-  let processed = 0;
+  // Backfill the ledger for the trusted seed and any files registered by another ingest path.
+  // These never consume the max-new budget and never call a model.
+  const { data: registeredRows, error: registeredRowsError } = await supabase
+    .from("gameplay_references")
+    .select("drive_file_id,reference_id");
+  if (registeredRowsError) {
+    throw new Error(`GAMEPLAY_REFERENCE_EXISTING_FILE_QUERY_FAILED:${registeredRowsError.message}`);
+  }
+  const registeredByDriveFile = new Map(
+    (registeredRows ?? []).map((row) => [String(row.drive_file_id), String(row.reference_id)]),
+  );
+
+  const newCandidates: DriveImageCandidate[] = [];
   for (const file of candidates) {
+    const existingReferenceId = registeredByDriveFile.get(file.id);
+    if (!existingReferenceId) {
+      newCandidates.push(file);
+      continue;
+    }
+    await recordIngest({
+      file,
+      status: "already_registered",
+      referenceId: existingReferenceId,
+    });
+    result.alreadyRegistered += 1;
+  }
+
+  let processed = 0;
+  for (const file of newCandidates) {
     if (processed >= maxNewFiles) break;
 
     if (!isSupportedGameplayReferenceImageMime(file.mimeType)) {
@@ -307,25 +339,6 @@ export async function syncGameplayReferenceDrive(input?: {
     }
 
     try {
-      const { data: existingByFile, error: existingFileError } = await supabase
-        .from("gameplay_references")
-        .select("reference_id")
-        .eq("drive_file_id", file.id)
-        .maybeSingle();
-      if (existingFileError) {
-        throw new Error(`GAMEPLAY_REFERENCE_EXISTING_FILE_QUERY_FAILED:${existingFileError.message}`);
-      }
-      if (existingByFile?.reference_id) {
-        await recordIngest({
-          file,
-          status: "already_registered",
-          referenceId: String(existingByFile.reference_id),
-        });
-        result.alreadyRegistered += 1;
-        processed += 1;
-        continue;
-      }
-
       const buffer = await getDriveStorageProvider().downloadFile(file.id);
       const contentSha256 = createHash("sha256").update(buffer).digest("hex");
       const { data: exactDuplicate, error: duplicateError } = await supabase
