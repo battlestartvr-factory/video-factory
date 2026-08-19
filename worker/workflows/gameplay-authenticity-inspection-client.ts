@@ -49,6 +49,68 @@ export function outputDriveFileId(outputs: Array<Record<string, unknown>>): stri
   return null;
 }
 
+export function outputProviderUrl(outputs: Array<Record<string, unknown>>): string | null {
+  for (const output of outputs) {
+    const candidate = output.url;
+    if (typeof candidate === "string" && candidate.trim()) return candidate.trim();
+  }
+  return null;
+}
+
+export async function materializeGameplayProviderOutput(input: {
+  rootCreativeRunId: string;
+  generationId: string;
+  shotId: string;
+  assetType: "image" | "video";
+  assetUrl: string;
+  signal: AbortSignal;
+}): Promise<{ driveFileId: string; driveWebUrl: string | null; mimeType: string }> {
+  const data = await requestInspection<{
+    archived: {
+      driveFileId: string;
+      driveWebUrl: string | null;
+      mimeType: string;
+    };
+  }>(
+    {
+      action: "materialize",
+      rootCreativeRunId: input.rootCreativeRunId,
+      generationId: input.generationId,
+      shotId: input.shotId,
+      assetType: input.assetType,
+      assetUrl: input.assetUrl,
+    },
+    input.signal,
+  );
+  if (!data.archived?.driveFileId) {
+    throw new Error("GAMEPLAY_GENERATED_ASSET_MATERIALIZATION_RESPONSE_INVALID");
+  }
+  return data.archived;
+}
+
+export async function resolveInspectionDriveFileId(input: {
+  rootCreativeRunId: string;
+  generationId: string;
+  shotId: string;
+  assetType: "image" | "video";
+  outputs: Array<Record<string, unknown>>;
+  signal: AbortSignal;
+}): Promise<string> {
+  const existing = outputDriveFileId(input.outputs);
+  if (existing) return existing;
+  const assetUrl = outputProviderUrl(input.outputs);
+  if (!assetUrl) throw new Error("GAMEPLAY_GENERATED_ASSET_OUTPUT_MISSING");
+  const archived = await materializeGameplayProviderOutput({
+    rootCreativeRunId: input.rootCreativeRunId,
+    generationId: input.generationId,
+    shotId: input.shotId,
+    assetType: input.assetType,
+    assetUrl,
+    signal: input.signal,
+  });
+  return archived.driveFileId;
+}
+
 export async function inspectGameplayImageFromWorker(input: {
   rootCreativeRunId: string;
   generationId: string;

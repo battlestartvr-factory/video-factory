@@ -2,7 +2,7 @@ import { gameplayAuthenticitySpecFromShot } from "../../lib/game-discovery/gamep
 import type { GameplayVideoAuthenticityInspectionV1 } from "../../lib/game-discovery/gameplay-authenticity-inspection";
 import {
   inspectGameplayVideoFromWorker,
-  outputDriveFileId,
+  resolveInspectionDriveFileId,
 } from "./gameplay-authenticity-inspection-client";
 import type { WorkflowTickContext, WorkflowTickOutcome } from "./types";
 
@@ -31,17 +31,24 @@ export async function inspectGameplayVideosBeforeAssetGraph(input: {
 
   for (const item of videoStage.items.filter((candidate) => candidate.status === "completed")) {
     const shot = shotById.get(item.shotId);
-    const driveFileId = outputDriveFileId(item.outputs);
-    if (!shot || !driveFileId) {
+    if (!shot) {
       failures.push({
         shotId: item.shotId,
         generationId: item.generationId,
-        error: !shot ? "planned_shot_missing" : "drive_output_missing",
+        error: "planned_shot_missing",
       });
       continue;
     }
 
     try {
+      const driveFileId = await resolveInspectionDriveFileId({
+        rootCreativeRunId,
+        generationId: item.generationId,
+        shotId: item.shotId,
+        assetType: "video",
+        outputs: item.outputs,
+        signal: context.signal,
+      });
       const inspection = await inspectGameplayVideoFromWorker({
         rootCreativeRunId,
         generationId: item.generationId,

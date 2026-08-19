@@ -7,7 +7,7 @@ import type { DiscoveryFeedbackMemory } from "../../lib/game-discovery/shot-plan
 import { mergeDiscoveryFeedback } from "./gameplay-authenticity-auto-feedback";
 import {
   inspectGameplayImageFromWorker,
-  outputDriveFileId,
+  resolveInspectionDriveFileId,
 } from "./gameplay-authenticity-inspection-client";
 import type { WorkflowTickContext, WorkflowTickOutcome } from "./types";
 
@@ -51,17 +51,24 @@ export async function inspectReferenceImagesBeforeHumanGate(input: {
 
   for (const item of referenceStage.items.filter((candidate) => candidate.status === "completed")) {
     const shot = shotById.get(item.shotId);
-    const driveFileId = outputDriveFileId(item.outputs);
-    if (!shot || !driveFileId) {
+    if (!shot) {
       inconclusive.push({
         shotId: item.shotId,
         generationId: item.generationId,
-        error: !shot ? "planned_shot_missing" : "drive_output_missing",
+        error: "planned_shot_missing",
       });
       continue;
     }
 
     try {
+      const driveFileId = await resolveInspectionDriveFileId({
+        rootCreativeRunId,
+        generationId: item.generationId,
+        shotId: item.shotId,
+        assetType: "image",
+        outputs: item.outputs,
+        signal: context.signal,
+      });
       inspections.push(
         await inspectGameplayImageFromWorker({
           rootCreativeRunId,
