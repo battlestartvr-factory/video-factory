@@ -5,6 +5,7 @@ import {
   inspectGeneratedGameplayImage,
   inspectGeneratedGameplayVideo,
 } from "@/lib/game-discovery/gameplay-authenticity-inspector";
+import { archiveGeneratedGameplayAsset } from "@/lib/game-discovery/gameplay-generated-asset-archive";
 import { resolveSupabaseServiceRoleKey } from "@/lib/supabase/service-config";
 
 export const runtime = "nodejs";
@@ -33,6 +34,22 @@ export async function POST(request: Request) {
   }
 
   try {
+    if (body.action === "materialize") {
+      const assetType = body.assetType === "image" || body.assetType === "video" ? body.assetType : null;
+      if (!assetType) throw new Error("INVALID_ASSETTYPE");
+      const archived = await archiveGeneratedGameplayAsset({
+        rootCreativeRunId: requiredText(body, "rootCreativeRunId", 100),
+        generationId: requiredText(body, "generationId", 100),
+        shotId: requiredText(body, "shotId", 160),
+        assetType,
+        assetUrl: requiredText(body, "assetUrl", 8_000),
+      });
+      return NextResponse.json(
+        { ok: true, data: { archived } },
+        { status: 200, headers: { "Cache-Control": "no-store" } },
+      );
+    }
+
     const common = {
       rootCreativeRunId: requiredText(body, "rootCreativeRunId", 100),
       generationId: requiredText(body, "generationId", 100),
