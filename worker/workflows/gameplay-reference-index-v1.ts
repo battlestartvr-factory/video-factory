@@ -1,19 +1,59 @@
-import { indexGameplayReference } from "../../lib/game-discovery/gameplay-reference-service";
-import { createSupabaseServiceClient } from "../../lib/supabase/server";
 import type { WorkflowTickHandler } from "./types";
 
-interface ReferenceIndexJobInput {
-  reference_id?: unknown;
+interface IndexedReferenceResult {
+  reference_id: string;
+  game_name: string;
+  camera_type: string;
+  controllable_player_obvious: boolean;
+  coop_dependency_visible: boolean;
+  current_player_action: string;
+  visible_input_affordance: string;
+  game_response: string;
+  gameplay_description: string;
+  why_this_looks_like_gameplay: string;
+  canonical_reference_id: string | null;
 }
 
-async function getReferenceId(jobId: string): Promise<string> {
-  const supabase = createSupabaseServiceClient();
-  const { data, error } = await supabase.from("factory_jobs").select("input").eq("id", jobId).single();
-  if (error || !data) throw new Error(`GAMEPLAY_REFERENCE_INDEX_JOB_NOT_FOUND:${jobId}`);
-  const input = (data.input ?? {}) as ReferenceIndexJobInput;
-  const referenceId = typeof input.reference_id === "string" ? input.reference_id.trim() : "";
+function referenceIdFromState(state: Record<string, unknown>): string {
+  const value = state.reference_id;
+  const referenceId = typeof value === "string" ? value.trim() : "";
   if (!referenceId) throw new Error("GAMEPLAY_REFERENCE_INDEX_JOB_REFERENCE_ID_REQUIRED");
   return referenceId;
+}
+
+function serviceToken(): string {
+  const token = (process.env.SUPABASE_SERVICE_ROLE_KEY ?? process.env.SUPABASE_SECRET_KEY ?? "").trim();
+  if (!token) throw new Error("GAMEPLAY_REFERENCE_INDEX_SERVICE_TOKEN_MISSING");
+  return token;
+}
+
+function internalBaseUrl(): string {
+  return (process.env.WORKER_APP_INTERNAL_URL ?? "http://app:3000").trim() || "http://app:3000";
+}
+
+async function requestIndex(referenceId: string, signal: AbortSignal): Promise<IndexedReferenceResult> {
+  const response = await fetch(`${internalBaseUrl()}/api/internal/gameplay-reference-index`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${serviceToken()}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ referenceId }),
+    signal,
+  });
+  const rawText = await response.text();
+  let payload: { ok?: boolean; code?: string; message?: string; data?: IndexedReferenceResult } = {};
+  try {
+    payload = JSON.parse(rawText) as typeof payload;
+  } catch {
+    // Keep the error deterministic and do not expose an upstream HTML/body dump.
+  }
+  if (!response.ok || !payload.ok || !payload.data) {
+    throw new Error(
+      `${payload.code ?? "GAMEPLAY_REFERENCE_INDEX_UPSTREAM_FAILED"}:${payload.message ?? response.status}`,
+    );
+  }
+  return payload.data;
 }
 
 function failure(error: unknown, referenceId?: string) {
@@ -45,39 +85,29 @@ function failure(error: unknown, referenceId?: string) {
 export const gameplayReferenceIndexV1: WorkflowTickHandler = async (context) => {
   let referenceId: string | undefined;
   try {
-    referenceId = await getReferenceId(context.jobId);
-    const spec = await indexGameplayReference({ referenceId });
+    referenceId = referenceIdFromState(context.state);
+    const indexed = await requestIndex(referenceId, context.signal);
     return {
       status: "completed",
       state: {
         reference_id: referenceId,
-        camera_type: spec.cameraType,
-        controllable_player_obvious: spec.controllablePlayerObvious,
-        coop_dependency_visible: spec.coopDependencyVisible,
-        canonical_reference_id: spec.canonicalReferenceId ?? null,
+        camera_type: indexed.camera_type,
+        controllable_player_obvious: indexed.controllable_player_obvious,
+        coop_dependency_visible: indexed.coop_dependency_visible,
+        canonical_reference_id: indexed.canonical_reference_id,
         model_calls_allowed: 1,
         automatic_retry_allowed: false,
       },
       currentStage: "indexed",
       progress: 1,
-      result: {
-        reference_id: referenceId,
-        game_name: spec.gameName,
-        camera_type: spec.cameraType,
-        current_player_action: spec.currentPlayerAction,
-        visible_input_affordance: spec.visibleInputAffordance,
-        game_response: spec.gameResponse,
-        gameplay_description: spec.gameplayDescription,
-        why_this_looks_like_gameplay: spec.whyThisLooksLikeGameplay,
-        canonical_reference_id: spec.canonicalReferenceId ?? null,
-      },
+      result: indexed,
       stateReason: "gameplay_reference_indexed",
       eventType: "gameplay_reference.indexed",
       eventPayload: {
         reference_id: referenceId,
-        game_name: spec.gameName,
-        camera_type: spec.cameraType,
-        canonical_reference_id: spec.canonicalReferenceId ?? null,
+        game_name: indexed.game_name,
+        camera_type: indexed.camera_type,
+        canonical_reference_id: indexed.canonical_reference_id,
       },
     };
   } catch (error) {
