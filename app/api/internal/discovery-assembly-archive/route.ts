@@ -1,6 +1,9 @@
 import { NextResponse } from "next/server";
 import { verifyIngestBearerToken } from "@/lib/asset-ingest/auth";
-import { archiveDiscoveryAssembly } from "@/lib/game-discovery/assembly-drive-archive";
+import {
+  archiveDiscoveryAssembly,
+  type DiscoveryAssemblyVariant,
+} from "@/lib/game-discovery/assembly-drive-archive";
 import { resolveSupabaseServiceRoleKey } from "@/lib/supabase/service-config";
 
 export const runtime = "nodejs";
@@ -11,6 +14,7 @@ type AssemblyArchiveRequest = {
   rootCreativeRunId?: string;
   conceptRunId?: string;
   conceptId?: string;
+  variant?: DiscoveryAssemblyVariant;
   artifactRelativePath?: string;
   inputVideoGenerationIds?: string[];
   sha256?: string;
@@ -34,6 +38,7 @@ export async function POST(request: Request) {
     typeof body.rootCreativeRunId !== "string" ||
     typeof body.conceptRunId !== "string" ||
     typeof body.conceptId !== "string" ||
+    (body.variant !== "landscape_master" && body.variant !== "vertical_social") ||
     typeof body.artifactRelativePath !== "string" ||
     !Array.isArray(body.inputVideoGenerationIds) ||
     body.inputVideoGenerationIds.length !== 1 ||
@@ -50,6 +55,7 @@ export async function POST(request: Request) {
       rootCreativeRunId: body.rootCreativeRunId,
       conceptRunId: body.conceptRunId,
       conceptId: body.conceptId,
+      variant: body.variant,
       artifactRelativePath: body.artifactRelativePath,
       inputVideoGenerationIds: body.inputVideoGenerationIds,
       sha256: body.sha256,
@@ -63,6 +69,7 @@ export async function POST(request: Request) {
     console.error("discovery.assembly.archive_failed", {
       root_creative_run_id: body.rootCreativeRunId,
       concept_run_id: body.conceptRunId,
+      variant: body.variant,
       error: message,
     });
     const status = message === "GOOGLE_DRIVE_NOT_CONFIGURED" ? 503 : 502;
