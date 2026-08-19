@@ -4,7 +4,8 @@ export type DiscoveryLlmTask =
   | "concept_pre_evaluation"
   | "gameplay_moment_planning"
   | "shot_planning"
-  | "feedback_structuring";
+  | "feedback_structuring"
+  | "gameplay_reference_captioning";
 
 export type DiscoveryModelTier = "cheap" | "creative" | "top";
 
@@ -83,6 +84,16 @@ const POLICIES: Record<DiscoveryLlmTask, DiscoveryLlmPolicy> = {
     thinking: false,
     maxOutputTokens: 3072,
     maxCallsPerBatch: 2,
+    fallbackModels: [],
+    automaticEscalation: false,
+  },
+  gameplay_reference_captioning: {
+    task: "gameplay_reference_captioning",
+    primaryModel: "gemini-3-6-flash",
+    tier: "cheap",
+    thinking: false,
+    maxOutputTokens: 4096,
+    maxCallsPerBatch: 1,
     fallbackModels: [],
     automaticEscalation: false,
   },
