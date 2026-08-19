@@ -13,20 +13,20 @@ import { kieAnthropicProvider } from "./kie-anthropic";
 export class KieOpenAIChatAdapter implements KieAdapter {
   async run(ctx: KieAdapterContext, input: AgentRequest) {
     const reasoningParams = buildReasoningBody(ctx);
+    const tools = input.tools.map((tool) => ({
+      type: "function",
+      function: {
+        name: tool.name,
+        description: tool.description,
+        parameters: tool.parameters,
+      },
+    }));
     const response = await kieFetch(
       ctx,
       {
         model: ctx.model.providerModel,
         messages: toOpenAiMessages(input.system, input.messages),
-        tools: input.tools.map((tool) => ({
-          type: "function",
-          function: {
-            name: tool.name,
-            description: tool.description,
-            parameters: tool.parameters,
-          },
-        })),
-        tool_choice: "auto",
+        ...(tools.length ? { tools, tool_choice: "auto" } : {}),
         temperature: 0.4,
         ...reasoningParams,
       },
