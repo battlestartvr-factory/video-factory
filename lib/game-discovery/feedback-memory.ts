@@ -50,6 +50,33 @@ function clip(value: string, max: number): string {
   return `${normalized.slice(0, Math.max(1, max - 1)).trimEnd()}…`;
 }
 
+export function explicitlyReportsGameplayAuthenticityFailure(rawFeedback: string): boolean {
+  const normalized = rawFeedback.trim().toLowerCase();
+  return [
+    /\bnot gameplay\b/,
+    /\bdoes(?:n['’]t| not) look like (?:a )?(?:real )?(?:game|gameplay)\b/,
+    /\blooks? (?:like )?(?:a )?cinematic(?: scene| shot| video)?\b/,
+    /\bspectator camera\b/,
+    /\btrailer shot\b/,
+    /не (?:выглядит|похоже) как (?:игра|геймплей)/,
+    /не похоже на (?:игру|геймплей)/,
+    /\bне геймплей\b/,
+    /кинематографич/,
+    /как (?:трейлер|постановочн(?:ая|ый) сцен)/,
+  ].some((pattern) => pattern.test(normalized));
+}
+
+export function applyGameplayAuthenticityFeedbackClassification(input: {
+  rawFeedback: string;
+  feedback: GameplayReferenceFeedbackV1;
+}): GameplayReferenceFeedbackV1 {
+  if (!explicitlyReportsGameplayAuthenticityFailure(input.rawFeedback)) return input.feedback;
+  return gameplayReferenceFeedbackV1Schema.parse({
+    ...input.feedback,
+    errorTags: [...new Set(["gameplay_authenticity_failure", ...input.feedback.errorTags])],
+  });
+}
+
 /**
  * Human review must never be lost just because the cheap structuring model is unavailable
  * or emits invalid JSON. Preserve the user's criticism in a bounded schema-valid form so
@@ -60,7 +87,7 @@ export function fallbackGameplayReferenceFeedback(input: {
   decision: "approve" | "reject" | "revise";
 }): GameplayReferenceFeedbackV1 {
   const raw = clip(input.rawFeedback, 500);
-  return gameplayReferenceFeedbackV1Schema.parse({
+  const feedback = gameplayReferenceFeedbackV1Schema.parse({
     schema: "gameplay_reference_feedback",
     version: 1,
     errorTags: [],
@@ -68,6 +95,10 @@ export function fallbackGameplayReferenceFeedback(input: {
     mustAvoid: input.decision === "reject" && raw ? [raw] : [],
     reusableScope: input.decision === "revise" ? "shot" : "concept",
     summary: clip(input.rawFeedback, 2_000) || "Human review feedback was recorded.",
+  });
+  return applyGameplayAuthenticityFeedbackClassification({
+    rawFeedback: input.rawFeedback,
+    feedback,
   });
 }
 
@@ -84,13 +115,16 @@ export async function structureGameplayReferenceFeedback(input: {
     model: policy.primaryModel,
     system:
       "You structure human review feedback for an AI co-op gameplay factory. Preserve explicit criticism. Extract durable constraints only when the user clearly said or strongly implied them. Never invent preferences.",
-    prompt: `Convert this gameplay reference-image review into structured memory.\n\nDECISION: ${input.decision}\nCONCEPT: ${input.conceptSummary ?? "not provided"}\nSHOT: ${input.shotSummary ?? "not provided"}\nRAW USER FEEDBACK:\n${input.rawFeedback}\n\nReturn ONLY JSON with schema gameplay_reference_feedback version 1 and fields errorTags, mustShow, mustAvoid, reusableScope, summary.\n- errorTags: concise machine-readable obvious failure categories such as coop_dependency_not_visible, wrong_camera, too_cinematic, unreadable_consequence. Use only failures supported by the feedback.\n- mustShow: future visible requirements clearly requested by the user.\n- mustAvoid: concrete rejected patterns that should not be repeated.\n- reusableScope: shot for local correction, concept for this game idea, project only for a clearly general preference/rule.\n- summary: faithful compact paraphrase of the feedback.\nDo not infer a project-wide rule from a one-off aesthetic comment.`,
+    prompt: `Convert this gameplay reference-image review into structured memory.\n\nDECISION: ${input.decision}\nCONCEPT: ${input.conceptSummary ?? "not provided"}\nSHOT: ${input.shotSummary ?? "not provided"}\nRAW USER FEEDBACK:\n${input.rawFeedback}\n\nReturn ONLY JSON with schema gameplay_reference_feedback version 1 and fields errorTags, mustShow, mustAvoid, reusableScope, summary.\n- errorTags: concise machine-readable obvious failure categories such as gameplay_authenticity_failure, coop_dependency_not_visible, wrong_camera, too_cinematic, unreadable_consequence. Use only failures supported by the feedback. If the user explicitly says the result does not look like a game/gameplay or reads as cinematic/trailer/spectator instead of active gameplay, gameplay_authenticity_failure is REQUIRED.\n- mustShow: future visible requirements clearly requested by the user.\n- mustAvoid: concrete rejected patterns that should not be repeated.\n- reusableScope: shot for local correction, concept for this game idea, project only for a clearly general preference/rule.\n- summary: faithful compact paraphrase of the feedback.\nDo not infer a project-wide rule from a one-off aesthetic comment.`,
     maxTokens: policy.maxOutputTokens,
     thinking: policy.thinking,
     signal: input.signal,
   });
 
-  const feedback = gameplayReferenceFeedbackV1Schema.parse(extractJson(response.text));
+  const feedback = applyGameplayAuthenticityFeedbackClassification({
+    rawFeedback: input.rawFeedback,
+    feedback: gameplayReferenceFeedbackV1Schema.parse(extractJson(response.text)),
+  });
   return {
     feedback,
     model: policy.primaryModel,
