@@ -9,13 +9,19 @@ const caddySource = readFileSync(new URL("../../deploy/Caddyfile", import.meta.u
 const deploySource = readFileSync(new URL("../../scripts/deploy.sh", import.meta.url), "utf8");
 
 describe("discovery chat prototype contract", () => {
-  it("renders completed prototype video through the authenticated same-origin stream route", () => {
+  it("renders both completed gameplay artifacts through the authenticated same-origin stream route", () => {
     expect(cardSource).toContain('jobStatus === "completed"');
     expect(cardSource).toContain("<video");
     expect(cardSource).toContain("playsInline");
     expect(cardSource).toContain("preload=\"metadata\"");
     expect(cardSource).toContain("/api/discovery/batches/${encodeURIComponent(runId)}/prototypes/");
-    expect(cardSource).toContain("Prototype video готов");
+    expect(cardSource).toContain("Gameplay prototype готов");
+    expect(cardSource).toContain("Gameplay master · 16:9");
+    expect(cardSource).toContain("Social edit · 9:16");
+    expect(cardSource).toContain("?variant=master");
+    expect(cardSource).toContain("?variant=social");
+    expect(cardSource).toContain("Скачать gameplay master 16:9");
+    expect(cardSource).toContain("Скачать social edit 9:16");
   });
 
   it("keeps Caddy canonical and reloads tracked proxy configuration during deployment", () => {
