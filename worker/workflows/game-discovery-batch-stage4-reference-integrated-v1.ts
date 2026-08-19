@@ -5,6 +5,11 @@ import {
   type GameplayAuthenticitySpecV1,
   type GameplayVideoMotionPlanV1,
 } from "../../lib/game-discovery/gameplay-authenticity";
+import {
+  buildGameplayReferenceCoverageBlock,
+  GameplayReferenceServiceError,
+  type GameplayReferenceCoverageBlock,
+} from "../../lib/game-discovery/gameplay-reference-coverage";
 import { compileGameplayPromptPlans } from "../../lib/game-discovery/prompt-compiler";
 import {
   stage4GameplayReferenceSetSchema,
@@ -73,9 +78,11 @@ async function callStage4ReferenceService<T>(body: Record<string, unknown>, sign
     // Keep errors deterministic; do not expose upstream HTML.
   }
   if (!response.ok || payload.ok !== true || !payload.data) {
-    throw new Error(
-      `${payload.code ?? "GAMEPLAY_REFERENCE_STAGE4_UPSTREAM_FAILED"}:${payload.message ?? response.status}`,
-    );
+    throw new GameplayReferenceServiceError({
+      code: payload.code ?? "GAMEPLAY_REFERENCE_STAGE4_UPSTREAM_FAILED",
+      detail: payload.message ?? String(response.status),
+      status: response.status,
+    });
   }
   return payload.data;
 }
@@ -158,6 +165,45 @@ function gateFailureOutcome(input: {
   };
 }
 
+function referenceCoverageFailureOutcome(input: {
+  context: WorkflowTickContext;
+  blocks: GameplayReferenceCoverageBlock[];
+  specs: Record<string, GameplayAuthenticitySpecV1>;
+}): WorkflowTickOutcome {
+  const summary = input.blocks
+    .map((block) => {
+      const missing = block.missingPurposes.length ? block.missingPurposes.join(",") : "unknown_purpose";
+      return `${block.conceptId}/${block.shotId}:missing=${missing}:camera=${block.camera}`;
+    })
+    .join(" | ");
+  return {
+    status: "failed",
+    currentStage: "gameplay_reference_coverage_failed",
+    progress: 70,
+    state: {
+      ...input.context.state,
+      gameplay_reference_coverage_blocks: input.blocks,
+      gameplay_authenticity_specs: input.specs,
+      image_generation_locked: true,
+      video_generation_locked: true,
+      provider_calls_blocked_by_reference_coverage: true,
+      cost_avoided_by_pre_generation_rejection: true,
+    },
+    error: {
+      code: "GAMEPLAY_REFERENCE_COVERAGE_INSUFFICIENT",
+      message: summary.slice(0, 2_000),
+      retryable: false,
+    },
+    stateReason: "s4_all_selected_concepts_blocked_by_reference_coverage",
+    eventType: "discovery.gameplay_reference_coverage_failed",
+    eventPayload: {
+      blocks: input.blocks,
+      provider_call_blocked: true,
+      cost_avoided_by_pre_generation_rejection: true,
+    },
+  };
+}
+
 function evaluateShotSet(shots: ShotSpecV1[]): {
   specs: Record<string, GameplayAuthenticitySpecV1>;
   failures: string[];
@@ -231,19 +277,47 @@ async function ensurePromptReferenceSets(
   const momentById = new Map(planning.moments.map((moment) => [moment.momentId, moment]));
   const conceptById = new Map(concepts.acceptedConcepts.map((concept) => [concept.conceptId, concept]));
   const referenceSets: Record<string, Stage4GameplayReferenceSet> = {};
+  const coverageBlocks: GameplayReferenceCoverageBlock[] = [];
+  const eligibleShots: ShotSpecV1[] = [];
 
   for (const shot of visual.shots) {
     const moment = momentById.get(shot.momentId);
     if (!moment) throw new Error(`GAMEPLAY_REFERENCE_MOMENT_NOT_FOUND:${shot.momentId}`);
     const concept = conceptById.get(moment.conceptId);
     if (!concept) throw new Error(`GAMEPLAY_REFERENCE_CONCEPT_NOT_FOUND:${moment.conceptId}`);
-    referenceSets[shot.shotId] = await retrieveReferenceSet({ concept, moment, shot, signal: context.signal });
+    try {
+      referenceSets[shot.shotId] = await retrieveReferenceSet({ concept, moment, shot, signal: context.signal });
+      eligibleShots.push(shot);
+    } catch (error) {
+      const block = buildGameplayReferenceCoverageBlock({
+        error,
+        conceptId: concept.conceptId,
+        momentId: moment.momentId,
+        shotId: shot.shotId,
+        camera: shot.camera,
+      });
+      if (!block) throw error;
+      coverageBlocks.push(block);
+    }
   }
 
+  if (!eligibleShots.length) {
+    return referenceCoverageFailureOutcome({
+      context,
+      blocks: coverageBlocks,
+      specs: preImageGate.specs,
+    });
+  }
+
+  const eligibleMomentIds = new Set(eligibleShots.map((shot) => shot.momentId));
+  const eligibleMoments = planning.moments.filter((moment) => eligibleMomentIds.has(moment.momentId));
+  const eligibleConceptIds = new Set(eligibleMoments.map((moment) => moment.conceptId));
+  const eligibleConcepts = concepts.acceptedConcepts.filter((concept) => eligibleConceptIds.has(concept.conceptId));
+
   const promptPlans = compileGameplayPromptPlans({
-    concepts: concepts.acceptedConcepts,
-    moments: planning.moments,
-    shots: visual.shots,
+    concepts: eligibleConcepts,
+    moments: eligibleMoments,
+    shots: eligibleShots,
     feedbackMemory: feedback,
     gameplayReferencesByShot: referenceSets,
   });
@@ -255,7 +329,7 @@ async function ensurePromptReferenceSets(
       jobId: context.jobId,
       rootCreativeRunId,
       result: {
-        shots: visual.shots,
+        shots: eligibleShots,
         model: text(planner.model) ?? "persisted-shot-plan",
         repairModel: text(planner.repair_model) ?? "persisted-schema-repair",
         escalated: planner.escalated === true,
@@ -278,6 +352,7 @@ async function ensurePromptReferenceSets(
       ...(outcome.state ?? context.state),
       prompt_plans: promptPlans,
       gameplay_reference_sets: referenceSets,
+      gameplay_reference_coverage_blocks: coverageBlocks,
       gameplay_reference_integration_version: 1,
       gameplay_authenticity_specs: preImageGate.specs,
       gameplay_authenticity_gate_passed: true,
@@ -285,11 +360,17 @@ async function ensurePromptReferenceSets(
         (total, set) => total + set.references.length,
         0,
       ),
+      gameplay_reference_blocked_concept_count: coverageBlocks.length,
+      gameplay_reference_eligible_shot_count: eligibleShots.length,
     },
-    stateReason: "s4_gameplay_references_and_authenticity_compiled",
+    stateReason: coverageBlocks.length
+      ? "s4_gameplay_references_compiled_with_per_concept_coverage_blocks"
+      : "s4_gameplay_references_and_authenticity_compiled",
     eventType: "discovery.gameplay_references_compiled",
     eventPayload: {
-      shot_ids: visual.shots.map((shot) => shot.shotId),
+      shot_ids: eligibleShots.map((shot) => shot.shotId),
+      blocked_shot_ids: coverageBlocks.map((block) => block.shotId),
+      coverage_blocks: coverageBlocks,
       gameplay_authenticity_gate_passed: true,
       reference_counts: Object.fromEntries(
         Object.entries(referenceSets).map(([shotId, set]) => [shotId, set.references.length]),
