@@ -168,6 +168,12 @@ function round(value: number): number {
   return Math.round(Math.max(0, Math.min(1, value)) * 1000) / 1000;
 }
 
+function clipMotionEvidence(value: string, max = 1_900): string {
+  const normalized = value.trim();
+  if (normalized.length <= max) return normalized;
+  return `${normalized.slice(0, Math.max(1, max - 1)).trimEnd()}…`;
+}
+
 function hasMeaningfulAffordance(plan: GameplayAuthenticityPlanV1): boolean {
   return plan.gameplayAffordances.some(
     (affordance) => affordance.visible && affordance.meaningful && affordance.informationUsedByPlayer.trim(),
@@ -388,25 +394,29 @@ export function buildGameplayVideoMotionPlan(
         startSec: 0,
         endSec: 1,
         kind: "aim_or_prepare",
-        description: `Player prepares the input ${authenticity.playerInput.input}; visible evidence: ${authenticity.playerInput.visibleEvidence}`,
+        description: clipMotionEvidence(
+          `Player prepares the input ${authenticity.playerInput.input}; visible evidence: ${authenticity.playerInput.visibleEvidence}`,
+        ),
       },
       {
         startSec: 1,
         endSec: 2.5,
         kind: "player_action",
-        description: authenticity.playerAction.action,
+        description: clipMotionEvidence(authenticity.playerAction.action),
       },
       {
         startSec: 2.5,
         endSec: 3.5,
         kind: "world_response",
-        description: authenticity.worldResponse.response,
+        description: clipMotionEvidence(authenticity.worldResponse.response),
       },
       {
         startSec: 3.5,
         endSec: 5,
         kind: "player_adjustment",
-        description: `Playable adjustment/recovery while teammate function remains visible: ${authenticity.coop.teammateFunction}`,
+        description: clipMotionEvidence(
+          `Playable adjustment/recovery while teammate function remains visible: ${authenticity.coop.teammateFunction}`,
+        ),
       },
     ],
     couldBeRecordedByPlayer,
