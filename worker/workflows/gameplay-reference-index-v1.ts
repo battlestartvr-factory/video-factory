@@ -1,6 +1,6 @@
 import type { WorkflowTickHandler } from "./types";
 
-interface IndexedReferenceResult {
+interface IndexedReferenceResult extends Record<string, unknown> {
   reference_id: string;
   game_name: string;
   camera_type: string;
