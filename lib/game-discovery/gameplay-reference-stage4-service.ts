@@ -7,10 +7,8 @@ import type {
   GameplayMomentSpecV1,
   ShotSpecV1,
 } from "./schemas";
-import {
-  buildGameplayReferenceNeed,
-  retrieveGameplayReferences,
-} from "./gameplay-reference-retrieval";
+import { buildGameplayReferenceNeed } from "./gameplay-reference-retrieval";
+import { retrievePurposeAwareGameplayReferences } from "./gameplay-reference-purpose-retrieval";
 import { getGameplayReferenceCandidates } from "./gameplay-reference-service";
 import {
   stage4GameplayReferenceProviderAssetSchema,
@@ -71,8 +69,15 @@ export async function retrieveStage4GameplayReferences(input: {
     productionScopeFeel: ["indie", "AA"],
     maxResults: STAGE4_REFERENCE_COUNT_V1,
   });
-  const candidates = await getGameplayReferenceCandidates({ need, candidateLimit: 80 });
-  const selected = retrieveGameplayReferences({ need, candidates });
+
+  // Candidate discovery must stay broad. Co-op visibility is a hard requirement only for the
+  // purpose-labeled co-op reference, not for camera/interaction/art-direction evidence.
+  const candidateNeed = { ...need, requireCoopDependency: false };
+  const candidates = await getGameplayReferenceCandidates({
+    need: candidateNeed,
+    candidateLimit: 80,
+  });
+  const selected = retrievePurposeAwareGameplayReferences({ need, candidates });
   if (selected.references.length < STAGE4_REFERENCE_COUNT_V1) {
     throw new Error(
       `GAMEPLAY_REFERENCE_SET_INSUFFICIENT:${selected.references.length}:need_at_least_${STAGE4_REFERENCE_COUNT_V1}`,
