@@ -22,6 +22,7 @@ import {
 
 const CACHE_BUCKET = "generator-inputs";
 const SIGNED_URL_TTL_SECONDS = 48 * 60 * 60;
+const STAGE4_REFERENCE_COUNT_V1 = 4;
 
 function safeFilename(value: string): string {
   const normalized = value.normalize("NFKC").replace(/[^a-zA-Z0-9._-]+/g, "-");
@@ -68,13 +69,13 @@ export async function retrieveStage4GameplayReferences(input: {
     mechanicTags: input.concept.interactionModel,
     interactionModel: input.concept.interactionModel,
     productionScopeFeel: ["indie", "AA"],
-    maxResults: 8,
+    maxResults: STAGE4_REFERENCE_COUNT_V1,
   });
   const candidates = await getGameplayReferenceCandidates({ need, candidateLimit: 80 });
   const selected = retrieveGameplayReferences({ need, candidates });
-  if (selected.references.length < 4) {
+  if (selected.references.length < STAGE4_REFERENCE_COUNT_V1) {
     throw new Error(
-      `GAMEPLAY_REFERENCE_SET_INSUFFICIENT:${selected.references.length}:need_at_least_4`,
+      `GAMEPLAY_REFERENCE_SET_INSUFFICIENT:${selected.references.length}:need_at_least_${STAGE4_REFERENCE_COUNT_V1}`,
     );
   }
   return toStage4GameplayReferenceSet(selected);
