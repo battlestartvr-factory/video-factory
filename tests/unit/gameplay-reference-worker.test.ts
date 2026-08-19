@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { gameplayReferenceIndexV1 } from "../../worker/workflows/gameplay-reference-index-v1";
 
 const originalFetch = global.fetch;
@@ -27,8 +27,12 @@ describe("gameplay_reference_index@1", () => {
   it("completes from one internal indexing request", async () => {
     process.env.SUPABASE_SERVICE_ROLE_KEY = "test-service-token";
     process.env.WORKER_APP_INTERNAL_URL = "http://app:3000";
-    const fetchMock = vi.fn(async () =>
-      new Response(
+    const requestedUrls: string[] = [];
+    let calls = 0;
+    global.fetch = (async (input) => {
+      calls += 1;
+      requestedUrls.push(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
+      return new Response(
         JSON.stringify({
           ok: true,
           data: {
@@ -46,38 +50,36 @@ describe("gameplay_reference_index@1", () => {
           },
         }),
         { status: 200, headers: { "Content-Type": "application/json" } },
-      ),
-    );
-    global.fetch = fetchMock as typeof fetch;
+      );
+    }) as typeof fetch;
 
     const result = await gameplayReferenceIndexV1(context({ reference_id: "gref-test" }));
     expect(result.status).toBe("completed");
     expect(result.currentStage).toBe("indexed");
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(fetchMock.mock.calls[0][0]).toBe(
-      "http://app:3000/api/internal/gameplay-reference-index",
-    );
+    expect(calls).toBe(1);
+    expect(requestedUrls).toEqual(["http://app:3000/api/internal/gameplay-reference-index"]);
   });
 
   it("returns a terminal failure and never asks the orchestrator to retry", async () => {
     process.env.SUPABASE_SERVICE_ROLE_KEY = "test-service-token";
-    const fetchMock = vi.fn(async () =>
-      new Response(
+    let calls = 0;
+    global.fetch = (async () => {
+      calls += 1;
+      return new Response(
         JSON.stringify({
           ok: false,
           code: "GAMEPLAY_REFERENCE_CAPTION_INVALID",
           message: "schema rejected",
         }),
         { status: 502, headers: { "Content-Type": "application/json" } },
-      ),
-    );
-    global.fetch = fetchMock as typeof fetch;
+      );
+    }) as typeof fetch;
 
     const result = await gameplayReferenceIndexV1(context({ reference_id: "gref-bad" }));
     expect(result.status).toBe("failed");
     expect(result.error?.retryable).toBe(false);
     expect(result.state?.automatic_retry_allowed).toBe(false);
     expect(result.enqueueReason).toBeUndefined();
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(calls).toBe(1);
   });
 });
