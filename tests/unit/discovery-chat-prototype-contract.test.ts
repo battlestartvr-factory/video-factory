@@ -6,6 +6,7 @@ const cardSource = readFileSync(
   "utf8",
 );
 const caddySource = readFileSync(new URL("../../deploy/Caddyfile", import.meta.url), "utf8");
+const deploySource = readFileSync(new URL("../../scripts/deploy.sh", import.meta.url), "utf8");
 
 describe("discovery chat prototype contract", () => {
   it("renders completed prototype video through the authenticated same-origin stream route", () => {
@@ -17,10 +18,14 @@ describe("discovery chat prototype contract", () => {
     expect(cardSource).toContain("Prototype video готов");
   });
 
-  it("keeps the legacy vr hostname from becoming a dead-end", () => {
-    expect(caddySource).toContain("battlestartvr-factory.duckdns.org {");
-    expect(caddySource).toContain(
-      "redir https://battlestart-factory.duckdns.org{uri} permanent",
+  it("keeps Caddy canonical and reloads tracked proxy configuration during deployment", () => {
+    expect(caddySource).toContain("battlestart-factory.duckdns.org {");
+    expect(caddySource).not.toContain("battlestartvr-factory.duckdns.org {");
+    expect(deploySource).toContain(
+      "caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile",
+    );
+    expect(deploySource).toContain(
+      "caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile",
     );
   });
 });
