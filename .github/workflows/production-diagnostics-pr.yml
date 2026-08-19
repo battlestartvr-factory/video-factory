@@ -45,19 +45,12 @@ jobs:
           git rev-parse HEAD
           echo '=== COMPOSE PS ==='
           docker compose ps
-          echo '=== APP HEALTH DIRECT ==='
-          curl -sv --max-time 8 http://127.0.0.1:3000/api/health 2>&1
-          echo '=== CADDY HEALTH PROXY ==='
-          curl -sv --max-time 8 http://127.0.0.1/api/health 2>&1
-          echo '=== APP LOGS ==='
-          docker compose logs --tail=250 app 2>&1
-          echo '=== CADDY LOGS ==='
-          docker compose logs --tail=150 caddy 2>&1
-          echo '=== WORKER LOGS ==='
-          docker compose logs --tail=80 worker 2>&1
-          echo '=== RESOURCE SNAPSHOT ==='
-          df -h / /srv/ai-factory 2>&1
-          free -m 2>&1
-          echo '=== APP CONTAINER STATE ==='
-          docker compose ps -a app 2>&1
+          echo '=== CADDY -> APP HEALTH ==='
+          docker compose exec -T caddy wget -S -O- http://app:3000/api/health 2>&1
+          echo '=== PRIMARY HOST RECENT ==='
+          docker compose logs --since=4h caddy 2>&1 | grep -F 'battlestart-factory.duckdns.org' | tail -40
+          echo '=== VR ALIAS RECENT ==='
+          docker compose logs --since=4h caddy 2>&1 | grep -F 'battlestartvr-factory.duckdns.org' | tail -40
+          echo '=== 502 RECENT ==='
+          docker compose logs --since=4h caddy 2>&1 | grep -E 'status[^0-9]*502|status":502|status": 502' | tail -60
           REMOTE
