@@ -8,6 +8,8 @@ const requiredText = z.string().trim().min(1).max(2_000);
 const optionalText = z.string().trim().min(1).max(2_000).nullable().optional();
 const tag = z.string().trim().min(1).max(240);
 
+export const GAMEPLAY_REFERENCE_NONE_VISIBLE = "none_visible";
+
 /**
  * Output contract for the cheap vision captioner. Identity/provenance is never delegated to
  * the model; it is joined back from the pending database row after deterministic validation.
@@ -109,16 +111,39 @@ function normalizeBoolean(value: unknown): unknown {
   if (value === 1 || value === "1") return true;
   if (value === 0 || value === "0") return false;
   if (typeof value !== "string") return value;
-  const normalized = value.trim().toLowerCase();
-  if (normalized === "true" || normalized === "yes") return true;
-  if (normalized === "false" || normalized === "no") return false;
+  const normalized = value.trim().toLowerCase().replace(/[_-]+/g, " ");
+  if (["true", "yes", "y", "visible", "present"].includes(normalized)) return true;
+  if (
+    [
+      "false",
+      "no",
+      "n",
+      "not visible",
+      "none",
+      "absent",
+      "unknown",
+      "unclear",
+      "not clear",
+      "not clearly visible",
+      "n/a",
+    ].includes(normalized)
+  ) {
+    return false;
+  }
+  if (normalized.startsWith("yes ")) return true;
+  if (normalized.startsWith("no ") || normalized.includes("not visible")) return false;
   return value;
 }
 
 function normalizeNumber(value: unknown): unknown {
   if (typeof value === "number") return value;
   if (typeof value !== "string" || !value.trim()) return value;
-  const parsed = Number(value.trim());
+  const trimmed = value.trim();
+  const exact = Number(trimmed);
+  if (Number.isFinite(exact)) return exact;
+  const firstNumericToken = trimmed.match(/-?\d+(?:\.\d+)?/)?.[0];
+  if (!firstNumericToken) return value;
+  const parsed = Number(firstNumericToken);
   return Number.isFinite(parsed) ? parsed : value;
 }
 
@@ -129,9 +154,23 @@ function normalizeOptionalText(value: unknown): unknown {
   return trimmed ? trimmed : null;
 }
 
+function normalizeRequiredVisibleText(value: unknown): unknown {
+  if (value == null) return GAMEPLAY_REFERENCE_NONE_VISIBLE;
+  if (typeof value !== "string") return value;
+  const trimmed = value.trim();
+  return trimmed || GAMEPLAY_REFERENCE_NONE_VISIBLE;
+}
+
 function normalizeStringArray(value: unknown): unknown {
   if (Array.isArray(value)) {
-    return [...new Set(value.filter((item): item is string => typeof item === "string").map((item) => item.trim()).filter(Boolean))];
+    return [
+      ...new Set(
+        value
+          .filter((item): item is string => typeof item === "string")
+          .map((item) => item.trim())
+          .filter(Boolean),
+      ),
+    ];
   }
   if (typeof value === "string") {
     return [...new Set(value.split(",").map((item) => item.trim()).filter(Boolean))];
@@ -215,6 +254,9 @@ export function normalizeGameplayReferenceCaptionPayload(value: unknown): unknow
   normalized.visualClutter = normalizeClutter(normalized.visualClutter);
   normalized.fovEstimate = normalizeNumber(normalized.fovEstimate);
   normalized.teammateCountVisible = normalizeNumber(normalized.teammateCountVisible);
+  normalized.visibleInputAffordance = normalizeRequiredVisibleText(
+    normalized.visibleInputAffordance,
+  );
   normalized.mechanicTags = normalizeStringArray(normalized.mechanicTags);
   normalized.interactionModel = normalizeStringArray(normalized.interactionModel);
   normalized.stylizationTags = normalizeStringArray(normalized.stylizationTags);
@@ -262,7 +304,7 @@ export function materializeGameplayReferenceSpec(input: {
 }
 
 export function buildGameplayReferenceCaptionPrompt(gameName: string): string {
-  return `Analyze this image as a candidate REAL PC GAMEPLAY reference for ${gameName}. Return one JSON object only, with no prose or markdown.\n\nDo not infer marketing intent from the game name. Inspect only what is visibly supported by the frame. A gameplay screenshot is not key art, concept art, a cinematic trailer frame, photo mode, or a detached spectator composition.\n\nRequired fields:\n- cameraType: first_person | third_person_follow | over_shoulder | top_down | fixed_gameplay | other\n- cameraDistance, cameraHeight, fovEstimate, playableCharacterVisible, handsVisible, heldToolVisible, crosshairVisible, hudVisible\n- controllablePlayerObvious, howPlayerControlIsVisible, currentPlayerAction, visibleInputAffordance, playerTarget, gameResponse\n- teammateCountVisible, teammateDistance, teammateRole, coopDependencyVisible, sharedObjectVisible, informationAsymmetryVisible, rescueVisible, coordinationVisible\n- coreAction, mechanicTags[], interactionModel[], dangerSource, failureRisk, successState, physicsInteraction, environmentType\n- primaryFocus, secondaryFocus, readableWithoutContext, visibleGoal, visibleRisk, uiSupportsAction, visualClutter: low | medium | high\n- artDirection, realismLevel, productionScopeFeel: indie | AA | AAA, stylizationTags[]\n- gameplayDescription: concrete description of what the controllable player is doing now, what is in front of them, what a teammate is doing, where the risk is, and what UI/affordance helps read the action\n- whyThisLooksLikeGameplay: concrete evidence that the camera, player embodiment, interaction distance, affordance, teammate framing, and world response read as active gameplay.\n\nUse null for genuinely unobservable optional values. Do not invent a HUD, input, teammate, risk, or physical response that is not visible.`;
+  return `Analyze this image as a candidate REAL PC GAMEPLAY reference for ${gameName}. Return one JSON object only, with no prose or markdown.\n\nDo not infer marketing intent from the game name. Inspect only what is visibly supported by the frame. A gameplay screenshot is not key art, concept art, a cinematic trailer frame, photo mode, or a detached spectator composition.\n\nRequired fields:\n- cameraType: first_person | third_person_follow | over_shoulder | top_down | fixed_gameplay | other\n- cameraDistance, cameraHeight, fovEstimate, playableCharacterVisible, handsVisible, heldToolVisible, crosshairVisible, hudVisible\n- controllablePlayerObvious, howPlayerControlIsVisible, currentPlayerAction, visibleInputAffordance, playerTarget, gameResponse\n- teammateCountVisible, teammateDistance, teammateRole, coopDependencyVisible, sharedObjectVisible, informationAsymmetryVisible, rescueVisible, coordinationVisible\n- coreAction, mechanicTags[], interactionModel[], dangerSource, failureRisk, successState, physicsInteraction, environmentType\n- primaryFocus, secondaryFocus, readableWithoutContext, visibleGoal, visibleRisk, uiSupportsAction, visualClutter: low | medium | high\n- artDirection, realismLevel, productionScopeFeel: indie | AA | AAA, stylizationTags[]\n- gameplayDescription: concrete description of what the controllable player is doing now, what is in front of them, what a teammate is doing, where the risk is, and what UI/affordance helps read the action\n- whyThisLooksLikeGameplay: concrete evidence that the camera, player embodiment, interaction distance, affordance, teammate framing, and world response read as active gameplay.\n\nType rules: all visibility/readability flags must be JSON booleans true/false, never descriptive strings. fovEstimate must be a JSON number in degrees or null, never a string. visibleInputAffordance must always be a string; use the literal string ${GAMEPLAY_REFERENCE_NONE_VISIBLE} if no explicit input affordance is visible. Use null only for genuinely unobservable optional text/number values. Do not invent a HUD, input, teammate, risk, or physical response that is not visible.`;
 }
 
 export function buildGameplayReferenceEmbeddingText(reference: GameplayReferenceSpecV1): string {
