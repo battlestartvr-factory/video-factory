@@ -29,7 +29,7 @@ jobs:
           chmod 600 ~/.ssh/deploy_key
           ssh-keygen -y -f ~/.ssh/deploy_key >/dev/null
 
-      - name: Collect production diagnostics
+      - name: Reload and verify production Caddy
         env:
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
           DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
@@ -37,20 +37,26 @@ jobs:
           set -euo pipefail
           ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new -o BatchMode=yes \
             "${DEPLOY_USER}@${DEPLOY_HOST}" bash -s <<'REMOTE'
-          set +e
-          cd /opt/ai-factory/app || exit 2
-          echo '=== TIME ==='
-          date -u
+          set -euo pipefail
+          cd /opt/ai-factory/app
           echo '=== GIT ==='
           git rev-parse HEAD
-          echo '=== COMPOSE PS ==='
-          docker compose ps
-          echo '=== CADDY -> APP HEALTH ==='
+          echo '=== VALIDATE CADDY ==='
+          docker compose exec -T caddy caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+          echo '=== RELOAD CADDY ==='
+          docker compose exec -T caddy caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile
+          sleep 3
+          echo '=== APP HEALTH THROUGH CADDY NETWORK ==='
           docker compose exec -T caddy wget -S -O- http://app:3000/api/health 2>&1
-          echo '=== PRIMARY HOST RECENT ==='
-          docker compose logs --since=4h caddy 2>&1 | grep -F 'battlestart-factory.duckdns.org' | tail -40
-          echo '=== VR ALIAS RECENT ==='
-          docker compose logs --since=4h caddy 2>&1 | grep -F 'battlestartvr-factory.duckdns.org' | tail -40
-          echo '=== 502 RECENT ==='
-          docker compose logs --since=4h caddy 2>&1 | grep -E 'status[^0-9]*502|status":502|status": 502' | tail -60
+          echo '=== LEGACY HOST LOCAL REDIRECT ==='
+          curl -kIs --max-time 10 --resolve battlestartvr-factory.duckdns.org:443:127.0.0.1 \
+            https://battlestartvr-factory.duckdns.org/ | head -20
           REMOTE
+
+      - name: Verify public hostnames
+        run: |
+          set -euo pipefail
+          echo '=== CANONICAL PUBLIC ==='
+          curl -Is --max-time 15 https://battlestart-factory.duckdns.org/ | head -20
+          echo '=== LEGACY PUBLIC ==='
+          curl -Is --max-time 15 https://battlestartvr-factory.duckdns.org/ | head -20
