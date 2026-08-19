@@ -18,8 +18,8 @@ jobs:
           DEPLOY_SSH_KEY_B64: ${{ secrets.DEPLOY_SSH_KEY_B64 }}
         run: |
           set -euo pipefail
-          [[ -n "${DEPLOY_HOST:-}" && -n "${DEPLOY_USER:-}" ]] || { echo "DEPLOY_HOST and DEPLOY_USER are required" >&2; exit 1; }
-          [[ -n "${DEPLOY_SSH_KEY_B64:-}" || -n "${DEPLOY_SSH_KEY:-}" ]] || { echo "Deploy SSH key is required" >&2; exit 1; }
+          [[ -n "${DEPLOY_HOST:-}" && -n "${DEPLOY_USER:-}" ]] || exit 1
+          [[ -n "${DEPLOY_SSH_KEY_B64:-}" || -n "${DEPLOY_SSH_KEY:-}" ]] || exit 1
           install -m 700 -d ~/.ssh
           if [[ -n "${DEPLOY_SSH_KEY_B64:-}" ]]; then
             printf '%s' "$DEPLOY_SSH_KEY_B64" | base64 --decode > ~/.ssh/deploy_key
@@ -29,34 +29,22 @@ jobs:
           chmod 600 ~/.ssh/deploy_key
           ssh-keygen -y -f ~/.ssh/deploy_key >/dev/null
 
-      - name: Reload and verify production Caddy
+      - name: Reload production Caddy
         env:
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
           DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
         run: |
           set -euo pipefail
           ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new -o BatchMode=yes \
-            "${DEPLOY_USER}@${DEPLOY_HOST}" bash -s <<'REMOTE'
-          set -euo pipefail
-          cd /opt/ai-factory/app
-          echo '=== GIT ==='
-          git rev-parse HEAD
-          echo '=== VALIDATE CADDY ==='
-          docker compose exec -T caddy caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
-          echo '=== RELOAD CADDY ==='
-          docker compose exec -T caddy caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile
-          sleep 3
-          echo '=== APP HEALTH THROUGH CADDY NETWORK ==='
-          docker compose exec -T caddy wget -S -O- http://app:3000/api/health 2>&1
-          echo '=== LEGACY HOST LOCAL REDIRECT ==='
-          curl -kIs --max-time 10 --resolve battlestartvr-factory.duckdns.org:443:127.0.0.1 \
-            https://battlestartvr-factory.duckdns.org/ | head -20
-          REMOTE
+            "${DEPLOY_USER}@${DEPLOY_HOST}" \
+            "cd /opt/ai-factory/app && docker compose exec -T caddy caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile && docker compose exec -T caddy caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile"
 
-      - name: Verify public hostnames
+      - name: Verify active local redirect and app health
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
         run: |
           set -euo pipefail
-          echo '=== CANONICAL PUBLIC ==='
-          curl -Is --max-time 15 https://battlestart-factory.duckdns.org/ | head -20
-          echo '=== LEGACY PUBLIC ==='
-          curl -Is --max-time 15 https://battlestartvr-factory.duckdns.org/ | head -20
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new -o BatchMode=yes \
+            "${DEPLOY_USER}@${DEPLOY_HOST}" \
+            "curl -kIs --max-time 10 --resolve battlestartvr-factory.duckdns.org:443:127.0.0.1 https://battlestartvr-factory.duckdns.org/ | head -20; cd /opt/ai-factory/app && docker compose exec -T caddy wget -qO- http://app:3000/api/health"
