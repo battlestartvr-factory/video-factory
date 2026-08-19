@@ -1,4 +1,5 @@
 export * from "./schemas";
+export * from "./gameplay-reference-schema";
 export * from "./diversity";
 export * from "./model-policy";
 export * from "./shot-planner";
