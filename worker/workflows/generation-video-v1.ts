@@ -11,6 +11,9 @@ import type { WorkflowTickContext, WorkflowTickHandler, WorkflowTickOutcome } fr
 
 const NORMAL_POLL_MS = 5_000;
 const AMBIGUOUS_SUBMIT_RECHECK_MS = 60_000;
+const KLING_SINGLE_SHOT_PROMPT_MAX_CHARS = 2_000;
+const KLING_MULTI_SHOT_PROMPT_MAX_CHARS = 500;
+const KLING_PROMPT_OMISSION_MARKER = "\n\n[...provider-safe compacted context...]\n\n";
 
 export interface VideoProviderRequest {
   adapter: "market" | "veo";
@@ -70,6 +73,21 @@ function modeAssets(generation: DurableVideoGeneration): string[] {
   return [];
 }
 
+export function compactKlingProviderPrompt(prompt: string, maxChars = KLING_SINGLE_SHOT_PROMPT_MAX_CHARS): string {
+  const normalized = prompt.replace(/\r\n?/g, "\n").trim();
+  if (normalized.length <= maxChars) return normalized;
+  if (maxChars <= KLING_PROMPT_OMISSION_MARKER.length + 2) return normalized.slice(0, maxChars);
+
+  // Stage 4 places the concrete gameplay beat near the beginning and the non-negotiable
+  // player-attached camera / continuous-capture contract near the end. Keep both rather
+  // than blindly chopping off the tail. This is a defensive provider budget, not a model
+  // schema limit; the full typed prompt remains persisted in discovery lineage.
+  const available = maxChars - KLING_PROMPT_OMISSION_MARKER.length;
+  const tailChars = Math.min(850, Math.max(1, Math.floor(available * 0.45)));
+  const headChars = available - tailChars;
+  return `${normalized.slice(0, headChars).trimEnd()}${KLING_PROMPT_OMISSION_MARKER}${normalized.slice(-tailChars).trimStart()}`;
+}
+
 function klingQuality(generation: DurableVideoGeneration): string {
   const effective = stringSetting(generation.settings, "effectiveQuality", "effective_quality");
   if (effective && ["std", "pro", "4K"].includes(effective)) return effective;
@@ -105,14 +123,21 @@ export function buildVideoProviderRequest(generation: DurableVideoGeneration): V
         retryable: false,
       });
     }
+    const providerPrompt = compactKlingProviderPrompt(
+      generation.prompt,
+      multiShot ? KLING_MULTI_SHOT_PROMPT_MAX_CHARS : KLING_SINGLE_SHOT_PROMPT_MAX_CHARS,
+    );
     const input: Record<string, unknown> = {
       ...(multiShot
-        ? { multi_shots: true, multi_prompt: [{ prompt: generation.prompt, duration }] }
-        : { prompt: generation.prompt, multi_shots: false }),
+        ? { multi_shots: true, multi_prompt: [{ prompt: providerPrompt, duration }] }
+        : { prompt: providerPrompt, multi_shots: false }),
       ...(urls.length ? { image_urls: urls.slice(0, 2) } : {}),
       sound,
       duration: String(duration),
-      aspect_ratio: aspectRatio,
+      // KIE documents aspect-ratio auto-adaptation whenever first/last image_urls are supplied.
+      // Let the already-approved 16:9 gameplay still define Kling I2V geometry; text-to-video
+      // continues to require an explicit requested ratio.
+      ...(urls.length ? {} : { aspect_ratio: aspectRatio }),
       mode: klingQuality(generation),
     };
     return { adapter: "market", model: "kling-3.0/video", input };
@@ -290,6 +315,8 @@ function providerErrorPayload(error: unknown): Record<string, unknown> {
       message: error.message,
       retryable: error.retryable,
       ambiguous_submit: error.ambiguousSubmit,
+      provider_code: error.providerCode,
+      provider_message: error.providerMessage,
     };
   }
   return {
