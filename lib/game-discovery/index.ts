@@ -1,5 +1,7 @@
 export * from "./schemas";
 export * from "./gameplay-reference-schema";
+export * from "./gameplay-reference-indexing";
+export * from "./gameplay-reference-retrieval";
 export * from "./diversity";
 export * from "./model-policy";
 export * from "./shot-planner";
