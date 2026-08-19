@@ -64,12 +64,16 @@ function rawCaption(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function candidate(input: Partial<GameplayReferenceCandidate> & Pick<GameplayReferenceCandidate, "referenceId" | "gameId" | "gameName">): GameplayReferenceCandidate {
+function candidate(
+  input: Partial<GameplayReferenceCandidate> &
+    Pick<GameplayReferenceCandidate, "referenceId" | "gameId" | "gameName">,
+): GameplayReferenceCandidate {
+  const { referenceId, gameId, gameName, ...overrides } = input;
   return {
-    referenceId: input.referenceId,
-    gameId: input.gameId,
-    gameName: input.gameName,
-    driveFileId: `drive-${input.referenceId}`,
+    referenceId,
+    gameId,
+    gameName,
+    driveFileId: `drive-${referenceId}`,
     sourceUrl: "https://store.steampowered.com/",
     cameraType: "first_person",
     controllablePlayerObvious: true,
@@ -100,7 +104,7 @@ function candidate(input: Partial<GameplayReferenceCandidate> & Pick<GameplayRef
     gameplayDescription: "player manipulates an object while teammate supports it",
     whyThisLooksLikeGameplay: "player-bound camera and immediate world response",
     semanticSimilarity: 0.8,
-    ...input,
+    ...overrides,
   };
 }
 
@@ -158,7 +162,9 @@ const shot: ShotSpecV1 = {
 
 describe("Gameplay Reference indexing", () => {
   it("deterministically normalizes cheap-model primitive type drift before validation", () => {
-    const parsed = parseGameplayReferenceCaption(`\n\`\`\`json\n${JSON.stringify(rawCaption())}\n\`\`\``);
+    const parsed = parseGameplayReferenceCaption(
+      `\n\`\`\`json\n${JSON.stringify(rawCaption())}\n\`\`\``,
+    );
     expect(parsed.cameraType).toBe("first_person");
     expect(parsed.fovEstimate).toBe(90);
     expect(parsed.handsVisible).toBe(true);
@@ -169,7 +175,9 @@ describe("Gameplay Reference indexing", () => {
   });
 
   it("does not silently turn a cinematic camera label into valid gameplay grammar", () => {
-    expect(() => parseGameplayReferenceCaption(JSON.stringify(rawCaption({ cameraType: "cinematic" })))).toThrow();
+    expect(() =>
+      parseGameplayReferenceCaption(JSON.stringify(rawCaption({ cameraType: "cinematic" }))),
+    ).toThrow();
   });
 
   it("joins model output to trusted identity/provenance and validates the full domain spec", () => {
