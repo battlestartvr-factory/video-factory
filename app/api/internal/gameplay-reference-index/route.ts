@@ -5,6 +5,7 @@ import {
   persistGameplayReferenceCaptionFailureEvidence,
 } from "@/lib/game-discovery/gameplay-reference-caption-failure";
 import { indexGameplayReference } from "@/lib/game-discovery/gameplay-reference-service";
+import { repairGameplayReferenceFromStoredCaption } from "@/lib/game-discovery/gameplay-reference-stored-repair";
 import { resolveSupabaseServiceRoleKey } from "@/lib/supabase/service-config";
 
 export const runtime = "nodejs";
@@ -34,7 +35,11 @@ export async function POST(request: Request) {
   }
 
   try {
-    const spec = await indexGameplayReference({ referenceId });
+    // Cost-control rule: a failed row with stored raw model output is always reparsed first.
+    // Only a reference without reparable stored evidence may reach the provider path.
+    const spec =
+      (await repairGameplayReferenceFromStoredCaption(referenceId)) ??
+      (await indexGameplayReference({ referenceId }));
     return NextResponse.json(
       {
         ok: true,
