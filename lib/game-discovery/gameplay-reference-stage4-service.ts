@@ -70,17 +70,27 @@ export async function retrieveStage4GameplayReferences(input: {
     maxResults: STAGE4_REFERENCE_COUNT_V1,
   });
 
-  // Candidate discovery must stay broad. Co-op visibility is a hard requirement only for the
-  // purpose-labeled co-op reference, not for camera/interaction/art-direction evidence.
-  const candidateNeed = { ...need, requireCoopDependency: false };
+  // Discovery is intentionally broader than final purpose selection. Camera, art scope,
+  // co-op visibility and mechanic-specific booleans belong to the individual purpose gate;
+  // applying them here globally can erase the entire library when one scarce purpose is missing.
+  const candidateNeed = {
+    ...need,
+    cameraTypes: [],
+    productionScopeFeel: [],
+    requireCoopDependency: false,
+    requireSharedObject: null,
+    requireVisibleRisk: null,
+  };
   const candidates = await getGameplayReferenceCandidates({
     need: candidateNeed,
     candidateLimit: 80,
   });
   const selected = retrievePurposeAwareGameplayReferences({ need, candidates });
   if (selected.references.length < STAGE4_REFERENCE_COUNT_V1) {
+    const selectedPurposes = new Set(selected.references.map((item) => item.purpose));
+    const missingPurposes = need.purposes.filter((purpose) => !selectedPurposes.has(purpose));
     throw new Error(
-      `GAMEPLAY_REFERENCE_SET_INSUFFICIENT:${selected.references.length}:need_at_least_${STAGE4_REFERENCE_COUNT_V1}`,
+      `GAMEPLAY_REFERENCE_SET_INSUFFICIENT:${selected.references.length}:missing=${missingPurposes.join(",") || "unknown"}`,
     );
   }
   return toStage4GameplayReferenceSet(selected);

@@ -30,10 +30,18 @@ function candidate(input: {
     coopDependencyVisible: input.coop ?? false,
     sharedObjectVisible: input.coop ?? false,
     coordinationVisible: input.coop ?? false,
-    coreAction: input.heldTool ? "Player uses a held tool on a physical target." : "Player moves through a playable space.",
-    currentPlayerAction: input.heldTool ? "Manipulates a target with a held tool." : "Navigates the environment.",
-    visibleInputAffordance: input.heldTool ? "Held tool in foreground." : "Player-bound camera and HUD.",
-    gameResponse: input.heldTool ? "Target object changes state immediately." : "World navigation responds to movement.",
+    coreAction: input.heldTool
+      ? "Player uses a held tool on a physical target."
+      : "Player moves through a playable space.",
+    currentPlayerAction: input.heldTool
+      ? "Manipulates a target with a held tool."
+      : "Navigates the environment.",
+    visibleInputAffordance: input.heldTool
+      ? "Held tool in foreground."
+      : "Player-bound camera and HUD.",
+    gameResponse: input.heldTool
+      ? "Target object changes state immediately."
+      : "World navigation responds to movement.",
     mechanicTags: input.heldTool ? ["physics", "tool_interaction"] : ["navigation"],
     interactionModel: input.coop ? ["shared_object", "coordination"] : ["direct_control"],
     failureRisk: input.coop ? "The shared object can be lost." : null,
@@ -46,8 +54,10 @@ function candidate(input: {
     productionScopeFeel: "indie",
     stylizationTags: input.style ?? ["stylized_indie"],
     artDirection: "Stylized indie gameplay with simplified materials.",
-    gameplayDescription: "A concrete active gameplay frame with a player-bound camera and readable action evidence.",
-    whyThisLooksLikeGameplay: "The camera belongs to the player and the world visibly responds to play.",
+    gameplayDescription:
+      "A concrete active gameplay frame with a player-bound camera and readable action evidence.",
+    whyThisLooksLikeGameplay:
+      "The camera belongs to the player and the world visibly responds to play.",
   };
 }
 
@@ -109,5 +119,58 @@ describe("purpose-aware gameplay reference retrieval", () => {
     });
     expect(result.references.some((item) => item.purpose === "coop")).toBe(false);
     expect(result.references).toHaveLength(3);
+  });
+
+  it("uses the requested camera only for camera grammar while allowing other purposes from other cameras", () => {
+    const thirdPersonNeed = gameplayReferenceNeedSpecV1Schema.parse({
+      ...need,
+      queryText: "third-person shared platform physics failure co-op stylized indie gameplay",
+      cameraTypes: ["third_person_follow"],
+    });
+    const result = retrievePurposeAwareGameplayReferences({
+      need: thirdPersonNeed,
+      candidates: [
+        candidate({
+          referenceId: "third-camera",
+          gameId: "Valheim",
+          cameraType: "third_person_follow",
+          hud: true,
+        }),
+        candidate({ referenceId: "interaction-first", gameId: "Abiotic", heldTool: true }),
+        candidate({ referenceId: "art-first", gameId: "Lethal", style: ["stylized_indie"] }),
+        candidate({ referenceId: "coop-first", gameId: "REPO", coop: true, heldTool: true }),
+      ],
+    });
+
+    expect(result.references).toHaveLength(4);
+    expect(
+      result.references.find((item) => item.purpose === "gameplay_camera")?.reference.referenceId,
+    ).toBe("third-camera");
+    expect(
+      result.references.find((item) => item.purpose === "coop")?.reference.cameraType,
+    ).toBe("first_person");
+  });
+
+  it("surfaces a camera-library gap without discarding valid non-camera evidence", () => {
+    const thirdPersonNeed = gameplayReferenceNeedSpecV1Schema.parse({
+      ...need,
+      queryText: "third-person shared platform physics failure co-op stylized indie gameplay",
+      cameraTypes: ["third_person_follow"],
+    });
+    const result = retrievePurposeAwareGameplayReferences({
+      need: thirdPersonNeed,
+      candidates: [
+        candidate({ referenceId: "interaction-first", gameId: "Abiotic", heldTool: true }),
+        candidate({ referenceId: "art-first", gameId: "Lethal", style: ["stylized_indie"] }),
+        candidate({ referenceId: "coop-first", gameId: "REPO", coop: true, heldTool: true }),
+      ],
+    });
+
+    expect(result.references.some((item) => item.purpose === "gameplay_camera")).toBe(false);
+    expect(result.references.map((item) => item.purpose).sort()).toEqual([
+      "art_direction",
+      "coop",
+      "interaction",
+    ]);
   });
 });
