@@ -3,7 +3,9 @@ import {
   buildGameplayVideoMotionPlan,
 } from "../../lib/game-discovery/gameplay-authenticity";
 import {
+  stage4GameplayReferenceProviderAssetSchema,
   stage4GameplayReferenceSetSchema,
+  type Stage4GameplayReferenceProviderAsset,
   type Stage4GameplayReferenceSet,
 } from "../../lib/game-discovery/gameplay-reference-stage4";
 import { compileGameplayPromptPlan } from "../../lib/game-discovery/prompt-compiler";
@@ -43,44 +45,81 @@ function feedbackMemory(state: Record<string, unknown>): DiscoveryFeedbackMemory
   };
 }
 
-async function retrieveReferenceSet(input: {
-  concept: unknown;
-  moment: unknown;
-  shot: unknown;
-  signal: AbortSignal;
-}): Promise<Stage4GameplayReferenceSet> {
+async function callStage4ReferenceService(body: Record<string, unknown>, signal: AbortSignal) {
   const response = await fetch(`${internalBaseUrl()}/api/internal/gameplay-reference-stage4`, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${serviceToken()}`,
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({
-      action: "retrieve",
-      concept: input.concept,
-      moment: input.moment,
-      shot: input.shot,
-    }),
-    signal: input.signal,
+    body: JSON.stringify(body),
+    signal,
   });
   const raw = await response.text();
   let payload: {
     ok?: boolean;
     code?: string;
     message?: string;
-    data?: { referenceSet?: unknown };
+    data?: Record<string, unknown>;
   } = {};
   try {
     payload = JSON.parse(raw) as typeof payload;
   } catch {
     // Keep a deterministic error surface and never persist an upstream HTML response.
   }
-  if (!response.ok || payload.ok !== true || !payload.data?.referenceSet) {
+  if (!response.ok || payload.ok !== true || !payload.data) {
     throw new Error(
-      `${payload.code ?? "GAMEPLAY_AUTHENTICITY_PLANNING_SMOKE_RETRIEVAL_FAILED"}:${payload.message ?? response.status}`,
+      `${payload.code ?? "GAMEPLAY_AUTHENTICITY_PLANNING_SMOKE_REFERENCE_SERVICE_FAILED"}:${payload.message ?? response.status}`,
     );
   }
-  return stage4GameplayReferenceSetSchema.parse(payload.data.referenceSet);
+  return payload.data;
+}
+
+async function retrieveReferenceSet(input: {
+  concept: unknown;
+  moment: unknown;
+  shot: unknown;
+  signal: AbortSignal;
+}): Promise<Stage4GameplayReferenceSet> {
+  const data = await callStage4ReferenceService(
+    {
+      action: "retrieve",
+      concept: input.concept,
+      moment: input.moment,
+      shot: input.shot,
+    },
+    input.signal,
+  );
+  return stage4GameplayReferenceSetSchema.parse(data.referenceSet);
+}
+
+async function materializeReferenceAssets(input: {
+  referenceSet: Stage4GameplayReferenceSet;
+  signal: AbortSignal;
+}): Promise<Stage4GameplayReferenceProviderAsset[]> {
+  const data = await callStage4ReferenceService(
+    {
+      action: "materialize",
+      referenceSet: input.referenceSet,
+    },
+    input.signal,
+  );
+  const rawAssets = Array.isArray(data.assets) ? data.assets : [];
+  const assets = rawAssets.map((asset) => stage4GameplayReferenceProviderAssetSchema.parse(asset));
+  if (assets.length !== input.referenceSet.references.length) {
+    throw new Error(
+      `GAMEPLAY_AUTHENTICITY_PLANNING_SMOKE_PROVIDER_ASSET_COUNT_MISMATCH:${assets.length}:${input.referenceSet.references.length}`,
+    );
+  }
+  for (const reference of input.referenceSet.references) {
+    const asset = assets.find((candidate) => candidate.id === reference.referenceId);
+    if (!asset || asset.role !== reference.purpose || !asset.mimeType.startsWith("image/")) {
+      throw new Error(
+        `GAMEPLAY_AUTHENTICITY_PLANNING_SMOKE_PROVIDER_ASSET_LINEAGE_MISMATCH:${reference.referenceId}`,
+      );
+    }
+  }
+  return assets;
 }
 
 export const gameplayAuthenticityPlanningSmokeV1: WorkflowTickHandler = async (context) => {
@@ -126,6 +165,10 @@ export const gameplayAuthenticityPlanningSmokeV1: WorkflowTickHandler = async (c
       shot,
       signal: context.signal,
     });
+    const providerAssets = await materializeReferenceAssets({
+      referenceSet,
+      signal: context.signal,
+    });
     const promptPlan = compileGameplayPromptPlan({
       concept,
       moment,
@@ -140,6 +183,14 @@ export const gameplayAuthenticityPlanningSmokeV1: WorkflowTickHandler = async (c
       throw new Error("GAMEPLAY_AUTHENTICITY_PLANNING_SMOKE_VIDEO_CAMERA_CONTRACT_MISSING");
     }
 
+    const providerAssetSummary = providerAssets.map((asset) => ({
+      id: asset.id,
+      role: asset.role,
+      mimeType: asset.mimeType,
+      filename: asset.filename,
+      providerReadyUrl: asset.url.startsWith("http"),
+    }));
+
     return {
       status: "completed",
       currentStage: "gameplay_authenticity_planning_smoke_completed",
@@ -152,6 +203,7 @@ export const gameplayAuthenticityPlanningSmokeV1: WorkflowTickHandler = async (c
         gameplay_authenticity: authenticity,
         gameplay_video_motion_plan: motionPlan,
         gameplay_reference_set: referenceSet,
+        gameplay_reference_provider_asset_summary: providerAssetSummary,
         prompt_plan: promptPlan,
       },
       result: {
@@ -165,6 +217,8 @@ export const gameplayAuthenticityPlanningSmokeV1: WorkflowTickHandler = async (c
         authenticity,
         motion_plan: motionPlan,
         reference_set: referenceSet,
+        provider_asset_count: providerAssets.length,
+        provider_asset_summary: providerAssetSummary,
         prompt_plan: promptPlan,
       },
       stateReason: "gameplay_authenticity_planning_smoke_completed_without_generation",
@@ -175,6 +229,8 @@ export const gameplayAuthenticityPlanningSmokeV1: WorkflowTickHandler = async (c
         authenticity_score: authenticity.averageScore,
         reference_count: referenceSet.references.length,
         reference_purposes: referenceSet.references.map((item) => item.purpose),
+        provider_asset_count: providerAssets.length,
+        provider_asset_roles: providerAssets.map((item) => item.role),
         planner_model: planning.model,
         planner_escalated: planning.escalated,
       },
