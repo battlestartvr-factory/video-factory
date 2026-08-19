@@ -87,7 +87,7 @@ export async function POST(request: Request) {
           shot_id: requiredText(body, "shotId", 160),
           prompt: requiredText(body, "prompt"),
           model_id: requiredText(body, "modelId", 160),
-          settings: { aspectRatio: "16:9", effectiveQuality: "1K" },
+          settings: { aspectRatio: "16:9", effectiveQuality: "2K" },
           reference_assets: assets,
           reference_lineage: referenceSet.references,
         },
