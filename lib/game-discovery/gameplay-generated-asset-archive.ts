@@ -7,6 +7,7 @@ import {
 
 const MAX_IMAGE_BYTES = 25 * 1024 * 1024;
 const MAX_VIDEO_BYTES = 150 * 1024 * 1024;
+const MAX_REDIRECTS = 5;
 
 export interface ArchivedGameplayGeneratedAsset {
   driveFileId: string;
@@ -25,7 +26,7 @@ function safeSegment(value: string): string {
   return normalized;
 }
 
-function assertPublicHttpsUrl(raw: string): URL {
+export function assertPublicHttpsGameplayAssetUrl(raw: string): URL {
   const url = new URL(raw);
   if (url.protocol !== "https:") throw new Error("GAMEPLAY_GENERATED_ASSET_URL_HTTPS_REQUIRED");
   const hostname = url.hostname.toLowerCase();
@@ -42,6 +43,24 @@ function assertPublicHttpsUrl(raw: string): URL {
     throw new Error("GAMEPLAY_GENERATED_ASSET_URL_PRIVATE_HOST_FORBIDDEN");
   }
   return url;
+}
+
+async function fetchPublicGeneratedAsset(rawUrl: string): Promise<Response> {
+  let current = assertPublicHttpsGameplayAssetUrl(rawUrl);
+  for (let redirectIndex = 0; redirectIndex <= MAX_REDIRECTS; redirectIndex += 1) {
+    const response = await fetch(current, {
+      redirect: "manual",
+      signal: AbortSignal.timeout(90_000),
+    });
+    if (![301, 302, 303, 307, 308].includes(response.status)) return response;
+    if (redirectIndex === MAX_REDIRECTS) {
+      throw new Error("GAMEPLAY_GENERATED_ASSET_TOO_MANY_REDIRECTS");
+    }
+    const location = response.headers.get("location");
+    if (!location) throw new Error("GAMEPLAY_GENERATED_ASSET_REDIRECT_LOCATION_MISSING");
+    current = assertPublicHttpsGameplayAssetUrl(new URL(location, current).toString());
+  }
+  throw new Error("GAMEPLAY_GENERATED_ASSET_TOO_MANY_REDIRECTS");
 }
 
 function extensionForMime(mimeType: string, assetType: "image" | "video"): string {
@@ -76,11 +95,7 @@ export async function archiveGeneratedGameplayAsset(input: {
   assetType: "image" | "video";
   assetUrl: string;
 }): Promise<ArchivedGameplayGeneratedAsset> {
-  const sourceUrl = assertPublicHttpsUrl(input.assetUrl);
-  const response = await fetch(sourceUrl, {
-    redirect: "follow",
-    signal: AbortSignal.timeout(90_000),
-  });
+  const response = await fetchPublicGeneratedAsset(input.assetUrl);
   if (!response.ok) {
     throw new Error(`GAMEPLAY_GENERATED_ASSET_DOWNLOAD_FAILED:${response.status}`);
   }
