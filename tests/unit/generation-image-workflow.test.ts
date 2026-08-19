@@ -255,6 +255,7 @@ describe("generation_image@1 lifecycle", () => {
     expect(listRegisteredWorkflows()).toEqual([
       "core_smoke@1",
       "game_discovery_batch@1",
+      "gameplay_reference_index@1",
       "generation_image@1",
       "generation_video@1",
     ]);
