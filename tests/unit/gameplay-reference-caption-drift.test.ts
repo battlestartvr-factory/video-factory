@@ -29,6 +29,48 @@ describe("observed cheap gameplay caption drift", () => {
     expect(normalized.hudVisible).toBe(false);
   });
 
+  it("does not equate nearby teammates with visible coop dependency", () => {
+    const normalized = normalizeGameplayReferenceCaptionPayload({
+      coopDependencyVisible: true,
+      sharedObjectVisible: true,
+      coordinationVisible: true,
+      rescueVisible: false,
+      informationAsymmetryVisible: false,
+      currentPlayerAction: "Standing with three teammates while holding a hammer.",
+      teammateRole: "Co-op scavengers",
+      coreAction: "Looting and extraction",
+      gameResponse: "Money UI updates.",
+      primaryFocus: "Teammates and held equipment",
+      secondaryFocus: "Money UI",
+      gameplayDescription: "First-person player stands next to three teammates in a room.",
+      whyThisLooksLikeGameplay: "Held tools, crosshair and HUD are visible.",
+    }) as Record<string, unknown>;
+
+    expect(normalized.sharedObjectVisible).toBe(false);
+    expect(normalized.coopDependencyVisible).toBe(false);
+    expect(normalized.coordinationVisible).toBe(false);
+  });
+
+  it("preserves explicit shared-object coordination evidence", () => {
+    const normalized = normalizeGameplayReferenceCaptionPayload({
+      coopDependencyVisible: true,
+      sharedObjectVisible: true,
+      coordinationVisible: true,
+      rescueVisible: false,
+      informationAsymmetryVisible: false,
+      currentPlayerAction: "Player pulls the same cargo while a teammate stabilizes it.",
+      teammateRole: "Supports the same load with a tether.",
+      coreAction: "Two players manipulate a shared cargo object.",
+      gameResponse: "The shared load rotates when both players pull.",
+      gameplayDescription:
+        "Two players coordinate on the same cargo: one pulls while the teammate stabilizes it with a tether.",
+    }) as Record<string, unknown>;
+
+    expect(normalized.sharedObjectVisible).toBe(true);
+    expect(normalized.coopDependencyVisible).toBe(true);
+    expect(normalized.coordinationVisible).toBe(true);
+  });
+
   it("preserves usage and bounded raw output when schema validation still fails", async () => {
     let calls = 0;
     const run: AgentProvider["run"] = async () => {
