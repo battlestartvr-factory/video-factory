@@ -1,5 +1,9 @@
 import { NextResponse } from "next/server";
 import { verifyIngestBearerToken } from "@/lib/asset-ingest/auth";
+import {
+  isGameplayReferenceCaptionOutputError,
+  persistGameplayReferenceCaptionFailureEvidence,
+} from "@/lib/game-discovery/gameplay-reference-caption-failure";
 import { indexGameplayReference } from "@/lib/game-discovery/gameplay-reference-service";
 import { resolveSupabaseServiceRoleKey } from "@/lib/supabase/service-config";
 
@@ -51,9 +55,22 @@ export async function POST(request: Request) {
       { status: 200, headers: { "Cache-Control": "no-store" } },
     );
   } catch (error) {
+    if (isGameplayReferenceCaptionOutputError(error)) {
+      await persistGameplayReferenceCaptionFailureEvidence({ referenceId, error }).catch(
+        (persistError) => {
+          console.error("gameplay_reference.caption_failure_evidence_write_failed", {
+            reference_id: referenceId,
+            error: persistError instanceof Error ? persistError.message : String(persistError),
+          });
+        },
+      );
+    }
+
     const message = error instanceof Error ? error.message : String(error);
     console.error("gameplay_reference.index_failed", { reference_id: referenceId, error: message });
-    const code = message.split(":", 1)[0] || "GAMEPLAY_REFERENCE_INDEX_FAILED";
+    const code = isGameplayReferenceCaptionOutputError(error)
+      ? error.code
+      : message.split(":", 1)[0] || "GAMEPLAY_REFERENCE_INDEX_FAILED";
     const status =
       code === "GAMEPLAY_REFERENCE_NOT_FOUND"
         ? 404
