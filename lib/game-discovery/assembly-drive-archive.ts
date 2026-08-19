@@ -14,6 +14,8 @@ import {
 const DEFAULT_DATA_ROOT = "/srv/ai-factory";
 const STAGING_FOLDER = "discovery-assembly-staging";
 
+export type DiscoveryAssemblyVariant = "landscape_master" | "vertical_social";
+
 export interface ArchivedDiscoveryAssembly {
   driveFileId: string;
   driveWebUrl: string | null;
@@ -31,7 +33,6 @@ function resolveStagedFile(relativePath: string): string {
   if (!relativePath || relativePath.startsWith("/") || relativePath.includes("\0")) {
     throw new Error("ASSEMBLY_ARCHIVE_INVALID_PATH");
   }
-  // This path is a runtime-only mounted staging volume. Turbopack must not trace it into the app bundle.
   const root = resolve(/* turbopackIgnore: true */ dataRoot());
   const allowedRoot = resolve(root, STAGING_FOLDER);
   const filePath = resolve(root, relativePath);
@@ -51,6 +52,16 @@ function folderSegments(createdAt: string): string[] {
     String(safeDate.getUTCMonth() + 1).padStart(2, "0"),
     String(safeDate.getUTCDate()).padStart(2, "0"),
   ];
+}
+
+function artifactFilename(input: {
+  variant: DiscoveryAssemblyVariant;
+  conceptRunId: string;
+  sourceVideoId: string;
+}): string {
+  return input.variant === "landscape_master"
+    ? `gameplay-master-16x9-v1-${input.conceptRunId}-${input.sourceVideoId}.mp4`
+    : `social-edit-9x16-v1-${input.conceptRunId}-${input.sourceVideoId}.mp4`;
 }
 
 async function findExistingDriveFile(folderId: string, filename: string): Promise<string | null> {
@@ -92,6 +103,7 @@ export async function archiveDiscoveryAssembly(input: {
   rootCreativeRunId: string;
   conceptRunId: string;
   conceptId: string;
+  variant: DiscoveryAssemblyVariant;
   artifactRelativePath: string;
   inputVideoGenerationIds: string[];
   sha256: string;
@@ -100,6 +112,9 @@ export async function archiveDiscoveryAssembly(input: {
   if (!/^[0-9a-f]{64}$/.test(input.sha256)) throw new Error("ASSEMBLY_ARCHIVE_INVALID_SHA256");
   if (input.inputVideoGenerationIds.length !== 1 || !input.inputVideoGenerationIds[0]) {
     throw new Error("ASSEMBLY_ARCHIVE_VIDEO_ID_REQUIRED");
+  }
+  if (input.variant !== "landscape_master" && input.variant !== "vertical_social") {
+    throw new Error("ASSEMBLY_ARCHIVE_VARIANT_INVALID");
   }
 
   const service = createSupabaseServiceClient();
@@ -131,7 +146,11 @@ export async function archiveDiscoveryAssembly(input: {
   const drive = getDriveStorageProvider();
   const folderId = await drive.ensureFolderPath(folderSegments(rootResult.data.created_at));
   const sourceVideoId = input.inputVideoGenerationIds[0];
-  const filename = `prototype-v1-${input.conceptRunId}-${sourceVideoId}.mp4`;
+  const filename = artifactFilename({
+    variant: input.variant,
+    conceptRunId: input.conceptRunId,
+    sourceVideoId,
+  });
   const existingId = await findExistingDriveFile(folderId, filename);
   if (existingId) {
     const meta = await drive.finalizeUpload(existingId);

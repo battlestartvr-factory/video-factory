@@ -155,7 +155,7 @@ const shot: ShotSpecV1 = {
     imageModel: "nano-banana-2",
     videoModel: "test-video-model",
     videoMode: "image-to-video",
-    aspectRatio: "9:16",
+    aspectRatio: "16:9",
     durationSec: 5,
   },
 };

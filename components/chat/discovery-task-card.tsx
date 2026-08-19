@@ -44,14 +44,24 @@ interface PrototypeItem {
   conceptRunId: string;
   conceptId: string;
   pitch: string | null;
-  videoUrl: string;
-  driveWebUrl: string | null;
-  filename: string | null;
-  durationSeconds: number | null;
-  width: number | null;
-  height: number | null;
-  fps: number | null;
-  sizeBytes: number | null;
+  socialVideoUrl: string;
+  socialDownloadUrl: string;
+  socialDriveWebUrl: string | null;
+  socialFilename: string | null;
+  socialDurationSeconds: number | null;
+  socialWidth: number | null;
+  socialHeight: number | null;
+  socialFps: number | null;
+  socialSizeBytes: number | null;
+  masterVideoUrl: string | null;
+  masterDownloadUrl: string | null;
+  masterDriveWebUrl: string | null;
+  masterFilename: string | null;
+  masterDurationSeconds: number | null;
+  masterWidth: number | null;
+  masterHeight: number | null;
+  masterFps: number | null;
+  masterSizeBytes: number | null;
 }
 
 const POLL_MS = 5_000;
@@ -81,6 +91,21 @@ function formatBytes(value: number | null): string | null {
   return `${(value / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+function mediaMetadata(input: {
+  durationSeconds: number | null;
+  width: number | null;
+  height: number | null;
+  fps: number | null;
+  sizeBytes: number | null;
+}): string[] {
+  return [
+    input.durationSeconds ? `${input.durationSeconds.toFixed(1).replace(/\.0$/, "")} сек` : null,
+    input.width && input.height ? `${input.width}×${input.height}` : null,
+    input.fps ? `${input.fps.toFixed(1).replace(/\.0$/, "")} FPS` : null,
+    formatBytes(input.sizeBytes),
+  ].filter((value): value is string => Boolean(value));
+}
+
 function stageLabel(stage: string | null): string {
   const labels: Record<string, string> = {
     objective_ready: "Цель принята",
@@ -95,7 +120,7 @@ function stageLabel(stage: string | null): string {
     video_generation_pending: "Reference утверждён — видео разблокировано",
     video_generation_waiting: "Генерация gameplay-видео",
     asset_graph_pending: "Фиксация AssetGraph",
-    assembly_pending: "Сборка vertical prototype",
+    assembly_pending: "Сборка 16:9 gameplay master и 9:16 social edit",
     prototype_finalization_pending: "Финализация prototype",
     completed: "Prototype готов",
     reference_rejected_no_video: "Reference отклонён — видео не создаётся",
@@ -212,19 +237,32 @@ export function DiscoveryTaskCard({ task, runId }: DiscoveryTaskCardProps) {
       const outputs = object(run.outputs);
       const assembly = object(outputs.prototype_assembly);
       if (assembly.schema !== "gameplay_short_assembly" || !str(assembly.driveFileId)) continue;
+      const master = object(assembly.landscapeMaster);
+      const baseUrl = `/api/discovery/batches/${encodeURIComponent(runId)}/prototypes/${encodeURIComponent(conceptRunId)}`;
       const concept = object(outputs.coop_game_concept);
+      const hasMaster = Boolean(str(master.driveFileId));
       result.push({
         conceptRunId,
         conceptId: str(assembly.conceptId) ?? str(concept.conceptId) ?? "concept",
         pitch: str(concept.oneSentencePitch),
-        videoUrl: `/api/discovery/batches/${encodeURIComponent(runId)}/prototypes/${encodeURIComponent(conceptRunId)}`,
-        driveWebUrl: str(assembly.driveWebUrl),
-        filename: str(assembly.filename),
-        durationSeconds: num(assembly.durationSeconds),
-        width: num(assembly.width),
-        height: num(assembly.height),
-        fps: num(assembly.fps),
-        sizeBytes: num(assembly.sizeBytes),
+        socialVideoUrl: `${baseUrl}?variant=social`,
+        socialDownloadUrl: `${baseUrl}?variant=social&download=1`,
+        socialDriveWebUrl: str(assembly.driveWebUrl),
+        socialFilename: str(assembly.filename),
+        socialDurationSeconds: num(assembly.durationSeconds),
+        socialWidth: num(assembly.width),
+        socialHeight: num(assembly.height),
+        socialFps: num(assembly.fps),
+        socialSizeBytes: num(assembly.sizeBytes),
+        masterVideoUrl: hasMaster ? `${baseUrl}?variant=master` : null,
+        masterDownloadUrl: hasMaster ? `${baseUrl}?variant=master&download=1` : null,
+        masterDriveWebUrl: str(master.driveWebUrl),
+        masterFilename: str(master.filename),
+        masterDurationSeconds: num(master.durationSeconds),
+        masterWidth: num(master.width),
+        masterHeight: num(master.height),
+        masterFps: num(master.fps),
+        masterSizeBytes: num(master.sizeBytes),
       });
     }
     return result;
@@ -382,62 +420,90 @@ export function DiscoveryTaskCard({ task, runId }: DiscoveryTaskCardProps) {
       {jobStatus === "completed" && prototypes.length > 0 && (
         <div className="border-t border-border bg-surface/40 p-4">
           <div className="mb-3">
-            <p className="text-sm font-medium text-foreground">Prototype video готов</p>
+            <p className="text-sm font-medium text-foreground">Gameplay prototype готов</p>
             <p className="mt-1 text-xs leading-5 text-muted-foreground">
-              Финальный vertical prototype можно посмотреть прямо здесь, не выходя из чата.
+              Сохраняются два файла: исходный widescreen gameplay master без social-crop и отдельный 9:16 монтаж для TikTok/Shorts.
             </p>
           </div>
 
           <div className="space-y-4">
             {prototypes.map((item) => {
-              const metadata = [
-                item.durationSeconds ? `${item.durationSeconds.toFixed(1).replace(/\.0$/, "")} сек` : null,
-                item.width && item.height ? `${item.width}×${item.height}` : null,
-                item.fps ? `${item.fps.toFixed(1).replace(/\.0$/, "")} FPS` : null,
-                formatBytes(item.sizeBytes),
-              ].filter((value): value is string => Boolean(value));
+              const socialMetadata = mediaMetadata({
+                durationSeconds: item.socialDurationSeconds,
+                width: item.socialWidth,
+                height: item.socialHeight,
+                fps: item.socialFps,
+                sizeBytes: item.socialSizeBytes,
+              });
+              const masterMetadata = mediaMetadata({
+                durationSeconds: item.masterDurationSeconds,
+                width: item.masterWidth,
+                height: item.masterHeight,
+                fps: item.masterFps,
+                sizeBytes: item.masterSizeBytes,
+              });
 
               return (
                 <div key={item.conceptRunId} className="rounded-lg border border-border bg-surface/70 p-3">
-                  <div className="mx-auto aspect-[9/16] max-h-[70vh] w-full max-w-[360px] overflow-hidden rounded-lg border border-border bg-black">
-                    <video
-                      controls
-                      playsInline
-                      preload="metadata"
-                      src={item.videoUrl}
-                      className="h-full w-full bg-black object-contain"
-                    >
-                      Ваш браузер не поддерживает встроенное видео.
-                    </video>
+                  <div>
+                    <p className="text-xs font-semibold text-foreground">Gameplay master · 16:9</p>
+                    <p className="mt-1 text-[11px] text-muted-foreground">Полный игровой кадр для оценки fake gameplay до монтажа.</p>
+                  </div>
+                  {item.masterVideoUrl ? (
+                    <div className="mt-2 aspect-video w-full overflow-hidden rounded-lg border border-border bg-black">
+                      <video controls playsInline preload="metadata" src={item.masterVideoUrl} className="h-full w-full bg-black object-contain">
+                        Ваш браузер не поддерживает встроенное видео.
+                      </video>
+                    </div>
+                  ) : (
+                    <p className="mt-2 text-xs text-muted-foreground">Landscape master недоступен для старого prototype.</p>
+                  )}
+                  <div className="mt-2">
+                    {masterMetadata.length > 0 && <p className="text-[11px] text-muted-foreground">{masterMetadata.join(" · ")}</p>}
+                    {item.masterFilename && <p className="mt-1 truncate text-[11px] text-muted">{item.masterFilename}</p>}
+                    <div className="mt-2 flex flex-wrap gap-2 text-xs">
+                      {item.masterDownloadUrl && (
+                        <a href={item.masterDownloadUrl} className="rounded-md border border-border px-2.5 py-1.5 text-foreground transition hover:bg-surface-elevated">
+                          Скачать gameplay master 16:9
+                        </a>
+                      )}
+                      {item.masterDriveWebUrl && (
+                        <a href={item.masterDriveWebUrl} target="_blank" rel="noreferrer" className="rounded-md border border-border px-2.5 py-1.5 text-muted-foreground transition hover:bg-surface-elevated hover:text-foreground">
+                          Master в Google Drive
+                        </a>
+                      )}
+                    </div>
                   </div>
 
-                  <div className="mt-3">
-                    <p className="text-xs font-medium text-foreground">{item.pitch ?? item.conceptId}</p>
-                    {metadata.length > 0 && (
-                      <p className="mt-1 text-[11px] text-muted-foreground">{metadata.join(" · ")}</p>
-                    )}
-                    {item.filename && <p className="mt-1 truncate text-[11px] text-muted">{item.filename}</p>}
-                  </div>
-
-                  <div className="mt-3 flex flex-wrap gap-2 text-xs">
-                    <a
-                      href={item.videoUrl}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="rounded-md border border-border px-2.5 py-1.5 text-foreground transition hover:bg-surface-elevated"
-                    >
-                      Открыть видео отдельно
-                    </a>
-                    {item.driveWebUrl && (
-                      <a
-                        href={item.driveWebUrl}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="rounded-md border border-border px-2.5 py-1.5 text-muted-foreground transition hover:bg-surface-elevated hover:text-foreground"
-                      >
-                        Google Drive
+                  <div className="mt-5 border-t border-border pt-4">
+                    <p className="text-xs font-semibold text-foreground">Social edit · 9:16</p>
+                    <p className="mt-1 text-[11px] text-muted-foreground">Полный 16:9 gameplay остаётся в центре; фон заполняется размытой копией без обрезания игрового evidence.</p>
+                    <div className="mx-auto mt-2 aspect-[9/16] max-h-[70vh] w-full max-w-[360px] overflow-hidden rounded-lg border border-border bg-black">
+                      <video controls playsInline preload="metadata" src={item.socialVideoUrl} className="h-full w-full bg-black object-contain">
+                        Ваш браузер не поддерживает встроенное видео.
+                      </video>
+                    </div>
+                    <div className="mt-2">
+                      {socialMetadata.length > 0 && <p className="text-[11px] text-muted-foreground">{socialMetadata.join(" · ")}</p>}
+                      {item.socialFilename && <p className="mt-1 truncate text-[11px] text-muted">{item.socialFilename}</p>}
+                    </div>
+                    <div className="mt-2 flex flex-wrap gap-2 text-xs">
+                      <a href={item.socialDownloadUrl} className="rounded-md border border-border px-2.5 py-1.5 text-foreground transition hover:bg-surface-elevated">
+                        Скачать social edit 9:16
                       </a>
-                    )}
+                      <a href={item.socialVideoUrl} target="_blank" rel="noreferrer" className="rounded-md border border-border px-2.5 py-1.5 text-foreground transition hover:bg-surface-elevated">
+                        Открыть отдельно
+                      </a>
+                      {item.socialDriveWebUrl && (
+                        <a href={item.socialDriveWebUrl} target="_blank" rel="noreferrer" className="rounded-md border border-border px-2.5 py-1.5 text-muted-foreground transition hover:bg-surface-elevated hover:text-foreground">
+                          Social edit в Google Drive
+                        </a>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="mt-4">
+                    <p className="text-xs font-medium text-foreground">{item.pitch ?? item.conceptId}</p>
                   </div>
                 </div>
               );
