@@ -86,6 +86,11 @@ export function gameplayReferencePurposeInstruction(
   }
 }
 
+function clip(value: string, max: number): string {
+  const normalized = value.trim();
+  return normalized.length <= max ? normalized : `${normalized.slice(0, max - 1).trimEnd()}…`;
+}
+
 export function renderGameplayReferenceInstructionBlock(
   input: Stage4GameplayReferenceSet | null | undefined,
 ): string {
@@ -93,12 +98,14 @@ export function renderGameplayReferenceInstructionBlock(
 
   const lines = input.references.map((item, index) => {
     const letter = gameplayReferenceLetter(index);
-    const reasons = item.whySelected.length ? ` Selection reasons: ${item.whySelected.join("; ")}.` : "";
+    const reasons = item.whySelected.length
+      ? ` Selection reasons: ${clip(item.whySelected.slice(0, 3).join("; "), 220)}.`
+      : "";
     return [
       `Reference ${letter} — ${item.purpose.toUpperCase()} — ${item.gameName}.`,
       gameplayReferencePurposeInstruction(item),
-      `Gameplay evidence: ${item.gameplayDescription}`,
-      `Why it reads as gameplay: ${item.whyThisLooksLikeGameplay}${reasons}`,
+      `Gameplay evidence: ${clip(item.gameplayDescription, 360)}`,
+      `Why it reads as gameplay: ${clip(item.whyThisLooksLikeGameplay, 240)}${reasons}`,
     ].join("\n");
   });
 
