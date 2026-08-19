@@ -11,6 +11,8 @@ import {
 export const GAMEPLAY_REFERENCE_CAPTION_MODEL = "gemini-3-6-flash";
 const KIE_BASE64_UPLOAD_URL = "https://kieai.redpandaai.co/api/file-base64-upload";
 const MAX_BASE64_IMAGE_BYTES = 10 * 1024 * 1024;
+const MAX_DEBUG_RAW_RESPONSE_CHARS = 12_000;
+const MAX_DEBUG_VALIDATION_ERROR_CHARS = 6_000;
 
 export interface GameplayReferenceCaptionUsage {
   promptTokens: number;
@@ -22,6 +24,31 @@ export interface GameplayReferenceCaptionResult {
   caption: GameplayReferenceCaptionV1;
   model: string;
   usage: GameplayReferenceCaptionUsage;
+}
+
+export class GameplayReferenceCaptionOutputError extends Error {
+  readonly code: string;
+  readonly model: string;
+  readonly usage: GameplayReferenceCaptionUsage;
+  readonly rawResponse: string;
+  readonly validationError: string | null;
+
+  constructor(input: {
+    code: string;
+    usage: GameplayReferenceCaptionUsage;
+    rawResponse: string;
+    validationError?: string | null;
+  }) {
+    super(input.code);
+    this.name = "GameplayReferenceCaptionOutputError";
+    this.code = input.code;
+    this.model = GAMEPLAY_REFERENCE_CAPTION_MODEL;
+    this.usage = input.usage;
+    this.rawResponse = input.rawResponse.slice(0, MAX_DEBUG_RAW_RESPONSE_CHARS);
+    this.validationError = input.validationError
+      ? input.validationError.slice(0, MAX_DEBUG_VALIDATION_ERROR_CHARS)
+      : null;
+  }
 }
 
 export type GameplayReferenceTempUpload = (input: {
@@ -145,14 +172,30 @@ export async function captionGameplayReferenceImage(input: {
     ],
   });
 
-  if (!response.content) throw new Error("GAMEPLAY_REFERENCE_CAPTION_EMPTY_RESPONSE");
+  const usage = normalizedUsage(response.usage);
+  if (!response.content) {
+    throw new GameplayReferenceCaptionOutputError({
+      code: "GAMEPLAY_REFERENCE_CAPTION_EMPTY_RESPONSE",
+      usage,
+      rawResponse: "",
+    });
+  }
 
   // Deliberately no second model call: cheap-model primitive drift is repaired by code;
   // semantic/schema failures are persisted for inspection instead of spending again.
-  const caption = parseGameplayReferenceCaption(response.content);
-  return {
-    caption,
-    model: GAMEPLAY_REFERENCE_CAPTION_MODEL,
-    usage: normalizedUsage(response.usage),
-  };
+  try {
+    const caption = parseGameplayReferenceCaption(response.content);
+    return {
+      caption,
+      model: GAMEPLAY_REFERENCE_CAPTION_MODEL,
+      usage,
+    };
+  } catch (error) {
+    throw new GameplayReferenceCaptionOutputError({
+      code: "GAMEPLAY_REFERENCE_CAPTION_SCHEMA_INVALID",
+      usage,
+      rawResponse: response.content,
+      validationError: error instanceof Error ? error.message : String(error),
+    });
+  }
 }
