@@ -135,6 +135,15 @@ function normalizeBoolean(value: unknown): unknown {
   return value;
 }
 
+function normalizeEvidenceBoolean(value: unknown): unknown {
+  const normalized = normalizeBoolean(value);
+  if (typeof normalized === "boolean") return normalized;
+  // These fields ask whether visual evidence is established. A null value or a descriptive
+  // string is not proof of visibility, so fail closed instead of inventing a positive signal.
+  if (normalized == null || typeof normalized === "string") return false;
+  return normalized;
+}
+
 function normalizeNumber(value: unknown): unknown {
   if (typeof value === "number") return value;
   if (typeof value !== "string" || !value.trim()) return value;
@@ -225,6 +234,9 @@ const BOOLEAN_FIELDS = [
   "informationAsymmetryVisible",
   "rescueVisible",
   "coordinationVisible",
+] as const;
+
+const EVIDENCE_BOOLEAN_FIELDS = [
   "readableWithoutContext",
   "visibleGoal",
   "visibleRisk",
@@ -262,6 +274,9 @@ export function normalizeGameplayReferenceCaptionPayload(value: unknown): unknow
   normalized.stylizationTags = normalizeStringArray(normalized.stylizationTags);
 
   for (const field of BOOLEAN_FIELDS) normalized[field] = normalizeBoolean(normalized[field]);
+  for (const field of EVIDENCE_BOOLEAN_FIELDS) {
+    normalized[field] = normalizeEvidenceBoolean(normalized[field]);
+  }
   for (const field of OPTIONAL_TEXT_FIELDS) normalized[field] = normalizeOptionalText(normalized[field]);
 
   return normalized;
@@ -304,7 +319,7 @@ export function materializeGameplayReferenceSpec(input: {
 }
 
 export function buildGameplayReferenceCaptionPrompt(gameName: string): string {
-  return `Analyze this image as a candidate REAL PC GAMEPLAY reference for ${gameName}. Return one JSON object only, with no prose or markdown.\n\nDo not infer marketing intent from the game name. Inspect only what is visibly supported by the frame. A gameplay screenshot is not key art, concept art, a cinematic trailer frame, photo mode, or a detached spectator composition.\n\nRequired fields:\n- cameraType: first_person | third_person_follow | over_shoulder | top_down | fixed_gameplay | other\n- cameraDistance, cameraHeight, fovEstimate, playableCharacterVisible, handsVisible, heldToolVisible, crosshairVisible, hudVisible\n- controllablePlayerObvious, howPlayerControlIsVisible, currentPlayerAction, visibleInputAffordance, playerTarget, gameResponse\n- teammateCountVisible, teammateDistance, teammateRole, coopDependencyVisible, sharedObjectVisible, informationAsymmetryVisible, rescueVisible, coordinationVisible\n- coreAction, mechanicTags[], interactionModel[], dangerSource, failureRisk, successState, physicsInteraction, environmentType\n- primaryFocus, secondaryFocus, readableWithoutContext, visibleGoal, visibleRisk, uiSupportsAction, visualClutter: low | medium | high\n- artDirection, realismLevel, productionScopeFeel: indie | AA | AAA, stylizationTags[]\n- gameplayDescription: concrete description of what the controllable player is doing now, what is in front of them, what a teammate is doing, where the risk is, and what UI/affordance helps read the action\n- whyThisLooksLikeGameplay: concrete evidence that the camera, player embodiment, interaction distance, affordance, teammate framing, and world response read as active gameplay.\n\nType rules: all visibility/readability flags must be JSON booleans true/false, never descriptive strings. fovEstimate must be a JSON number in degrees or null, never a string. visibleInputAffordance must always be a string; use the literal string ${GAMEPLAY_REFERENCE_NONE_VISIBLE} if no explicit input affordance is visible. Use null only for genuinely unobservable optional text/number values. Do not invent a HUD, input, teammate, risk, or physical response that is not visible.`;
+  return `Analyze this image as a candidate REAL PC GAMEPLAY reference for ${gameName}. Return one JSON object only, with no prose or markdown.\n\nDo not infer marketing intent from the game name. Inspect only what is visibly supported by the frame. A gameplay screenshot is not key art, concept art, a cinematic trailer frame, photo mode, or a detached spectator composition.\n\nRequired fields:\n- cameraType: first_person | third_person_follow | over_shoulder | top_down | fixed_gameplay | other\n- cameraDistance, cameraHeight, fovEstimate, playableCharacterVisible, handsVisible, heldToolVisible, crosshairVisible, hudVisible\n- controllablePlayerObvious, howPlayerControlIsVisible, currentPlayerAction, visibleInputAffordance, playerTarget, gameResponse\n- teammateCountVisible, teammateDistance, teammateRole, coopDependencyVisible, sharedObjectVisible, informationAsymmetryVisible, rescueVisible, coordinationVisible\n- coreAction, mechanicTags[], interactionModel[], dangerSource, failureRisk, successState, physicsInteraction, environmentType\n- primaryFocus, secondaryFocus, readableWithoutContext, visibleGoal, visibleRisk, uiSupportsAction, visualClutter: low | medium | high\n- artDirection, realismLevel, productionScopeFeel: indie | AA | AAA, stylizationTags[]\n- gameplayDescription: concrete description of what the controllable player is doing now, what is in front of them, what a teammate is doing, where the risk is, and what UI/affordance helps read the action\n- whyThisLooksLikeGameplay: concrete evidence that the camera, player embodiment, interaction distance, affordance, teammate framing, and world response read as active gameplay.\n\nType rules: all visibility/readability flags must be JSON booleans true/false, never descriptive strings. If visibility/readability is uncertain, use false. fovEstimate must be a JSON number in degrees or null, never a string. visibleInputAffordance must always be a string; use the literal string ${GAMEPLAY_REFERENCE_NONE_VISIBLE} if no explicit input affordance is visible. Use null only for genuinely unobservable optional text/number values. Do not invent a HUD, input, teammate, risk, or physical response that is not visible.`;
 }
 
 export function buildGameplayReferenceEmbeddingText(reference: GameplayReferenceSpecV1): string {
