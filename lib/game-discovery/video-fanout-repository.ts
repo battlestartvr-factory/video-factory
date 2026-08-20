@@ -38,12 +38,26 @@ export interface GameplayVideoStage {
   allCompleted: boolean;
 }
 
+export interface GameplayVideoApprovalItem extends GameplayVideoStageItem {
+  decision: "approve" | "reject" | "revise" | null;
+  reviewId: string | null;
+  rawFeedback: string | null;
+  structuredFeedback: Record<string, unknown>;
+}
+
+export interface GameplayVideoApprovalStage {
+  items: GameplayVideoApprovalItem[];
+  requestCount: number;
+  allReviewed: boolean;
+  allApproved: boolean;
+}
+
 export interface GameplayAssemblyStage {
   items: GameplayPrototypeAssembly[];
   assemblyCount: number;
 }
 
-function parseVideoItem(value: unknown): GameplayVideoStageItem | null {
+function parseVideoItem(value: unknown, approval = false): GameplayVideoStageItem | GameplayVideoApprovalItem | null {
   const row = object(value);
   const shotId = text(row.shot_id);
   const conceptId = text(row.concept_id);
@@ -52,7 +66,7 @@ function parseVideoItem(value: unknown): GameplayVideoStageItem | null {
   const generationId = text(row.generation_id);
   const factoryJobId = text(row.factory_job_id);
   const approvedReferenceGenerationId = text(row.approved_reference_generation_id);
-  const status = text(row.status);
+  const status = text(approval ? row.generation_status : row.status);
 
   if (
     !shotId ||
@@ -67,7 +81,7 @@ function parseVideoItem(value: unknown): GameplayVideoStageItem | null {
     return null;
   }
 
-  return {
+  const base: GameplayVideoStageItem = {
     shotId,
     conceptId,
     momentId,
@@ -79,6 +93,17 @@ function parseVideoItem(value: unknown): GameplayVideoStageItem | null {
     outputs: array(row.outputs).map(object),
     errorMessage: text(row.error_message),
     modelId: text(row.model_id),
+  };
+  if (!approval) return base;
+
+  const decision = row.decision;
+  return {
+    ...base,
+    decision:
+      decision === "approve" || decision === "reject" || decision === "revise" ? decision : null,
+    reviewId: text(row.review_id),
+    rawFeedback: text(row.raw_feedback),
+    structuredFeedback: object(row.structured_feedback),
   };
 }
 
@@ -121,6 +146,10 @@ export class GameDiscoveryVideoRepository {
     requestId: string;
     referenceGenerationId: string;
     shotId: string;
+    videoPromptOverride?: string | null;
+    sourceVideoGenerationId?: string | null;
+    revisionReviewId?: string | null;
+    videoRevisionNumber?: number;
   }): Promise<{ generationId: string; factoryJobId: string; duplicate: boolean }> {
     const { data, error } = await this.client.rpc("orchestrator_create_approved_gameplay_video", {
       payload: {
@@ -129,6 +158,10 @@ export class GameDiscoveryVideoRepository {
         request_id: input.requestId,
         reference_generation_id: input.referenceGenerationId,
         shot_id: input.shotId,
+        video_prompt_override: input.videoPromptOverride ?? null,
+        source_video_generation_id: input.sourceVideoGenerationId ?? null,
+        revision_review_id: input.revisionReviewId ?? null,
+        video_revision_number: input.videoRevisionNumber ?? 0,
       },
     });
     if (error) throw new Error(`Failed to admit approved gameplay video: ${error.message}`);
@@ -155,11 +188,30 @@ export class GameDiscoveryVideoRepository {
     const row = requireRpcObject(data, "gameplay video stage");
     return {
       items: array(row.items)
-        .map(parseVideoItem)
+        .map((item) => parseVideoItem(item))
         .filter((item): item is GameplayVideoStageItem => item !== null),
       requestCount: typeof row.request_count === "number" ? row.request_count : 0,
       allTerminal: row.all_terminal === true,
       allCompleted: row.all_completed === true,
+    };
+  }
+
+  async getGameplayVideoApprovalStage(input: {
+    rootCreativeRunId: string;
+  }): Promise<GameplayVideoApprovalStage> {
+    const { data, error } = await this.client.rpc("orchestrator_get_gameplay_video_approval_stage", {
+      payload: { root_creative_run_id: input.rootCreativeRunId },
+    });
+    if (error) throw new Error(`Failed to inspect gameplay video approvals: ${error.message}`);
+
+    const row = requireRpcObject(data, "gameplay video approval stage");
+    return {
+      items: array(row.items)
+        .map((item) => parseVideoItem(item, true))
+        .filter((item): item is GameplayVideoApprovalItem => item !== null),
+      requestCount: typeof row.request_count === "number" ? row.request_count : 0,
+      allReviewed: row.all_reviewed === true,
+      allApproved: row.all_approved === true,
     };
   }
 
