@@ -1,28 +1,17 @@
-import { inspectGameplayVideosBeforeAssetGraph } from "./gameplay-authenticity-video-stage";
 import { gameDiscoveryBatchStage4ReferenceIntegratedV1 } from "./game-discovery-batch-stage4-reference-integrated-v1";
 import type { WorkflowTickHandler } from "./types";
 
 /**
- * Stage 4 keeps generated reference-image admission strictly human-controlled.
+ * Stage 4 keeps generated media admission strictly human-controlled.
  *
- * Generated reference images are never inspected, rejected, revised, or regenerated
- * by an AI evaluator here. Once image generation completes, the canonical Stage 4
- * workflow parks at human_reference_approval_pending until a person approves,
- * rejects, or requests a revision. Human-requested revisions may be repeated without
- * an application-level retry cap.
+ * Generated reference images and gameplay videos are never inspected, rejected,
+ * revised, regenerated, or blocked by an AI evaluator after generation. The workflow
+ * parks at explicit human gates where a person can approve, reject, or request a
+ * revision. Human-requested revisions may be repeated without an application-level
+ * retry cap, and written feedback is persisted as factory memory for later planning.
  *
- * Video authenticity inspection remains enabled before asset-graph admission.
+ * Planning-time gameplay contracts remain available to shape prompts before provider
+ * calls, but they are not allowed to overrule the person's decision on generated media.
  */
-export const gameDiscoveryBatchStage4InspectedV1: WorkflowTickHandler = async (context) => {
-  const outcome = await gameDiscoveryBatchStage4ReferenceIntegratedV1(context);
-
-  if (
-    context.currentStage === "video_generation_waiting" &&
-    outcome.status === "waiting" &&
-    outcome.currentStage === "asset_graph_pending"
-  ) {
-    return inspectGameplayVideosBeforeAssetGraph({ context, baseOutcome: outcome });
-  }
-
-  return outcome;
-};
+export const gameDiscoveryBatchStage4InspectedV1: WorkflowTickHandler = async (context) =>
+  gameDiscoveryBatchStage4ReferenceIntegratedV1(context);
