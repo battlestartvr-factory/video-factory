@@ -89,8 +89,33 @@ export async function POST(request: Request) {
       const modelId = requiredText(body, "modelId", 160);
       const conceptId = requiredText(body, "conceptId", 160);
       const prompt = requiredText(body, "prompt");
-      const researchRunId = optionalText(body, "researchRunId", 160);
-      const externalVisualQuery = optionalText(body, "externalVisualQuery", 2_000);
+      const rootCreativeRunId = requiredText(body, "rootCreativeRunId", 100);
+      const supabase = createSupabaseServiceClient();
+
+      let researchRunId = optionalText(body, "researchRunId", 160);
+      if (!researchRunId) {
+        const { data: linkedResearchRun, error: linkedResearchError } = await supabase
+          .from("research_runs")
+          .select("id")
+          .eq("root_creative_run_id", rootCreativeRunId)
+          .in("status", ["running", "completed"])
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        if (linkedResearchError) {
+          console.warn("stage4_5.research_lineage_lookup_failed", {
+            root_creative_run_id: rootCreativeRunId,
+            error: linkedResearchError.message,
+          });
+        } else if (typeof linkedResearchRun?.id === "string") {
+          researchRunId = linkedResearchRun.id;
+        }
+      }
+
+      const explicitExternalVisualQuery = optionalText(body, "externalVisualQuery", 2_000);
+      const externalVisualQuery = researchRunId
+        ? explicitExternalVisualQuery ?? `${prompt.slice(0, 1_700)}\nFind real gameplay screenshot source pages that clarify this co-op mechanic, interaction grammar, camera, readable player roles, environment/object behavior, and failure state.`
+        : null;
       const mustNotCopy = Array.isArray(body.mustNotCopy)
         ? body.mustNotCopy.filter((item): item is string => typeof item === "string" && item.trim().length > 0).slice(0, 20)
         : [];
@@ -128,11 +153,10 @@ export async function POST(request: Request) {
         }
       }
 
-      const supabase = createSupabaseServiceClient();
       const { data, error } = await supabase.rpc("orchestrator_create_gameplay_reference_image", {
         payload: {
           root_job_id: requiredText(body, "rootJobId", 100),
-          root_creative_run_id: requiredText(body, "rootCreativeRunId", 100),
+          root_creative_run_id: rootCreativeRunId,
           request_id: requiredText(body, "requestId", 100),
           concept_id: conceptId,
           moment_id: requiredText(body, "momentId", 160),
@@ -167,6 +191,7 @@ export async function POST(request: Request) {
             gameplayReferenceCount: gameplayAssets.length,
             externalReferenceCount,
             externalReferenceWarning,
+            researchRunId,
           },
         },
         { status: 200, headers: { "Cache-Control": "no-store" } },
