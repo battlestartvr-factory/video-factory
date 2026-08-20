@@ -59,4 +59,13 @@ describe("Stage 4 human media approval contract", () => {
     expect(memoryMigration).toContain("'[reference_image]['");
     expect(memoryMigration).toContain("'[video]['");
   });
+
+  it("counts and finalizes only current human-approved gameplay video branches", () => {
+    const finalizationMigration = source("supabase/migrations/20260820062000_finalize_human_approved_videos.sql");
+
+    expect(finalizationMigration).toContain("FROM public.gameplay_video_reviews");
+    expect(finalizationMigration).toContain("review.decision = 'approve'");
+    expect(finalizationMigration).toContain("humanApprovedVideoCount");
+    expect(finalizationMigration).toContain("human-approved video branches without a matching assembly");
+  });
 });
