@@ -1,7 +1,18 @@
 import { DurableWorkflowError } from "../../lib/orchestrator/retry";
 import { researchScoutEvidenceBundleV1Schema } from "../../lib/research-intelligence/evidence-bundle";
+import { createKieGroundedResearchScoutExecutor } from "../../lib/research-intelligence/kie-research-scout";
+import type { ResearchScoutExecutor } from "../../lib/research-intelligence/scout-runtime";
 import { researchScoutReportSpecV1Schema } from "../../lib/research-intelligence/schemas";
 import type { WorkflowTickHandler } from "./types";
+
+let productionKieExecutor: ResearchScoutExecutor | null = null;
+
+function resolveProductionKieExecutor(): ResearchScoutExecutor | null {
+  if ((process.env.WEB_SEARCH_PROVIDER ?? "").trim().toLowerCase() !== "kie") return null;
+  if (!(process.env.KIE_API_KEY ?? process.env.AGENT_LLM_API_KEY ?? "").trim()) return null;
+  productionKieExecutor ??= createKieGroundedResearchScoutExecutor();
+  return productionKieExecutor;
+}
 
 export const externalResearchScoutV1: WorkflowTickHandler = async (context) => {
   const repository = context.services?.researchScouts;
@@ -41,7 +52,7 @@ export const externalResearchScoutV1: WorkflowTickHandler = async (context) => {
     };
   }
 
-  const executor = context.services?.researchScoutExecutor;
+  const executor = context.services?.researchScoutExecutor ?? resolveProductionKieExecutor();
   if (!executor) {
     throw new DurableWorkflowError({
       code: "RESEARCH_SCOUT_EXECUTOR_NOT_CONFIGURED",
