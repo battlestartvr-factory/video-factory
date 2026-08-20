@@ -18,7 +18,8 @@ describe("Stage 4 human media approval contract", () => {
 
   it("parks generated gameplay videos at a human gate with approve, revise and reject", () => {
     const workflow = source("worker/workflows/game-discovery-batch-stage4-video-v1.ts");
-    const ui = source("components/discovery/discovery-page-client.tsx");
+    const discoveryUi = source("components/discovery/discovery-page-client.tsx");
+    const chatUi = source("components/chat/discovery-task-card.tsx");
 
     expect(workflow).toContain('currentStage: "human_video_approval_pending"');
     expect(workflow).toContain('currentStage: "video_revision_pending"');
@@ -26,12 +27,17 @@ describe("Stage 4 human media approval contract", () => {
     expect(workflow).toContain("human_requested_regeneration: true");
     expect(workflow).toContain("automatic_video_regeneration: false");
 
-    expect(ui).toContain("Ваше решение по gameplay-видео");
-    expect(ui).toContain('media: "video"');
-    expect(ui).toContain("Утвердить");
-    expect(ui).toContain("Исправить");
-    expect(ui).toContain("Отклонить");
-    expect(ui).toContain("video-reviews");
+    for (const ui of [discoveryUi, chatUi]) {
+      expect(ui).toContain("Утвердить");
+      expect(ui).toContain("Исправить");
+      expect(ui).toContain("Отклонить");
+      expect(ui).toContain("video-reviews");
+      expect(ui).toContain("human_video_approval_pending");
+    }
+    expect(discoveryUi).toContain("Ваше решение по gameplay-видео");
+    expect(discoveryUi).toContain('media: "video"');
+    expect(chatUi).toContain("Gameplay-видео готовы");
+    expect(chatUi).toContain("ИИ не может забраковать видео");
   });
 
   it("stores image and video comments in durable factory feedback memory with decision context", () => {
