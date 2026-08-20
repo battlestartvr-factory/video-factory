@@ -35,6 +35,7 @@ services:
       NODE_ENV: production
       AI_FACTORY_DATA_ROOT: /srv/ai-factory
       GOOGLE_DRIVE_AUTH_MODE: oauth_user
+      WEB_SEARCH_PROVIDER: ${WEB_SEARCH_PROVIDER:-kie}
     volumes:
       - ${AI_FACTORY_DATA_ROOT:-/srv/ai-factory}:/srv/ai-factory
     depends_on:
@@ -62,6 +63,8 @@ services:
       AI_FACTORY_DATA_ROOT: /srv/ai-factory
       BUILD_SHA: ${DEPLOY_COMMIT:-local}
       GOOGLE_DRIVE_AUTH_MODE: oauth_user
+      WEB_SEARCH_PROVIDER: ${WEB_SEARCH_PROVIDER:-kie}
+      WORKER_APP_INTERNAL_URL: http://app:3000
       ORCHESTRATOR_QUEUE_MODE: core
       WORKER_CONCURRENCY: "1"
     volumes:
@@ -69,6 +72,8 @@ services:
     depends_on:
       data-init:
         condition: service_completed_successfully
+      app:
+        condition: service_healthy
     restart: unless-stopped
 
   research-worker:
@@ -82,6 +87,8 @@ services:
       NODE_ENV: production
       AI_FACTORY_DATA_ROOT: /srv/ai-factory
       BUILD_SHA: ${DEPLOY_COMMIT:-local}
+      WEB_SEARCH_PROVIDER: ${WEB_SEARCH_PROVIDER:-kie}
+      WORKER_APP_INTERNAL_URL: http://app:3000
       ORCHESTRATOR_QUEUE_MODE: research
       WORKER_CONCURRENCY: "5"
     volumes:
@@ -89,6 +96,8 @@ services:
     depends_on:
       data-init:
         condition: service_completed_successfully
+      app:
+        condition: service_healthy
     restart: unless-stopped
 
   caddy:
