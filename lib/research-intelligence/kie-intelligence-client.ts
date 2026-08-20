@@ -67,7 +67,7 @@ export class InternalKieResearchSynthesizer implements ResearchSynthesizerExecut
     return {
       pack: evidencePackSpecV1Schema.parse(data.pack),
       provider: typeof data.provider === "string" ? data.provider : "kie",
-      model: typeof data.model === "string" ? data.model : null,
+      model: typeof data.model === "string" ? data.model : undefined,
       usage: data.usage && typeof data.usage === "object" && !Array.isArray(data.usage)
         ? data.usage as Record<string, unknown>
         : {},
