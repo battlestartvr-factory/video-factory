@@ -123,7 +123,7 @@ describe("Stage 4.5 PR3 durable Research Scout DB contract", () => {
     expect(migration).toContain("existing_report");
     expect(migration).toContain("research_persist_scout_report");
     expect(migration).toMatch(/v_existing := v_row\.outputs->'scout_report'/);
-    expect(migration).toContain("'scout_report', v_report");
+    expect(migration).toMatch(/outputs = jsonb_set\([\s\S]*?'\{scout_report\}'[\s\S]*?v_report[\s\S]*?true\)/);
   });
 });
 
