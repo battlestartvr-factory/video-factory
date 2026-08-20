@@ -11,6 +11,23 @@ function object(value: unknown): Record<string, unknown> {
     : {};
 }
 
+const NON_RETRYABLE_RESEARCH_CODES = new Set([
+  "WEB_SEARCH_GROUNDING_MISSING",
+  "WEB_SEARCH_INVALID_RESPONSE",
+  "WEB_SEARCH_NOT_CONFIGURED",
+  "RESEARCH_SCOUT_NO_GROUNDED_SOURCES",
+  "RESEARCH_SCOUT_NO_SAFE_FETCHED_SOURCES",
+  "RESEARCH_SCOUT_GROUNDED_CLAIMS_MISSING",
+  "RESEARCH_SCOUT_ALREADY_PERSISTED",
+  "RESEARCH_SCOUT_ROLE_MISMATCH",
+  "INVALID_REQUEST",
+]);
+
+function isRetryableResearchFailure(code: string, status: number): boolean {
+  if (NON_RETRYABLE_RESEARCH_CODES.has(code)) return false;
+  return status === 429 || status >= 500;
+}
+
 export class InternalKieResearchScoutExecutor implements ResearchScoutExecutor {
   constructor(
     private readonly appUrl: string,
@@ -54,7 +71,7 @@ export class InternalKieResearchScoutExecutor implements ResearchScoutExecutor {
       throw new DurableWorkflowError({
         code,
         message,
-        retryable: response.status === 429 || response.status >= 500,
+        retryable: isRetryableResearchFailure(code, response.status),
         details: { http_status: response.status },
       });
     }
