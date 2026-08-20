@@ -1,16 +1,18 @@
 import { DurableWorkflowError } from "../../lib/orchestrator/retry";
 import { researchScoutEvidenceBundleV1Schema } from "../../lib/research-intelligence/evidence-bundle";
-import { createKieGroundedResearchScoutExecutor } from "../../lib/research-intelligence/kie-research-scout";
+import { createInternalKieResearchScoutExecutor } from "../../lib/research-intelligence/kie-research-scout-client";
 import type { ResearchScoutExecutor } from "../../lib/research-intelligence/scout-runtime";
 import { researchScoutReportSpecV1Schema } from "../../lib/research-intelligence/schemas";
 import type { WorkflowTickHandler } from "./types";
 
 let productionKieExecutor: ResearchScoutExecutor | null = null;
+let productionKieExecutorResolved = false;
 
 function resolveProductionKieExecutor(): ResearchScoutExecutor | null {
-  if ((process.env.WEB_SEARCH_PROVIDER ?? "").trim().toLowerCase() !== "kie") return null;
-  if (!(process.env.KIE_API_KEY ?? process.env.AGENT_LLM_API_KEY ?? "").trim()) return null;
-  productionKieExecutor ??= createKieGroundedResearchScoutExecutor();
+  if (!productionKieExecutorResolved) {
+    productionKieExecutor = createInternalKieResearchScoutExecutor();
+    productionKieExecutorResolved = true;
+  }
   return productionKieExecutor;
 }
 
