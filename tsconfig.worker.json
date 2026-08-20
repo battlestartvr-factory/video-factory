@@ -21,7 +21,8 @@
     "lib/game-discovery/schemas.ts",
     "lib/game-discovery/diversity.ts",
     "lib/game-discovery/concept-explorer.ts",
-    "lib/game-discovery/worker-repository.ts"
+    "lib/game-discovery/worker-repository.ts",
+    "lib/research-intelligence/**/*.ts"
   ],
   "exclude": ["node_modules", ".next"]
 }
