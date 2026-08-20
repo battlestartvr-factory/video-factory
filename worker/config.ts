@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { hostname } from "node:os";
+import type { OrchestratorQueueMode } from "../lib/orchestrator/queue/pgmq";
 
 export interface WorkerConfig {
   supabaseUrl: string;
@@ -9,6 +10,9 @@ export interface WorkerConfig {
   appUrl: string;
   kieApiKey: string | null;
   kieApiBaseUrl: string;
+  queueMode: OrchestratorQueueMode;
+  workerConcurrency: number;
+  mockWorkflows: boolean;
   queuePollMs: number;
   leaseSeconds: number;
   visibilitySeconds: number;
@@ -40,6 +44,20 @@ function integerEnv(name: string, fallback: number, min: number, max: number): n
   return value;
 }
 
+function booleanEnv(name: string, fallback = false): boolean {
+  const raw = process.env[name]?.trim().toLowerCase();
+  if (!raw) return fallback;
+  if (["1", "true", "yes", "on"].includes(raw)) return true;
+  if (["0", "false", "no", "off"].includes(raw)) return false;
+  throw new Error(`${name} must be a boolean`);
+}
+
+function queueModeEnv(): OrchestratorQueueMode {
+  const value = (process.env.ORCHESTRATOR_QUEUE_MODE ?? "core").trim().toLowerCase();
+  if (value === "core" || value === "research") return value;
+  throw new Error("ORCHESTRATOR_QUEUE_MODE must be core or research");
+}
+
 export function loadWorkerConfig(): WorkerConfig {
   const workerId =
     process.env.ORCHESTRATOR_WORKER_ID?.trim() ||
@@ -48,6 +66,7 @@ export function loadWorkerConfig(): WorkerConfig {
   const leaseSeconds = integerEnv("ORCHESTRATOR_LEASE_SECONDS", 90, 15, 900);
   const visibilitySeconds = integerEnv("ORCHESTRATOR_VISIBILITY_SECONDS", 120, 15, 3600);
   const leaseHeartbeatMs = integerEnv("ORCHESTRATOR_LEASE_HEARTBEAT_MS", 30_000, 5_000, 300_000);
+  const queueMode = queueModeEnv();
 
   if (leaseHeartbeatMs >= leaseSeconds * 1000) {
     throw new Error("ORCHESTRATOR_LEASE_HEARTBEAT_MS must be shorter than the DB lease");
@@ -61,6 +80,9 @@ export function loadWorkerConfig(): WorkerConfig {
     appUrl: optionalEnv("APP_URL") ?? "http://localhost:3000",
     kieApiKey: optionalEnv("KIE_API_KEY"),
     kieApiBaseUrl: optionalEnv("KIE_API_BASE_URL") ?? "https://api.kie.ai",
+    queueMode,
+    workerConcurrency: integerEnv("WORKER_CONCURRENCY", queueMode === "research" ? 5 : 1, 1, 10),
+    mockWorkflows: booleanEnv("MOCK_WORKFLOWS", false),
     queuePollMs: integerEnv("ORCHESTRATOR_QUEUE_POLL_MS", 1000, 100, 60_000),
     leaseSeconds,
     visibilitySeconds,
