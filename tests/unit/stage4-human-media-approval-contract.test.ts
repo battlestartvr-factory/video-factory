@@ -1,0 +1,47 @@
+import { readFileSync } from "node:fs";
+import { describe, expect, it } from "vitest";
+
+function source(path: string) {
+  return readFileSync(new URL(`../../${path}`, import.meta.url), "utf8");
+}
+
+describe("Stage 4 human media approval contract", () => {
+  it("does not let an AI inspector reject generated reference images or gameplay videos", () => {
+    const inspected = source("worker/workflows/game-discovery-batch-stage4-inspected-v1.ts");
+    const imageGate = source("worker/workflows/gameplay-authenticity-image-stage.ts");
+
+    expect(inspected).not.toContain("inspectGameplayVideosBeforeAssetGraph");
+    expect(inspected).not.toContain("gameplay-authenticity-video-stage");
+    expect(imageGate).toContain("human_reference_approval_pending");
+    expect(imageGate).not.toContain("inspectGameplayImageFromWorker");
+  });
+
+  it("parks generated gameplay videos at a human gate with approve, revise and reject", () => {
+    const workflow = source("worker/workflows/game-discovery-batch-stage4-video-v1.ts");
+    const ui = source("components/discovery/discovery-page-client.tsx");
+
+    expect(workflow).toContain('currentStage: "human_video_approval_pending"');
+    expect(workflow).toContain('currentStage: "video_revision_pending"');
+    expect(workflow).toContain("getGameplayVideoApprovalStage");
+    expect(workflow).toContain("human_requested_regeneration: true");
+    expect(workflow).toContain("automatic_video_regeneration: false");
+
+    expect(ui).toContain("Ваше решение по gameplay-видео");
+    expect(ui).toContain('media: "video"');
+    expect(ui).toContain("Утвердить");
+    expect(ui).toContain("Исправить");
+    expect(ui).toContain("Отклонить");
+    expect(ui).toContain("video-reviews");
+  });
+
+  it("stores image and video comments in the same durable factory feedback memory", () => {
+    const migration = source("supabase/migrations/20260820054000_stage4_human_video_review_gate.sql");
+
+    expect(migration).toContain("CREATE TABLE IF NOT EXISTS public.gameplay_video_reviews");
+    expect(migration).toContain("orchestrator_record_gameplay_video_review");
+    expect(migration).toContain("orchestrator_get_gameplay_video_approval_stage");
+    expect(migration).toContain("FROM public.gameplay_reference_reviews");
+    expect(migration).toContain("FROM public.gameplay_video_reviews");
+    expect(migration).toContain("gameplay_video_request_history");
+  });
+});
