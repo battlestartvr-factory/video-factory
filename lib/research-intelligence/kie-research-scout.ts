@@ -1,6 +1,10 @@
 import { DurableWorkflowError } from "../orchestrator/retry";
-import { urlSha256 } from "../web";
-import type { SearchResult } from "../web";
+import {
+  createKieGeminiGroundedSearchProvider,
+  createWebFetchProvider,
+  urlSha256,
+  type SearchResult,
+} from "../web";
 import {
   researchScoutEvidenceBundleV1Schema,
   type ResearchEvidenceDraftV1,
@@ -14,10 +18,9 @@ import type {
 } from "./scout-runtime";
 import {
   researchScoutReportSpecV1Schema,
-  type ResearchEvidenceTypeV1,
   type ResearchScoutRoleV1,
 } from "./schemas";
-import type { ResearchToolbox } from "./toolbox";
+import { createResearchToolbox, type ResearchToolbox } from "./toolbox";
 
 function metadataArray(value: unknown): string[] {
   return Array.isArray(value)
@@ -25,7 +28,10 @@ function metadataArray(value: unknown): string[] {
     : [];
 }
 
-function evidenceType(role: ResearchScoutRoleV1, index: number): ResearchEvidenceTypeV1 {
+function evidenceType(
+  role: ResearchScoutRoleV1,
+  index: number,
+): ResearchEvidenceDraftV1["evidenceType"] {
   switch (role) {
     case "market_competitor":
       return index % 3 === 2 ? "saturation_signal" : "market_pattern";
@@ -40,7 +46,9 @@ function evidenceType(role: ResearchScoutRoleV1, index: number): ResearchEvidenc
   }
 }
 
-function freshnessClass(value: ResearchScoutJobContext["assignment"]["freshness"]): ResearchEvidenceDraftV1["freshnessClass"] {
+function freshnessClass(
+  value: ResearchScoutJobContext["assignment"]["freshness"],
+): ResearchEvidenceDraftV1["freshnessClass"] {
   if (value === "current") return "fresh";
   if (value === "recent") return "recent";
   if (value === "evergreen") return "evergreen";
@@ -182,7 +190,9 @@ export class KieGroundedResearchScoutExecutor implements ResearchScoutExecutor {
         });
         resultBySourceRef.set(sourceRef, result);
       } catch (error) {
-        warnings.push(`Source fetch skipped: ${error instanceof Error ? error.message : String(error)}`.slice(0, 240));
+        warnings.push(
+          `Source fetch skipped: ${error instanceof Error ? error.message : String(error)}`.slice(0, 240),
+        );
       }
     }
 
@@ -278,4 +288,12 @@ export class KieGroundedResearchScoutExecutor implements ResearchScoutExecutor {
       provider: "kie",
     };
   }
+}
+
+export function createKieGroundedResearchScoutExecutor(): ResearchScoutExecutor {
+  const fetchProvider = createWebFetchProvider();
+  const searchProvider = createKieGeminiGroundedSearchProvider(fetchProvider);
+  return new KieGroundedResearchScoutExecutor(
+    createResearchToolbox({ searchProvider, fetchProvider }),
+  );
 }
