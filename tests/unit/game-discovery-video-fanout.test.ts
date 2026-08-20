@@ -17,7 +17,7 @@ const objective = {
   constraints: {},
 };
 
-function approval(input: {
+function referenceApproval(input: {
   shotId: string;
   generationId: string;
   decision: "approve" | "reject" | "revise";
@@ -30,16 +30,11 @@ function approval(input: {
     generationId: input.generationId,
     factoryJobId: `reference-job-${input.shotId}`,
     status: "completed",
-    outputs: [
-      {
-        url: `https://example.com/${input.shotId}.png`,
-        driveFileId: `drive-image-${input.shotId}`,
-      },
-    ],
+    outputs: [{ url: `https://example.com/${input.shotId}.png`, driveFileId: `drive-image-${input.shotId}` }],
     errorMessage: null,
     modelId: "nano-banana-2",
     decision: input.decision,
-    reviewId: `review-${input.shotId}`,
+    reviewId: `reference-review-${input.shotId}`,
     rawFeedback: null,
     structuredFeedback: {},
   };
@@ -59,17 +54,27 @@ function video(input: {
     factoryJobId: `video-job-${input.shotId}`,
     approvedReferenceGenerationId: input.referenceGenerationId,
     status: input.status ?? "processing",
-    outputs:
-      input.status === "completed"
-        ? [
-            {
-              url: `https://example.com/${input.shotId}.mp4`,
-              driveFileId: `drive-video-${input.shotId}`,
-            },
-          ]
-        : [],
+    outputs: input.status === "completed"
+      ? [{ url: `https://example.com/${input.shotId}.mp4`, driveFileId: `drive-video-${input.shotId}` }]
+      : [],
     errorMessage: null,
     modelId: "kling-3",
+  };
+}
+
+function videoApproval(input: {
+  shotId: string;
+  referenceGenerationId: string;
+  decision: "approve" | "reject" | "revise" | null;
+}) {
+  return {
+    ...video({ shotId: input.shotId, referenceGenerationId: input.referenceGenerationId, status: "completed" }),
+    decision: input.decision,
+    reviewId: input.decision ? `video-review-${input.shotId}` : null,
+    rawFeedback: input.decision === "revise" ? "Make the co-op action clearer" : null,
+    structuredFeedback: input.decision === "revise"
+      ? { mustShow: ["clear co-op dependency"], mustAvoid: [], errorTags: [] }
+      : {},
   };
 }
 
@@ -98,215 +103,167 @@ function context(input: {
   };
 }
 
-describe("Stage 4 approved gameplay video fanout", () => {
-  it("fails closed when video pending is reached without the human gate", async () => {
+describe("Stage 4 human-controlled gameplay video fanout", () => {
+  it("fails closed when video pending is reached without the human reference gate", async () => {
     const result = await gameDiscoveryBatchStage4VideoV1(
-      context({
-        stage: "video_generation_pending",
-        gameDiscovery: {},
-        gameDiscoveryVideo: {},
-      }),
+      context({ stage: "video_generation_pending", gameDiscovery: {}, gameDiscoveryVideo: {} }),
     );
 
     expect(result.status).toBe("failed");
     expect(result.error).toMatchObject({ code: "DISCOVERY_VIDEO_HUMAN_GATE_REQUIRED" });
-    expect(result.state).toMatchObject({ video_generation_locked: true });
   });
 
   it("admits video only for current human-approved references", async () => {
-    const approved = approval({ shotId: "shot-1", generationId: "reference-1", decision: "approve" });
-    const rejected = approval({ shotId: "shot-2", generationId: "reference-2", decision: "reject" });
-    const createApprovedVideo = vi.fn(async () => ({
-      generationId: "video-1",
-      factoryJobId: "video-job-1",
-      duplicate: false,
-    }));
+    const approved = referenceApproval({ shotId: "shot-1", generationId: "reference-1", decision: "approve" });
+    const rejected = referenceApproval({ shotId: "shot-2", generationId: "reference-2", decision: "reject" });
+    const createApprovedVideo = vi.fn(async () => ({ generationId: "video-1", factoryJobId: "video-job-1", duplicate: false }));
 
     const result = await gameDiscoveryBatchStage4VideoV1(
       context({
         stage: "video_generation_pending",
         state: { human_reference_gate_passed: true },
         gameDiscovery: {
-          getReferenceApprovalStage: async () => ({
-            allReviewed: true,
-            allApproved: false,
-            items: [approved, rejected],
-          }),
+          getReferenceApprovalStage: async () => ({ allReviewed: true, allApproved: false, items: [approved, rejected] }),
         },
         gameDiscoveryVideo: {
-          getGameplayVideoStage: async () => ({
-            items: [],
-            requestCount: 0,
-            allTerminal: false,
-            allCompleted: false,
-          }),
+          getGameplayVideoStage: async () => ({ items: [], requestCount: 0, allTerminal: false, allCompleted: false }),
           createApprovedVideo,
         },
       }),
     );
 
     expect(createApprovedVideo).toHaveBeenCalledTimes(1);
-    expect(createApprovedVideo).toHaveBeenCalledWith(
-      expect.objectContaining({
-        shotId: "shot-1",
-        referenceGenerationId: "reference-1",
-      }),
-    );
+    expect(createApprovedVideo).toHaveBeenCalledWith(expect.objectContaining({ shotId: "shot-1", referenceGenerationId: "reference-1" }));
     expect(result.currentStage).toBe("video_generation_waiting");
-    expect(result.enqueueReason).toBe("gameplay_video_reconcile");
-    expect(result.eventPayload).toMatchObject({ expected_count: 1 });
+    expect(result.state).toMatchObject({ video_approval_required: true, asset_graph_locked: true, assembly_locked: true });
   });
 
-  it("is restart-safe and does not re-admit a matching existing video child", async () => {
-    const approved = approval({ shotId: "shot-1", generationId: "reference-1", decision: "approve" });
-    const createApprovedVideo = vi.fn();
-
-    const result = await gameDiscoveryBatchStage4VideoV1(
-      context({
-        stage: "video_generation_pending",
-        state: { human_reference_gate_passed: true },
-        gameDiscovery: {
-          getReferenceApprovalStage: async () => ({
-            allReviewed: true,
-            allApproved: true,
-            items: [approved],
-          }),
-        },
-        gameDiscoveryVideo: {
-          getGameplayVideoStage: async () => ({
-            items: [video({ shotId: "shot-1", referenceGenerationId: "reference-1" })],
-            requestCount: 1,
-            allTerminal: false,
-            allCompleted: false,
-          }),
-          createApprovedVideo,
-        },
-      }),
-    );
-
-    expect(createApprovedVideo).not.toHaveBeenCalled();
-    expect(result.currentStage).toBe("video_generation_waiting");
-    expect(result.eventPayload).toMatchObject({ admitted_count: 0, existing_count: 1 });
-  });
-
-  it("fails closed if an existing video is tied to a stale reference", async () => {
-    const approved = approval({ shotId: "shot-1", generationId: "reference-new", decision: "approve" });
-
-    const result = await gameDiscoveryBatchStage4VideoV1(
-      context({
-        stage: "video_generation_pending",
-        state: { human_reference_gate_passed: true },
-        gameDiscovery: {
-          getReferenceApprovalStage: async () => ({
-            allReviewed: true,
-            allApproved: true,
-            items: [approved],
-          }),
-        },
-        gameDiscoveryVideo: {
-          getGameplayVideoStage: async () => ({
-            items: [video({ shotId: "shot-1", referenceGenerationId: "reference-old" })],
-            requestCount: 1,
-            allTerminal: false,
-            allCompleted: false,
-          }),
-          createApprovedVideo: vi.fn(),
-        },
-      }),
-    );
-
-    expect(result.status).toBe("failed");
-    expect(result.error).toMatchObject({ code: "DISCOVERY_VIDEO_STALE_REFERENCE" });
-    expect(result.state).toMatchObject({ video_generation_locked: true });
-  });
-
-  it("schedules AssetGraph persistence after completed approved videos", async () => {
-    const approved = approval({ shotId: "shot-1", generationId: "reference-1", decision: "approve" });
-    const completedVideo = video({
-      shotId: "shot-1",
-      referenceGenerationId: "reference-1",
-      status: "completed",
-    });
+  it("parks completed gameplay videos at a human review gate instead of AssetGraph", async () => {
+    const approved = referenceApproval({ shotId: "shot-1", generationId: "reference-1", decision: "approve" });
+    const completedVideo = video({ shotId: "shot-1", referenceGenerationId: "reference-1", status: "completed" });
 
     const result = await gameDiscoveryBatchStage4VideoV1(
       context({
         stage: "video_generation_waiting",
         state: { human_reference_gate_passed: true },
         gameDiscovery: {
-          getReferenceApprovalStage: async () => ({
-            allReviewed: true,
-            allApproved: true,
-            items: [approved],
-          }),
+          getReferenceApprovalStage: async () => ({ allReviewed: true, allApproved: true, items: [approved] }),
         },
         gameDiscoveryVideo: {
-          getGameplayVideoStage: async () => ({
-            items: [completedVideo],
-            requestCount: 1,
-            allTerminal: true,
-            allCompleted: true,
-          }),
+          getGameplayVideoStage: async () => ({ items: [completedVideo], requestCount: 1, allTerminal: true, allCompleted: true }),
         },
       }),
     );
 
     expect(result.status).toBe("waiting");
-    expect(result.currentStage).toBe("asset_graph_pending");
-    expect(result.nextActionAt).toEqual(expect.any(String));
-    expect(result.enqueueReason).toBe("gameplay_asset_graph_persist");
-    expect(result.state).toMatchObject({ gameplay_videos: [completedVideo] });
+    expect(result.currentStage).toBe("human_video_approval_pending");
+    expect(result.nextActionAt).toBeNull();
+    expect(result.eventPayload).toMatchObject({ human_video_gate_required: true, ai_video_rejection_enabled: false });
   });
 
-  it("persists a deterministic graph and parks at the assembly boundary", async () => {
-    const approved = approval({ shotId: "shot-1", generationId: "reference-1", decision: "approve" });
-    const completedVideo = video({
-      shotId: "shot-1",
-      referenceGenerationId: "reference-1",
-      status: "completed",
+  it("keeps a partial set of video decisions parked until every current video is reviewed", async () => {
+    const result = await gameDiscoveryBatchStage4VideoV1(
+      context({
+        stage: "human_video_approval_pending",
+        gameDiscovery: {},
+        gameDiscoveryVideo: {
+          getGameplayVideoApprovalStage: async () => ({
+            requestCount: 2,
+            allReviewed: false,
+            allApproved: false,
+            items: [
+              videoApproval({ shotId: "shot-1", referenceGenerationId: "reference-1", decision: "approve" }),
+              videoApproval({ shotId: "shot-2", referenceGenerationId: "reference-2", decision: null }),
+            ],
+          }),
+        },
+      }),
+    );
+
+    expect(result.currentStage).toBe("human_video_approval_pending");
+    expect(result.nextActionAt).toBeNull();
+    expect(result.state).toMatchObject({ human_video_gate_passed: false, asset_graph_locked: true });
+  });
+
+  it("routes a human revise decision to an explicit revision stage without automatic regeneration", async () => {
+    const result = await gameDiscoveryBatchStage4VideoV1(
+      context({
+        stage: "human_video_approval_pending",
+        gameDiscovery: {},
+        gameDiscoveryVideo: {
+          getGameplayVideoApprovalStage: async () => ({
+            requestCount: 1,
+            allReviewed: true,
+            allApproved: false,
+            items: [videoApproval({ shotId: "shot-1", referenceGenerationId: "reference-1", decision: "revise" })],
+          }),
+        },
+      }),
+    );
+
+    expect(result.currentStage).toBe("video_revision_pending");
+    expect(result.nextActionAt).toEqual(expect.any(String));
+    expect(result.eventPayload).toMatchObject({
+      human_feedback_memory_saved: true,
+      automatic_video_regeneration: false,
     });
+  });
+
+  it("advances only human-approved gameplay videos to AssetGraph", async () => {
+    const result = await gameDiscoveryBatchStage4VideoV1(
+      context({
+        stage: "human_video_approval_pending",
+        gameDiscovery: {},
+        gameDiscoveryVideo: {
+          getGameplayVideoApprovalStage: async () => ({
+            requestCount: 2,
+            allReviewed: true,
+            allApproved: false,
+            items: [
+              videoApproval({ shotId: "shot-1", referenceGenerationId: "reference-1", decision: "approve" }),
+              videoApproval({ shotId: "shot-2", referenceGenerationId: "reference-2", decision: "reject" }),
+            ],
+          }),
+        },
+      }),
+    );
+
+    expect(result.currentStage).toBe("asset_graph_pending");
+    expect(result.state).toMatchObject({
+      human_video_gate_passed: true,
+      approved_video_generation_ids: ["video-shot-1"],
+      rejected_video_generation_ids: ["video-shot-2"],
+      asset_graph_locked: false,
+    });
+  });
+
+  it("persists a graph only for a human-approved current gameplay video", async () => {
+    const approvedReference = referenceApproval({ shotId: "shot-1", generationId: "reference-1", decision: "approve" });
+    const approvedVideo = videoApproval({ shotId: "shot-1", referenceGenerationId: "reference-1", decision: "approve" });
     const persistAssetGraph = vi.fn(async () => undefined);
 
     const result = await gameDiscoveryBatchStage4VideoV1(
       context({
         stage: "asset_graph_pending",
-        state: { human_reference_gate_passed: true },
         gameDiscovery: {
-          getReferenceApprovalStage: async () => ({
-            allReviewed: true,
-            allApproved: true,
-            items: [approved],
-          }),
+          getReferenceApprovalStage: async () => ({ allReviewed: true, allApproved: true, items: [approvedReference] }),
         },
         gameDiscoveryVideo: {
-          getGameplayVideoStage: async () => ({
-            items: [completedVideo],
-            requestCount: 1,
-            allTerminal: true,
-            allCompleted: true,
-          }),
+          getGameplayVideoApprovalStage: async () => ({ requestCount: 1, allReviewed: true, allApproved: true, items: [approvedVideo] }),
           persistAssetGraph,
         },
       }),
     );
 
     expect(persistAssetGraph).toHaveBeenCalledTimes(1);
-    expect(persistAssetGraph).toHaveBeenCalledWith(
-      expect.objectContaining({
-        conceptRunId: "concept-run-shot-1",
-        assetGraph: expect.objectContaining({
-          schema: "asset_graph",
-          version: 1,
-          objectiveRunId: "22222222-2222-4222-8222-222222222222",
-          conceptRunId: "concept-run-shot-1",
-        }),
-      }),
-    );
-    expect(result.status).toBe("waiting");
+    expect(persistAssetGraph).toHaveBeenCalledWith(expect.objectContaining({
+      conceptRunId: "concept-run-shot-1",
+      assetGraph: expect.objectContaining({ schema: "asset_graph", version: 1 }),
+    }));
     expect(result.currentStage).toBe("assembly_pending");
-    expect(result.nextActionAt).toBeNull();
   });
 
-  it("builds the exact concept to approved-video lineage with Drive evidence", () => {
+  it("builds the exact reference to approved-video lineage with Drive evidence", () => {
     const graph = buildGameplayAssetGraph({
       objectiveRunId: "root-run",
       conceptRunId: "concept-run",
@@ -319,31 +276,16 @@ describe("Stage 4 approved gameplay video fanout", () => {
       videoOutputs: [{ driveFileId: "drive-video-1" }],
     });
 
-    expect(graph.nodes).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ id: "reference-image", generationId: "reference-1", driveFileId: "drive-image-1" }),
-        expect.objectContaining({ id: "gameplay-video", generationId: "video-1", driveFileId: "drive-video-1" }),
-      ]),
-    );
-    expect(graph.edges).toContainEqual({
-      from: "reference-image",
-      to: "gameplay-video",
-      relation: "keyframe_for",
-    });
+    expect(graph.edges).toContainEqual({ from: "reference-image", to: "gameplay-video", relation: "keyframe_for" });
   });
 
-  it("schedules the video admission tick immediately after human approval", async () => {
-    const approved = approval({ shotId: "shot-1", generationId: "reference-1", decision: "approve" });
-
+  it("schedules video admission immediately after human reference approval", async () => {
+    const approved = referenceApproval({ shotId: "shot-1", generationId: "reference-1", decision: "approve" });
     const result = await gameDiscoveryBatchStage4VideoV1(
       context({
         stage: "human_reference_approval_pending",
         gameDiscovery: {
-          getReferenceApprovalStage: async () => ({
-            allReviewed: true,
-            allApproved: true,
-            items: [approved],
-          }),
+          getReferenceApprovalStage: async () => ({ allReviewed: true, allApproved: true, items: [approved] }),
         },
       }),
     );
