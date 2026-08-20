@@ -254,6 +254,7 @@ describe("generation_image@1 lifecycle", () => {
   it("registers all durable workflows", () => {
     expect(listRegisteredWorkflows()).toEqual([
       "core_smoke@1",
+      "external_research_scout@1",
       "game_discovery_batch@1",
       "gameplay_authenticity_planning_smoke@1",
       "gameplay_reference_index@1",
