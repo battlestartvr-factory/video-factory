@@ -16,7 +16,7 @@ import {
   type ShotSpecV1,
 } from "./schemas";
 
-export const GAMEPLAY_PROMPT_COMPILER_VERSION = "gameplay_prompt_compiler_v4";
+export const GAMEPLAY_PROMPT_COMPILER_VERSION = "gameplay_prompt_compiler_v5";
 const GAMEPLAY_PROMPT_SCHEMA_MAX_CHARS = 8_000;
 const GAMEPLAY_PROMPT_TARGET_MAX_CHARS = 7_200;
 
@@ -116,6 +116,9 @@ export function compileGameplayPromptPlan(input: {
   }
 
   // Human constraints and shot-specific proof outrank broad moment wording when context must be bounded.
+  const humanMustShow = clippedList(feedback.mustShow, { maxItems: 5, maxChars: 180 });
+  const humanMustAvoid = clippedList(feedback.mustAvoid, { maxItems: 5, maxChars: 180 });
+  const humanErrorTags = clippedList(feedback.errorTags, { maxItems: 5, maxChars: 100 });
   const mustShow = clippedList(
     [...feedback.mustShow, ...shot.expectedEvidence, ...moment.requiredVisualEvidence],
     { maxItems: 5, maxChars: 120 },
@@ -133,6 +136,17 @@ export function compileGameplayPromptPlan(input: {
     ...feedback.mustAvoid,
     ...feedback.errorTags.map((tag) => `do not repeat rejected error pattern: ${tag}`),
   ]);
+  const humanFeedbackBlock = [
+    humanMustShow.length
+      ? `Preserve / make visible:\n${humanMustShow.map((item, index) => `${index + 1}. ${item}`).join("\n")}`
+      : "Preserve / make visible: no additional human requirement.",
+    humanMustAvoid.length
+      ? `Do not repeat:\n${humanMustAvoid.map((item, index) => `${index + 1}. ${item}`).join("\n")}`
+      : "Do not repeat: no additional human rejection pattern.",
+    humanErrorTags.length
+      ? `Rejected error tags:\n${humanErrorTags.map((item) => `- ${item}`).join("\n")}`
+      : "Rejected error tags: none.",
+  ].join("\n\n");
   const referenceBlock = compactGameplayReferenceInstructionBlock(gameplayReferences);
   const affordanceBlock = clipText(
     authenticity.gameplayAffordances
@@ -157,7 +171,7 @@ export function compileGameplayPromptPlan(input: {
 
   const imagePrompt = assertPromptBudget(
     "PROMPT_COMPILER_IMAGE",
-    `FAKE GAMEPLAY REFERENCE STILL — approval checkpoint before any video generation.\n\nPLAYABLE BEAT:\nConcept: ${clipText(concept.oneSentencePitch, 220)}\nMechanic: ${clipText(concept.coreMechanic, 240)}\nScene: ${clipText(moment.setup, 280)}\n\nPLAYER INPUT -> ACTION -> WORLD RESPONSE:\nControllable player: ${clipText(authenticity.controllablePlayer.role, 80)}; this player must be visually obvious.\nInput: ${clipText(authenticity.playerInput.input, 150)}\nVisible input evidence: ${clipText(authenticity.playerInput.visibleEvidence, 170)}\nAction: ${clipText(authenticity.playerAction.action, 180)}\nTarget: ${clipText(authenticity.playerAction.target, 140)}\nWorld response: ${clipText(authenticity.worldResponse.response, 220)}\n\nPLAYER-BOUND CAMERA:\nCamera type: ${authenticity.camera.type}; physically attached to the controllable player's gameplay viewpoint. ${clipText(authenticity.camera.visibleEvidence, 180)}\nShot framing: ${clipText(shot.camera, 220)}\n\nMEANINGFUL GAMEPLAY AFFORDANCES:\n${affordanceBlock}\n\nCO-OP DEPENDENCY:\n${clipText(authenticity.coop.teammateFunction, 180)}\nVisible evidence: ${clipText(authenticity.coop.visualEvidence, 180)}\n\nPHYSICS CONTRACT:\n${clipText(authenticity.physics.event, 180)}\nAffected: ${clipText(authenticity.physics.affectedEntities.join(", "), 160)}\n${physicsExceptions}\n\nART / READABILITY:\n${clipText(concept.artDirection, 180)}\nStylized indie / AA by default, not photoreal expensive AAA cinematic polish.\n${clipText(concept.readability, 160)}\n\nPURPOSE-LABELED REAL GAMEPLAY REFERENCES:\nAttached images are ordered as Reference A, B, and so on. Each has one narrow role.\n\n${referenceBlock}\n\nTHE STILL MUST VISIBLY PROVE:\n${mustShow.map((item, index) => `${index + 1}. ${item}`).join("\n")}\n\nThis exact image must plausibly be an in-engine PC co-op gameplay screenshot captured while a person is actively playing, not key art, a trailer frame, a spectator view, a staged animation or a promotional composition.`,
+    `FAKE GAMEPLAY REFERENCE STILL — approval checkpoint before any video generation.\n\nPLAYABLE BEAT:\nConcept: ${clipText(concept.oneSentencePitch, 220)}\nMechanic: ${clipText(concept.coreMechanic, 240)}\nScene: ${clipText(moment.setup, 280)}\n\nPLAYER INPUT -> ACTION -> WORLD RESPONSE:\nControllable player: ${clipText(authenticity.controllablePlayer.role, 80)}; this player must be visually obvious.\nInput: ${clipText(authenticity.playerInput.input, 150)}\nVisible input evidence: ${clipText(authenticity.playerInput.visibleEvidence, 170)}\nAction: ${clipText(authenticity.playerAction.action, 180)}\nTarget: ${clipText(authenticity.playerAction.target, 140)}\nWorld response: ${clipText(authenticity.worldResponse.response, 220)}\n\nPLAYER-BOUND CAMERA:\nCamera type: ${authenticity.camera.type}; physically attached to the controllable player's gameplay viewpoint. ${clipText(authenticity.camera.visibleEvidence, 180)}\nShot framing: ${clipText(shot.camera, 220)}\n\nMEANINGFUL GAMEPLAY AFFORDANCES:\n${affordanceBlock}\n\nCO-OP DEPENDENCY:\n${clipText(authenticity.coop.teammateFunction, 180)}\nVisible evidence: ${clipText(authenticity.coop.visualEvidence, 180)}\n\nPHYSICS CONTRACT:\n${clipText(authenticity.physics.event, 180)}\nAffected: ${clipText(authenticity.physics.affectedEntities.join(", "), 160)}\n${physicsExceptions}\n\nART / READABILITY:\n${clipText(concept.artDirection, 180)}\nStylized indie / AA by default, not photoreal expensive AAA cinematic polish.\n${clipText(concept.readability, 160)}\n\nPURPOSE-LABELED REAL GAMEPLAY REFERENCES:\nAttached images are ordered as Reference A, B, and so on. Each has one narrow role.\n\n${referenceBlock}\n\nHUMAN FEEDBACK MEMORY — HUMAN DECISIONS OVERRIDE AESTHETIC GUESSING:\n${humanFeedbackBlock}\n\nTHE STILL MUST VISIBLY PROVE:\n${mustShow.map((item, index) => `${index + 1}. ${item}`).join("\n")}\n\nThis exact image must plausibly be an in-engine PC co-op gameplay screenshot captured while a person is actively playing, not key art, a trailer frame, a spectator view, a staged animation or a promotional composition.`,
   );
 
   const beatBlock = motionPlan.beats
@@ -168,7 +182,7 @@ export function compileGameplayPromptPlan(input: {
     .join("\n");
   const videoPrompt = assertPromptBudget(
     "PROMPT_COMPILER_VIDEO",
-    `Animate the approved gameplay reference still into one continuous 5-second capture of one active gameplay session. Preserve character identities, positions, environment, art direction, interactable objects, meaningful HUD/affordances, and the approved player-camera composition.\n\nHARD CAMERA CONTRACT:\ncamera remains physically attached to the playable character for the entire clip\nNo cinematic reframing, camera orbit, dolly shot, cutaway, dramatic zoom, detached camera, spectator movement, or automatic hero framing.\n\nPLAYABLE 5-SECOND BEAT:\n${beatBlock}\n\nCONTROLLABLE PLAYER INPUT:\n${clipText(authenticity.playerInput.input, 220)}\n\nACTION:\n${clipText(authenticity.playerAction.action, 300)}\n\nWORLD RESPONSE CAUSED BY THAT ACTION:\n${clipText(authenticity.worldResponse.response, 360)}\n\nTEAMMATE DEPENDENCY:\n${clipText(authenticity.coop.teammateFunction, 260)}\n${clipText(authenticity.coop.visualEvidence, 280)}\n\nGAMEPLAY MOMENT HYPOTHESIS:\n${clipText(moment.hypothesis, 280)}\n\nVISIBLE EVIDENCE THAT MUST REMAIN LEGIBLE:\n${evidenceBlock(shot)}\n\nCAMERA:\n${clipText(shot.camera, 320)}\n\nThe result must plausibly be five seconds a player could obtain by pressing Record while actually playing. Do not introduce a new mechanic, location, camera cut, trailer montage, unrelated spectacle, or animation unrelated to player input/gameplay state.`,
+    `Animate the approved gameplay reference still into one continuous 5-second capture of one active gameplay session. Preserve character identities, positions, environment, art direction, interactable objects, meaningful HUD/affordances, and the approved player-camera composition.\n\nHARD CAMERA CONTRACT:\ncamera remains physically attached to the playable character for the entire clip\nNo cinematic reframing, camera orbit, dolly shot, cutaway, dramatic zoom, detached camera, spectator movement, or automatic hero framing.\n\nPLAYABLE 5-SECOND BEAT:\n${beatBlock}\n\nCONTROLLABLE PLAYER INPUT:\n${clipText(authenticity.playerInput.input, 220)}\n\nACTION:\n${clipText(authenticity.playerAction.action, 300)}\n\nWORLD RESPONSE CAUSED BY THAT ACTION:\n${clipText(authenticity.worldResponse.response, 360)}\n\nTEAMMATE DEPENDENCY:\n${clipText(authenticity.coop.teammateFunction, 260)}\n${clipText(authenticity.coop.visualEvidence, 280)}\n\nGAMEPLAY MOMENT HYPOTHESIS:\n${clipText(moment.hypothesis, 280)}\n\nHUMAN FEEDBACK MEMORY — APPLY THIS TO THE REGENERATION:\n${humanFeedbackBlock}\n\nVISIBLE EVIDENCE THAT MUST REMAIN LEGIBLE:\n${evidenceBlock(shot)}\n\nCAMERA:\n${clipText(shot.camera, 320)}\n\nThe result must plausibly be five seconds a player could obtain by pressing Record while actually playing. Do not introduce a new mechanic, location, camera cut, trailer montage, unrelated spectacle, or animation unrelated to player input/gameplay state. Human feedback above is authoritative for what to preserve or correct; never replace an approved creative choice merely because another aesthetic option seems cleaner.`,
   );
 
   const compilerInputsHash = stableHash({
@@ -197,7 +211,8 @@ export function compileGameplayPromptPlan(input: {
       compiler_version: GAMEPLAY_PROMPT_COMPILER_VERSION,
       image_model: shot.generationPlan.imageModel ?? null,
       reference_approval_required: true,
-      human_feedback_applied: feedback.mustShow.length + feedback.mustAvoid.length > 0,
+      human_feedback_applied:
+        feedback.mustShow.length + feedback.mustAvoid.length + feedback.errorTags.length > 0,
       gameplay_reference_set: gameplayReferences ?? null,
       gameplay_reference_count: gameplayReferences?.references.length ?? 0,
       gameplay_reference_roles: gameplayReferences?.references.map((item) => item.purpose) ?? [],
