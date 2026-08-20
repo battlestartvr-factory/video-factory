@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Check, RefreshCw, RotateCcw, Search, ShieldCheck, X } from "lucide-react";
+import { ConceptReviewPanel, type ConceptReviewDecision } from "./concept-review-panel";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
@@ -21,6 +22,7 @@ interface BatchDetail {
   videoGenerations: Array<Record<string, unknown>>;
   reviews: Array<Record<string, unknown>>;
   videoReviews: Array<Record<string, unknown>>;
+  conceptReviews: Array<Record<string, unknown>>;
 }
 
 type ReviewDecision = "approve" | "revise" | "reject";
@@ -47,6 +49,13 @@ function numberValue(value: unknown): number | null {
 function latestReview(reviews: Array<Record<string, unknown>>, generationId: string) {
   for (let index = reviews.length - 1; index >= 0; index -= 1) {
     if (reviews[index]?.generation_id === generationId) return reviews[index] ?? null;
+  }
+  return null;
+}
+
+function latestConceptReview(reviews: Array<Record<string, unknown>>, conceptRunId: string) {
+  for (let index = reviews.length - 1; index >= 0; index -= 1) {
+    if (reviews[index]?.concept_run_id === conceptRunId) return reviews[index] ?? null;
   }
   return null;
 }
@@ -80,7 +89,9 @@ function stageLabel(stage: string | null): string {
   const labels: Record<string, string> = {
     objective_ready: "Цель принята",
     concept_generation_pending: "Генерация концептов",
-    pre_evaluation_pending: "Предварительная оценка",
+    human_concept_approval_pending: "Нужно ваше решение по идеям игр",
+    concept_revision_pending: "Переработка / замена концептов по вашему feedback",
+    pre_evaluation_pending: "Предварительная оценка утверждённых концептов",
     planning_moments_pending: "Планирование gameplay-моментов",
     shot_planning_pending: "Планирование кадра",
     reference_image_generation_pending: "Подготовка reference-изображений",
@@ -108,15 +119,30 @@ export function DiscoveryPageClient({ initialBatches }: { initialBatches: Discov
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [feedbackByGeneration, setFeedbackByGeneration] = useState<Record<string, string>>({});
+  const [feedbackByConceptRun, setFeedbackByConceptRun] = useState<Record<string, string>>({});
   const [submitting, setSubmitting] = useState<string | null>(null);
 
   const loadDetail = useCallback(async (runId: string, quiet = false) => {
     if (!quiet) setLoading(true);
     try {
-      const response = await fetch(`/api/discovery/batches/${runId}`, { cache: "no-store" });
-      const payload = await response.json();
-      if (!response.ok || !payload?.ok) throw new Error(payload?.error?.message ?? "Не удалось загрузить batch");
-      setDetail(payload.data as BatchDetail);
+      const [detailResponse, conceptReviewsResponse] = await Promise.all([
+        fetch(`/api/discovery/batches/${runId}`, { cache: "no-store" }),
+        fetch(`/api/discovery/batches/${runId}/concept-reviews`, { cache: "no-store" }),
+      ]);
+      const payload = await detailResponse.json();
+      if (!detailResponse.ok || !payload?.ok) {
+        throw new Error(payload?.error?.message ?? "Не удалось загрузить batch");
+      }
+
+      let conceptReviews: Array<Record<string, unknown>> = [];
+      if (conceptReviewsResponse.ok) {
+        const reviewPayload = await conceptReviewsResponse.json();
+        if (reviewPayload?.ok && Array.isArray(reviewPayload?.data?.reviews)) {
+          conceptReviews = reviewPayload.data.reviews as Array<Record<string, unknown>>;
+        }
+      }
+
+      setDetail({ ...(payload.data as Omit<BatchDetail, "conceptReviews">), conceptReviews });
       setError(null);
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : "Не удалось загрузить batch");
@@ -136,6 +162,7 @@ export function DiscoveryPageClient({ initialBatches }: { initialBatches: Discov
     if (!selectedId) return;
     const shouldPoll = [
       "concept_generation_pending",
+      "concept_revision_pending",
       "pre_evaluation_pending",
       "planning_moments_pending",
       "shot_planning_pending",
@@ -162,6 +189,66 @@ export function DiscoveryPageClient({ initialBatches }: { initialBatches: Discov
     () => generationMap(detail?.videoGenerations),
     [detail],
   );
+
+  const activeConceptIds = useMemo(() => {
+    const ids = new Set<string>();
+    const rootOutputs = object(detail?.root.outputs);
+    for (const item of array(rootOutputs.discovery_concepts)) {
+      const conceptId = str(object(item).conceptId);
+      if (conceptId) ids.add(conceptId);
+    }
+    return ids;
+  }, [detail]);
+
+  const visibleConceptRuns = useMemo(() => {
+    const runs = detail?.conceptRuns ?? [];
+    if (!activeConceptIds.size) return runs;
+    return runs.filter((run) => {
+      const metadata = object(run.metadata);
+      const outputs = object(run.outputs);
+      const concept = object(outputs.coop_game_concept);
+      const conceptId = str(metadata.concept_id) ?? str(concept.conceptId);
+      return Boolean(conceptId && activeConceptIds.has(conceptId));
+    });
+  }, [activeConceptIds, detail]);
+
+  const submitConceptReview = async (input: {
+    conceptRunId: string;
+    conceptId: string;
+    decision: ConceptReviewDecision;
+  }) => {
+    if (!selectedId) return;
+    const feedback = feedbackByConceptRun[input.conceptRunId]?.trim() ?? "";
+    if (input.decision !== "approve" && !feedback) {
+      setError("Для исправления или отклонения идеи напишите причину. Она станет negative/positive memory завода.");
+      return;
+    }
+
+    setSubmitting(`concept:${input.conceptRunId}:${input.decision}`);
+    setError(null);
+    try {
+      const response = await fetch(`/api/discovery/batches/${selectedId}/concept-reviews`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          conceptRunId: input.conceptRunId,
+          conceptId: input.conceptId,
+          decision: input.decision,
+          feedback: feedback || null,
+        }),
+      });
+      const payload = await response.json();
+      if (!response.ok || !payload?.ok) {
+        throw new Error(payload?.error?.message ?? "Не удалось сохранить решение по идее");
+      }
+      await loadDetail(selectedId, true);
+      window.setTimeout(() => void loadDetail(selectedId, true), 1200);
+    } catch (submitError) {
+      setError(submitError instanceof Error ? submitError.message : "Не удалось сохранить решение по идее");
+    } finally {
+      setSubmitting(null);
+    }
+  };
 
   const submitReview = async (input: {
     media: ReviewMedia;
@@ -208,6 +295,7 @@ export function DiscoveryPageClient({ initialBatches }: { initialBatches: Discov
   };
 
   const progress = numberValue(detail?.factoryJob?.progress) ?? 0;
+  const conceptGateActive = currentStage === "human_concept_approval_pending";
 
   return (
     <div className="mx-auto flex w-full max-w-7xl flex-1 flex-col gap-5 px-4 py-6 lg:px-8">
@@ -218,7 +306,7 @@ export function DiscoveryPageClient({ initialBatches }: { initialBatches: Discov
             <h1 className="text-2xl font-semibold text-foreground">Поиск игры</h1>
           </div>
           <p className="mt-1 max-w-3xl text-sm text-muted-foreground">
-            Концепт → gameplay-момент → reference → ваше решение → gameplay-видео → ваше решение → prototype.
+            Концепт → ваше решение → gameplay-момент → reference → ваше решение → gameplay-видео → ваше решение → prototype.
           </p>
         </div>
         {selectedId && (
@@ -233,9 +321,9 @@ export function DiscoveryPageClient({ initialBatches }: { initialBatches: Discov
         <div className="flex items-start gap-3">
           <ShieldCheck className="mt-0.5 h-5 w-5 shrink-0 text-accent" />
           <div>
-            <p className="text-sm font-medium text-foreground">Human approval gates активны для картинок и видео</p>
+            <p className="text-sm font-medium text-foreground">Human approval gates активны для идей, картинок и видео</p>
             <p className="mt-1 text-xs leading-5 text-muted-foreground">
-              ИИ не отклоняет и не заменяет сгенерированные reference-картинки или gameplay-видео. Только вы решаете: «Утвердить», «Исправить» или «Отклонить». Комментарии к решениям сохраняются как опыт завода; человеческие перегенерации можно повторять без лимита.
+              Сначала вы утверждаете саму игру. «Исправить» создаёт новую версию той же идеи по вашему feedback. «Отклонить и заменить» полностью убирает идею из активного набора и требует механически нового концепта, а не рескина. Только после approval завод может перейти к gameplay-моментам и генерации медиа.
             </p>
           </div>
         </div>
@@ -288,7 +376,7 @@ export function DiscoveryPageClient({ initialBatches }: { initialBatches: Discov
                 </div>
               </div>
 
-              {(detail.conceptRuns ?? []).map((run) => {
+              {visibleConceptRuns.map((run) => {
                 const outputs = object(run.outputs);
                 const concept = object(outputs.coop_game_concept);
                 const evaluation = object(outputs.concept_pre_evaluation);
@@ -312,6 +400,7 @@ export function DiscoveryPageClient({ initialBatches }: { initialBatches: Discov
                 const momentId = str(moment.momentId) ?? str(referenceRequest.moment_id) ?? str(videoRequest.moment_id) ?? "moment";
                 const shotId = str(shot.shotId) ?? str(referenceRequest.shot_id) ?? str(videoRequest.shot_id) ?? "shot";
                 const conceptRunId = str(run.id) ?? "";
+                const conceptReview = latestConceptReview(detail.conceptReviews, conceptRunId);
                 const prototypeReady = Boolean(str(prototypeAssembly.driveFileId));
                 const prototypeDuration = numberValue(prototypeAssembly.durationSeconds);
                 const prototypeWidth = numberValue(prototypeAssembly.width);
@@ -338,9 +427,21 @@ export function DiscoveryPageClient({ initialBatches }: { initialBatches: Discov
                           <Badge variant={preEvalPassed ? "success" : "warning"}>
                             pre-eval {preEvalPassed ? "pass" : "check"}
                           </Badge>
+                        ) : conceptReview?.decision === "approve" ? (
+                          <Badge variant="success">human-approved concept</Badge>
                         ) : null}
                       </div>
                     </div>
+
+                    <ConceptReviewPanel
+                      concept={concept}
+                      review={conceptReview}
+                      feedback={feedbackByConceptRun[conceptRunId] ?? str(conceptReview?.raw_feedback) ?? ""}
+                      onFeedback={(value) => setFeedbackByConceptRun((current) => ({ ...current, [conceptRunId]: value }))}
+                      onDecision={(decision) => void submitConceptReview({ conceptRunId, conceptId, decision })}
+                      disabled={submitting !== null}
+                      gateActive={conceptGateActive}
+                    />
 
                     {Boolean(moment.momentId) && (
                       <div className="grid gap-3 border-b border-border p-4 md:grid-cols-2">
@@ -361,7 +462,9 @@ export function DiscoveryPageClient({ initialBatches }: { initialBatches: Discov
 
                     <div className="p-4">
                       {!generationId ? (
-                        <p className="text-sm text-muted-foreground">Reference ещё не поставлен в очередь.</p>
+                        <p className="text-sm text-muted-foreground">
+                          {conceptGateActive ? "Media generation заблокирована до утверждения идеи." : "Reference ещё не поставлен в очередь."}
+                        </p>
                       ) : !imageUrl ? (
                         <div className="rounded-lg border border-dashed border-border p-6 text-center">
                           <RefreshCw className={cn("mx-auto h-5 w-5 text-muted", generation?.status !== "failed" && "animate-spin")} />
