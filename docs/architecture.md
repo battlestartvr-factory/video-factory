@@ -62,6 +62,30 @@ DiscoveryObjective
 
 Known-good production batches and acceptance evidence are recorded in `docs/current-project-state.md`.
 
+## Stage 4.5 additive intelligence boundary
+
+Stage 4.5 adds a tactical external sensing layer **in front of** the known-good Stage 4 pipeline. It does not replace orchestration or any Human Gate.
+
+Target v2 front-end flow:
+
+```text
+DiscoveryObjective
+ -> Research Director
+ -> 5 independent durable Research Scouts
+ -> Research Memory
+ -> one Evidence Pack synthesis
+ -> 3 Concept Council members
+ -> one Concept Curator
+ -> Human Concept Approval Gate
+ -> existing Stage 4 downstream flow unchanged
+```
+
+Research Memory is an evidence/cache/index layer. Its tables link back to `factory_jobs` and root `creative_runs`; they are not authoritative workflow state. Fresh research evidence does not automatically become Stage 6 `memory_items`.
+
+Only the Research subsystem may later receive web search/fetch/image-search tools. Concept, Image and Video planners consume bounded typed evidence/reference inputs and do not browse directly.
+
+The canonical contract is `docs/stage4-5-external-intelligence-research-council-v1.md`.
+
 ## Main domain/storage boundaries
 
 - `creative_runs`: experiment/domain lineage.
@@ -70,11 +94,15 @@ Known-good production batches and acceptance evidence are recorded in `docs/curr
 - `generations`: image/video provider lineage.
 - `gameplay_references`: structured real-gameplay reference library.
 - `gameplay_*_reviews` + `gameplay_authenticity_inspections`: human/evaluator evidence.
+- `research_runs` / `research_queries` / `research_sources` / `research_evidence` / `research_assets` / `research_packs`: Stage 4.5 fresh external evidence/cache/provenance; not an orchestration engine and not Stage 6 strategic memory.
 - `lib/game-discovery/`: typed Stage 4 semantics; prompts are compiled artifacts, not the source of product truth.
+- `lib/research-intelligence/`: typed Stage 4.5 research/evidence/reference contracts.
 
 ## What comes next
 
-Do not keep expanding Stage 4 just to improve visual polish. The next architecture milestone is Stage 5/6:
+The immediate architecture milestone is the bounded Stage 4.5 External Intelligence & Research Council path. It must remain versioned/additive and preserve `game_discovery_batch@1` as the fallback while `game_discovery_batch@2` is built.
+
+After Stage 4.5 closes, continue Stage 5/6:
 
 `DISCOVERY -> EXPERIMENT -> EVALUATION -> HUMAN SIGNAL -> LEARNING -> SMARTER DISCOVERY`
 
