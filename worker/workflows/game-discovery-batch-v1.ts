@@ -20,8 +20,8 @@ function object(value: unknown): Record<string, unknown> {
     : {};
 }
 
-function conceptReviewsFromState(state: Record<string, unknown>): HumanConceptReviewState[] {
-  return Object.values(object(state.concept_reviews))
+function conceptReviewsFromMetadata(metadata: Record<string, unknown>): HumanConceptReviewState[] {
+  return Object.values(object(metadata.human_reviews))
     .map((value) => {
       const row = object(value);
       const conceptRunId = text(row.conceptRunId);
@@ -43,21 +43,6 @@ function conceptReviewsFromState(state: Record<string, unknown>): HumanConceptRe
       } satisfies HumanConceptReviewState;
     })
     .filter((review): review is HumanConceptReviewState => review !== null);
-}
-
-function retainedApprovalState(
-  state: Record<string, unknown>,
-  activeConceptIds: Set<string>,
-): Record<string, unknown> {
-  const retained: Record<string, unknown> = {};
-  for (const [runId, value] of Object.entries(object(state.concept_reviews))) {
-    const row = object(value);
-    const conceptId = text(row.conceptId);
-    if (row.decision === "approve" && conceptId && activeConceptIds.has(conceptId)) {
-      retained[runId] = value;
-    }
-  }
-  return retained;
 }
 
 function requireDiscoveryRuntime(context: WorkflowTickContext) {
@@ -183,7 +168,6 @@ export const gameDiscoveryBatchV1: WorkflowTickHandler = async (context) => {
             text(context.state.concept_generation_completed_at) ?? now,
           human_concept_gate_required: true,
           human_concept_gate_passed: false,
-          concept_reviews: object(context.state.concept_reviews),
         },
         stateReason: "s4_003_resumed_waiting_for_human_concept_review",
         eventType: "discovery.concepts_ready_for_review",
@@ -261,7 +245,6 @@ export const gameDiscoveryBatchV1: WorkflowTickHandler = async (context) => {
         },
         human_concept_gate_required: true,
         human_concept_gate_passed: false,
-        concept_reviews: {},
       },
       stateReason: "s4_003_concepts_ready_for_human_review",
       eventType: "discovery.concepts_ready_for_review",
@@ -299,7 +282,7 @@ export const gameDiscoveryBatchV1: WorkflowTickHandler = async (context) => {
     }
 
     const runByConceptId = new Map(concepts.conceptRuns.map((run) => [run.conceptId, run]));
-    const reviews = conceptReviewsFromState(context.state);
+    const reviews = conceptReviewsFromMetadata(concepts.explorerMetadata);
     const reviewByRunId = new Map(reviews.map((review) => [review.conceptRunId, review]));
     const activeRows = concepts.acceptedConcepts.map((concept) => {
       const run = runByConceptId.get(concept.conceptId);
@@ -404,7 +387,7 @@ export const gameDiscoveryBatchV1: WorkflowTickHandler = async (context) => {
     }
 
     const runByConceptId = new Map(concepts.conceptRuns.map((run) => [run.conceptId, run]));
-    const reviews = conceptReviewsFromState(context.state).filter((review) =>
+    const reviews = conceptReviewsFromMetadata(concepts.explorerMetadata).filter((review) =>
       concepts.acceptedConcepts.some((concept) => concept.conceptId === review.conceptId),
     );
     const reviewsByRunId = new Map(reviews.map((review) => [review.conceptRunId, review]));
@@ -466,8 +449,6 @@ export const gameDiscoveryBatchV1: WorkflowTickHandler = async (context) => {
       throw retryablePersistenceError("HUMAN_CONCEPT_REGENERATION_PERSIST_FAILED", error);
     }
 
-    const activeConceptIds = new Set(regenerated.activeConcepts.map((concept) => concept.conceptId));
-    const retainedReviews = retainedApprovalState(context.state, activeConceptIds);
     const changedReviews = reviews.filter(
       (review) => review.decision === "revise" || review.decision === "reject",
     );
@@ -481,7 +462,6 @@ export const gameDiscoveryBatchV1: WorkflowTickHandler = async (context) => {
         ...context.state,
         concept_ids: regenerated.activeConcepts.map((concept) => concept.conceptId),
         concept_run_ids: conceptRuns.map((run) => run.runId),
-        concept_reviews: retainedReviews,
         human_concept_gate_required: true,
         human_concept_gate_passed: false,
         human_concept_regeneration: {
