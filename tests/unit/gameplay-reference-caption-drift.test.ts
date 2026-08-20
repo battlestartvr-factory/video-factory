@@ -45,6 +45,20 @@ describe("observed cheap gameplay caption drift", () => {
     expect(normalized.environmentType).toBeNull();
   });
 
+  it("preserves numeric scalar evidence as strings for descriptive fields", () => {
+    const normalized = normalizeGameplayReferenceCaptionPayload({
+      cameraDistance: 2.5,
+      cameraHeight: 1.2,
+      teammateDistance: 3,
+      realismLevel: 0.3,
+    }) as Record<string, unknown>;
+
+    expect(normalized.cameraDistance).toBe("2.5");
+    expect(normalized.cameraHeight).toBe("1.2");
+    expect(normalized.teammateDistance).toBe("3");
+    expect(normalized.realismLevel).toBe("0.3");
+  });
+
   it("does not equate nearby teammates with visible coop dependency", () => {
     const normalized = normalizeGameplayReferenceCaptionPayload({
       coopDependencyVisible: true,
