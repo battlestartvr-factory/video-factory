@@ -1,5 +1,5 @@
 -- Stage 4.1: Human Concept Approval Gate.
--- Concepts are now explicitly approved before pre-evaluation / gameplay planning.
+-- Concepts are explicitly approved before pre-evaluation / gameplay planning.
 -- Reject is retained as negative evidence, but the rejected concept is removed from
 -- the active discovery_concepts set by the worker and replaced with a new concept.
 
@@ -45,8 +45,6 @@ DECLARE
   v_root public.creative_runs%ROWTYPE;
   v_concept public.creative_runs%ROWTYPE;
   v_job public.factory_jobs%ROWTYPE;
-  v_current_reviews JSONB;
-  v_review_state JSONB;
   v_msg_id BIGINT;
   v_trace_id UUID := gen_random_uuid();
 BEGIN
@@ -69,9 +67,13 @@ BEGIN
     RAISE EXCEPTION 'game discovery root creative run not found';
   END IF;
 
+  -- Serialize human review admission against durable job transitions. The worker
+  -- reconciles decisions from this review table on every tick, so it never relies
+  -- on a mutable state-map that could be lost during concurrent finish_tick writes.
   SELECT * INTO v_job
   FROM public.factory_jobs
-  WHERE id = v_root.factory_job_id;
+  WHERE id = v_root.factory_job_id
+  FOR UPDATE;
   IF NOT FOUND OR v_job.status IN ('completed','failed','cancelled') THEN
     RAISE EXCEPTION 'game discovery job is not reviewable';
   END IF;
@@ -125,30 +127,6 @@ BEGIN
     created_at = NOW()
   RETURNING * INTO v_review;
 
-  v_current_reviews := COALESCE(v_job.state->'concept_reviews', '{}'::JSONB);
-  IF jsonb_typeof(v_current_reviews) IS DISTINCT FROM 'object' THEN
-    v_current_reviews := '{}'::JSONB;
-  END IF;
-  v_review_state := jsonb_build_object(
-    'reviewId', v_review.id,
-    'conceptRunId', v_concept_run_id,
-    'conceptId', v_concept_id,
-    'decision', v_decision,
-    'rawFeedback', v_feedback,
-    'createdAt', v_review.created_at
-  );
-
-  UPDATE public.factory_jobs
-  SET
-    state = jsonb_set(
-      COALESCE(state, '{}'::JSONB),
-      '{concept_reviews}',
-      v_current_reviews || jsonb_build_object(v_concept_run_id::TEXT, v_review_state),
-      true
-    ),
-    last_enqueued_at = NOW()
-  WHERE id = v_job.id;
-
   SELECT msg_id INTO v_msg_id
   FROM pgmq.send(
     'core_orchestrator_v1',
@@ -160,6 +138,10 @@ BEGIN
     ),
     0
   ) AS msg_id;
+
+  UPDATE public.factory_jobs
+  SET last_enqueued_at = NOW()
+  WHERE id = v_job.id;
 
   INSERT INTO public.factory_workflow_events (
     job_id,
@@ -271,4 +253,97 @@ $function$;
 REVOKE ALL ON FUNCTION public.orchestrator_get_gameplay_concept_approval_stage(JSONB)
   FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.orchestrator_get_gameplay_concept_approval_stage(JSONB)
+  TO service_role;
+
+-- Extend the existing restart-safe concept-stage read with authoritative latest
+-- human reviews. The TypeScript repository already exposes concept_explorer as a
+-- generic metadata object, so this remains backward-compatible while giving the
+-- worker a race-safe review snapshot without adding a second repository RPC.
+CREATE OR REPLACE FUNCTION public.orchestrator_get_game_discovery_concept_stage(payload JSONB)
+RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_root_run_id UUID := NULLIF(payload->>'root_creative_run_id', '')::UUID;
+  v_root public.creative_runs%ROWTYPE;
+  v_concept_runs JSONB;
+  v_human_reviews JSONB;
+BEGIN
+  IF v_root_run_id IS NULL THEN
+    RAISE EXCEPTION 'root_creative_run_id is required';
+  END IF;
+
+  SELECT * INTO v_root
+  FROM public.creative_runs
+  WHERE id = v_root_run_id
+    AND metadata->>'domain_kind' = 'game_discovery_batch';
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'game discovery root creative run not found';
+  END IF;
+
+  SELECT COALESCE(
+    jsonb_agg(
+      jsonb_build_object(
+        'run_id', cr.id,
+        'concept_id', cr.metadata->>'concept_id'
+      )
+      ORDER BY cr.created_at ASC
+    ),
+    '[]'::JSONB
+  )
+  INTO v_concept_runs
+  FROM public.creative_runs cr
+  WHERE cr.parent_run_id = v_root_run_id
+    AND cr.metadata->>'domain_kind' = 'coop_game_concept';
+
+  SELECT COALESCE(
+    jsonb_object_agg(
+      cr.id::TEXT,
+      jsonb_build_object(
+        'reviewId', review.id,
+        'conceptRunId', cr.id,
+        'conceptId', cr.metadata->>'concept_id',
+        'decision', review.decision,
+        'rawFeedback', review.raw_feedback,
+        'createdAt', review.created_at
+      )
+    ) FILTER (WHERE review.id IS NOT NULL),
+    '{}'::JSONB
+  )
+  INTO v_human_reviews
+  FROM public.creative_runs cr
+  LEFT JOIN LATERAL (
+    SELECT r.*
+    FROM public.gameplay_concept_reviews r
+    WHERE r.root_creative_run_id = v_root_run_id
+      AND r.concept_run_id = cr.id
+    ORDER BY r.created_at DESC
+    LIMIT 1
+  ) review ON TRUE
+  WHERE cr.parent_run_id = v_root_run_id
+    AND cr.metadata->>'domain_kind' = 'coop_game_concept'
+    AND EXISTS (
+      SELECT 1
+      FROM jsonb_array_elements(COALESCE(v_root.outputs->'discovery_concepts', '[]'::JSONB)) AS active(value)
+      WHERE active.value->>'conceptId' = cr.metadata->>'concept_id'
+    );
+
+  RETURN jsonb_build_object(
+    'persisted', jsonb_typeof(v_root.outputs->'discovery_concepts') = 'array'
+      AND jsonb_array_length(v_root.outputs->'discovery_concepts') > 0,
+    'accepted_concepts', COALESCE(v_root.outputs->'discovery_concepts', '[]'::JSONB),
+    'diversity_rejections', COALESCE(v_root.outputs->'diversity_rejections', '[]'::JSONB),
+    'concept_explorer', COALESCE(v_root.outputs->'concept_explorer', '{}'::JSONB)
+      || jsonb_build_object('human_reviews', v_human_reviews),
+    'concept_runs', v_concept_runs
+  );
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.orchestrator_get_game_discovery_concept_stage(JSONB)
+  FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.orchestrator_get_game_discovery_concept_stage(JSONB)
   TO service_role;
