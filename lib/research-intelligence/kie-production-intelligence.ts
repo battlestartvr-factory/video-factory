@@ -296,7 +296,7 @@ export class KieProductionConceptDesigner implements ConceptCouncilDesignerExecu
       .map((raw, index) => normalizeDesignerCandidate({ raw, index, role, pack }))
       .filter((item): item is ConceptHypothesisSpecV1 => item !== null);
 
-    let candidates = normalized;
+    const candidates = [...normalized];
     let deterministicRepair = false;
     if (candidates.length < 4) {
       deterministicRepair = true;
