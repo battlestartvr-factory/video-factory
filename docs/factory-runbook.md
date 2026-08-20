@@ -1,140 +1,101 @@
-# Factory Pipeline Runbook
+# Durable Factory Runbook
 
-Additive factory pipeline (`factory_*` tables) runs parallel to legacy `jobs` / `assets`. Legacy UI and `/api/jobs` remain unchanged.
+This runbook describes the current durable factory/orchestrator. The old n8n-first `jobs/assets` pipeline is legacy; new Game Discovery work must use the `factory_jobs` + `creative_runs` durable model.
 
-## Local migration
+## Read first
 
-Apply migrations in order via Supabase SQL Editor or CLI:
+- `docs/current-project-state.md`
+- `docs/architecture.md`
+- `docs/stage4-game-discovery-pipeline-v1.md`
+- `docs/stage4-economy-approval-feedback-policy.md`
 
-```bash
-# Supabase CLI (if linked)
-supabase db reset   # clean local only
-# or apply single file:
-supabase migration up
-```
+## Core operational rule
 
-Manual order:
+**DB state is authoritative; queue messages are wake-up signals.** Never reconstruct workflow truth from queue delivery alone.
 
-1. `supabase/migrations/20260311000000_initial_schema.sql`
-2. `supabase/migrations/20260311000001_fix_profiles_rls.sql`
-3. `supabase/migrations/20260311000002_restrict_client_writes.sql`
-4. `supabase/migrations/20260812000000_factory_content_system.sql`
+The worker claims a job with a lease, runs one workflow tick, commits state with the lease token, and acks the queue delivery. Heartbeats renew the lease; watchdog recovery re-enqueues due/stale work.
 
-**Do not apply to remote production without explicit approval.**
-
-## Type generation
-
-This repo maintains hand-written types:
-
-- Legacy: `lib/types/database.ts`
-- Factory contracts: `lib/factory/contracts.ts`
-
-If you adopt Supabase CLI typegen later:
+## Local checks
 
 ```bash
-supabase gen types typescript --local > lib/types/supabase.generated.ts
-```
-
-Do not hand-edit generated output.
-
-## Tests
-
-```bash
-pnpm test
-pnpm typecheck
 pnpm lint
+pnpm typecheck
+pnpm test
+pnpm build
 ```
 
-Factory-specific unit tests live under `tests/unit/factory-*.test.ts`.
+CI runs the same safety gate before production deployment.
 
-## provider_models
+## Root terminal-lineage invariant
 
-Use `docs/factory-provider-seed.sql` as a commented template. Fill `model` and `endpoint` from KIE documentation. Set `enabled = true` only after manual verification.
+Migration `20260820081126_stage4_root_creative_run_terminal_sync.sql` installs an `AFTER UPDATE OF status` trigger on `factory_jobs`.
 
-Example `projects.factory_settings` budget JSON:
+When a job becomes `completed`, `failed` or `cancelled`, its non-terminal **root** `creative_run` (`parent_run_id IS NULL`) receives the same terminal status and `completed_at`. Child concept/media creative runs are not bulk-mutated.
 
-```json
-{
-  "per_job_usd_limit": 5.0,
-  "daily_usd_limit": 50.0
-}
+Useful audit:
+
+```sql
+select count(*) as stale_root_terminal_mismatches
+from creative_runs cr
+join factory_jobs fj on fj.id = cr.factory_job_id
+where cr.parent_run_id is null
+  and fj.status in ('completed','failed','cancelled')
+  and cr.status not in ('completed','failed','cancelled');
 ```
 
-## RLS verification (two users)
+Expected: `0`.
 
-1. Create User A and User B in Supabase Auth.
-2. Create Project P owned by A; add A as `project_members` owner.
-3. Create factory job for P via service role or `/api/factory/jobs` as A.
-4. As User B (browser/anon client): `SELECT * FROM factory_jobs` → empty.
-5. As User A: sees job via RLS.
-6. As User A: direct `INSERT INTO factory_jobs` → permission denied (no write policy).
+## Gameplay Reference Library indexing
 
-## Manual API smoke (no production n8n)
+References are archived in Google Drive and represented by structured rows in `gameplay_references`. Image indexing is a durable workflow `gameplay_reference_index@1`; the vision captioner is currently `gemini-3-6-flash` through the configured provider path.
 
-Set in `.env.local`:
+Current indexing is intentionally a one-provider-call caption/structure pass with deterministic normalization. Provider/schema failure is persisted as evidence; it does not silently auto-spend another model call.
 
-```env
-MOCK_WORKFLOWS=true
-N8N_FACTORY_BASE_URL=
-FACTORY_WEBHOOK_SECRET=
+Status audit:
+
+```sql
+select media_type, index_status, count(*)
+from gameplay_references
+group by media_type, index_status
+order by media_type, index_status;
 ```
 
-Create job:
+Enqueue pending image references through the existing service-role RPC, not by hand-building queue messages:
 
-```bash
-curl -X POST http://localhost:3000/api/factory/jobs \
-  -H "Content-Type: application/json" \
-  -H "Cookie: <session-cookie>" \
-  -d '{
-    "projectId": "<uuid>",
-    "jobType": "post",
-    "preset": "balanced",
-    "contentNamespace": "dev_reality",
-    "prompt": "Test prompt"
-  }'
+```sql
+select reference_id, public.gameplay_reference_enqueue_index_v1(reference_id)
+from gameplay_references
+where media_type = 'image'
+  and index_status = 'pending_caption';
 ```
 
-Expected: `202` with `{ jobId, requestId, status, accepted }`.
+If a failed caption is deliberately approved for a paid retry, first reset only that reviewed row to `pending_caption`, clear the attempt/error fields, then enqueue through the same RPC. Do not globally retry failures: a failure may contain paid evidence that should be repaired deterministically from `caption_debug.rawResponse` via the stored-caption repair path when possible.
 
-Read job:
+The current worker reads `core_orchestrator_v1` one delivery at a time; large library backfills therefore complete progressively. Do not enqueue duplicate active index jobs for the same reference.
 
-```bash
-curl http://localhost:3000/api/factory/jobs/<jobId> \
-  -H "Cookie: <session-cookie>"
-```
+## Stage 4 human gates
 
-## n8n auth contract (site → n8n)
+The discovery worker must park at explicit durable stages until human evidence is present:
 
-Header Auth in n8n expects an **exact static value**:
+- `human_concept_approval_pending`
+- `human_reference_approval_pending`
+- `human_video_approval_pending`
 
-```
-x-factory-signature: {FACTORY_WEBHOOK_SECRET}
-```
+`approve` advances the active branch. `revise` records feedback and creates a corrected branch/version according to the stage contract. `reject` is negative evidence; for concepts, replacement must be mechanically material, not a cosmetic reskin.
 
-Not HMAC, not derived from body or timestamp. Set the same value in n8n Webhook node Header Auth.
+## Stage 4 finalization
 
-Endpoints (relative to `N8N_FACTORY_BASE_URL`):
+A discovery batch can finalize only from human-approved video branches with matching prototype assemblies. The root run persists `prototype_result`; complete lineage remains queryable through child runs/generations/events/reviews.
 
-- `POST /factory/jobs` — job created
-- `POST /factory/jobs/action` — approve / regenerate / cancel (jobId in JSON body)
+Known-good run IDs and closeout evidence are in `docs/current-project-state.md`.
 
-If `N8N_FACTORY_BASE_URL` already ends with `/factory/jobs` or contains `/webhook`, path joining avoids duplication (see `buildFactoryWebhookUrl` in `lib/factory/webhook-auth.ts`).
+## Cost discipline
 
-## Environment variables
+- Do not run image/video/provider smokes just to prove a code path if DB/code/CI evidence is sufficient.
+- Paid acceptance tests must have a stated product question.
+- Keep provider failure evidence; do not hide it by blind retry loops.
+- Stage 5 should learn to distinguish concept failures from prompt/model/artifact failures.
 
-| Variable | Scope | Purpose |
-|----------|-------|---------|
-| `N8N_FACTORY_BASE_URL` | server | Base URL for factory n8n webhooks |
-| `FACTORY_WEBHOOK_SECRET` | server | HMAC secret for `x-factory-signature` |
+## Production release
 
-Never expose these as `NEXT_PUBLIC_*`.
-
-## RPC functions (service_role only)
-
-- `factory_create_or_get_job(payload jsonb)`
-- `factory_claim_stage(job_id, stage, input)`
-- `factory_record_event(...)`
-- `factory_transition_job(...)`
-- `factory_check_budget(job_id, capability, estimated_cost_usd)`
-
-Called from n8n with service role credentials, not from browser.
+Merge/push to `main` only after CI succeeds for the exact commit. `Deploy Production` then SSH-deploys that commit to the VPS. The legacy Vercel status is not the production deploy gate.

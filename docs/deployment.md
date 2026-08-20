@@ -1,103 +1,72 @@
-# Deployment
+# Deployment — canonical production guide
 
-## Docker (production VPS)
+## Production target
 
-Primary production target: Ubuntu 26.04 VPS with Docker Compose + Caddy.
+Primary production is **Ubuntu 26.04 VPS + Docker Engine/Compose + Caddy**.
 
-See **[docs/docker-deployment.md](./docker-deployment.md)** for the full migration report, env list, VPS layout, and GitHub Actions SSH deploy.
+- Public app: `https://battlestart-factory.duckdns.org`
+- App checkout: `/opt/ai-factory/app`
+- Production env: `/opt/ai-factory/.env` (never committed)
+- Durable/scratch root: `/srv/ai-factory`
+- Full Docker details: `docs/docker-deployment.md`
 
-Vercel deployment below remains active until URL cutover is confirmed.
+`docs/docker-deployment.md` contains migration-history wording about the old Vercel cutover. For current operational decisions, this file and `.github/workflows/deploy-production.yml` are authoritative: production deploys to the VPS.
 
-## Supabase
+## Deployment path
 
-1. Create project
-2. Run migrations in order:
-   - `supabase/migrations/20260311000000_initial_schema.sql`
-   - `supabase/migrations/20260814000000_ai_workspace_schema.sql`
-   - `supabase/migrations/20260814120000_universal_agent.sql`
-   - `supabase/migrations/20260814140000_knowledge_drive_fts.sql`
-3. Disable public signups
-4. Create admin user + `UPDATE profiles SET role = 'admin'`
-5. Enable Realtime for `jobs`, `job_events` tables (Database → Replication)
-
-## Vercel
-
-1. Import GitHub repo `battlestartvr-factory/video-factory`
-2. Framework: Next.js
-3. Environment variables (canonical set — see also `docs/environment-inventory.md`):
-
-```
-NEXT_PUBLIC_SUPABASE_URL=
-NEXT_PUBLIC_SUPABASE_ANON_KEY=
-SUPABASE_SERVICE_ROLE_KEY=
-KIE_API_KEY=
-KIE_API_BASE_URL=https://api.kie.ai
-APP_URL=https://your-app.vercel.app
-MOCK_WORKFLOWS=false
-LOG_LEVEL=info
-
-# Knowledge Base originals (optional)
-GOOGLE_DRIVE_INTEGRATION_ENABLED=false
-GOOGLE_DRIVE_AUTH_MODE=service_account
-GOOGLE_DRIVE_SHARED_FOLDER_ID=
-GOOGLE_DRIVE_CLIENT_EMAIL=
-GOOGLE_DRIVE_PRIVATE_KEY=
-# oauth_user mode alternative:
-# GOOGLE_DRIVE_CLIENT_ID=
-# GOOGLE_DRIVE_CLIENT_SECRET=
-# GOOGLE_DRIVE_REFRESH_TOKEN=
-
-# Web research (optional)
-WEB_SEARCH_PROVIDER=
-WEB_SEARCH_API_KEY=
-WEB_SEARCH_BASE_URL=
-
-# n8n / factory (legacy but still used by jobs)
-N8N_WEBHOOK_URL=
-N8N_WEBHOOK_SECRET=
-N8N_FACTORY_BASE_URL=
-FACTORY_WEBHOOK_SECRET=
-
-# Asset ingest
-INGEST_PROXY_TOKEN=
-B2_S3_ENDPOINT=
-B2_REGION=
-B2_ACCESS_KEY_ID=
-B2_SECRET_ACCESS_KEY=
-B2_BUCKET=battlestart-factory-temp
+```text
+push/merge to main
+ -> GitHub Actions: CI
+ -> lint + typecheck + unit tests + build
+ -> if CI succeeds: Deploy Production
+ -> SSH to VPS
+ -> scripts/deploy.sh <exact commit SHA>
+ -> Docker build/up + health verification
 ```
 
-4. Deploy
+Never deploy a different commit than the SHA that passed CI.
 
-## n8n Cloud
+## Supabase migrations
 
-1. Create workflow triggered by webhook
-2. Store OpenRouter/fal.ai/Google Drive credentials in n8n
-3. On job.created: process source → generate content → POST callback
-4. Use same `N8N_WEBHOOK_SECRET` for HMAC signing
+`supabase/migrations/` is the source-controlled migration history. Apply migrations in version order; do not maintain a second manual migration list in docs.
 
-## Google Drive (Knowledge Base)
+Production migrations may be applied through the authorized Supabase tooling during an explicit maintenance task, but the **same migration file must be committed to Git**. If production was migrated first, use exactly the production migration version/name in the repository to avoid drift.
 
-When `GOOGLE_DRIVE_INTEGRATION_ENABLED=true`:
+Stage 4 closeout introduced:
 
-1. Create/configure shared folder and set `GOOGLE_DRIVE_SHARED_FOLDER_ID`
-2. Choose auth mode via `GOOGLE_DRIVE_AUTH_MODE`:
-   - `service_account`: set `GOOGLE_DRIVE_CLIENT_EMAIL` + `GOOGLE_DRIVE_PRIVATE_KEY`
-   - `oauth_user`: set `GOOGLE_DRIVE_CLIENT_ID`, `GOOGLE_DRIVE_CLIENT_SECRET`, `GOOGLE_DRIVE_REFRESH_TOKEN`
-3. Share the root folder with the service account or OAuth user
-4. App stores originals under `Knowledge/Global/` and `Knowledge/Projects/<project-id>/`
+- `20260820081126_stage4_root_creative_run_terminal_sync.sql`
 
-Upload flow: browser receives resumable upload URL from `/api/knowledge/upload`, uploads directly to Google, then calls finalize.
+It installs the root terminal-lineage invariant and backfills historical mismatches.
 
-## CI
+## Required environment classes
 
-GitHub Actions runs lint, typecheck, test, build on push/PR.
+Canonical names live in `.env.example`, `deploy/env.production.example`, and `docs/environment-inventory.md`. Major groups:
 
-## Checklist
+- Supabase public + server-side credentials
+- `KIE_API_KEY` / provider config
+- `APP_URL` = public HTTPS production URL
+- Google Drive OAuth/user archive credentials
+- B2 ingest credentials where used
+- worker/orchestrator tuning
+- optional legacy n8n variables for code paths that still use them
 
-- [ ] Supabase migrations applied (including `20260814140000_knowledge_drive_fts.sql`)
-- [ ] Admin user created
-- [ ] Vercel env vars set (`KIE_API_KEY`, Supabase, optional Drive)
-- [ ] n8n webhook configured (if jobs/factory used)
-- [ ] `MOCK_WORKFLOWS=false` in production
-- [ ] Google Drive configured for Knowledge Base PDF/DOCX storage (optional)
+Secrets must stay server-side and must never be committed or exposed as `NEXT_PUBLIC_*` unless they are intentionally public Supabase values.
+
+## Production preflight / rollback
+
+`.github/workflows/deploy-production.yml` supports manual `preflight`, `deploy`, and `rollback` modes. Preflight verifies the candidate commit, required env, Drive archive configuration and current app health without making provider requests.
+
+Rollback deploys the recorded previous candidate commit; do not manually edit production files as a substitute for rollback.
+
+## Vercel status
+
+Vercel is no longer the production authority for this project. A legacy Vercel GitHub status can still appear as failed even when the VPS application and canonical GitHub CI/deploy are healthy. Do not block a VPS release solely on that legacy external check; remove/disable the external Vercel integration when account access is available.
+
+## Release checklist
+
+- CI green for exact commit SHA.
+- Supabase migrations in Git and production are aligned.
+- `Deploy Production` succeeded for that SHA.
+- `/api/health` is healthy on the VPS.
+- No unexpected non-terminal/expired durable jobs.
+- For Game Discovery changes, verify lineage and human gates rather than only checking generated media.
