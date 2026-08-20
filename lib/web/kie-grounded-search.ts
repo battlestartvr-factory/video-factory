@@ -1,5 +1,5 @@
 import { CONTENT_LIMITS } from "@/lib/agent/config";
-import { getKieConfig, serverEnv } from "@/lib/env/env.server";
+import { getKieConfig } from "@/lib/env/env.server";
 import { createWebFetchProvider } from "./fetch-provider";
 import { canonicalizeWebUrl, isDomainAllowed } from "./normalization";
 import type { WebPageImageCandidate } from "./page-images";
@@ -166,7 +166,7 @@ function parseProviderBody(text: string): unknown[] {
     try {
       payloads.push(JSON.parse(data) as unknown);
     } catch {
-      // Ignore an individual malformed stream chunk; the grounded-source contract below still fails closed.
+      // Ignore one malformed stream chunk; the grounded-source contract still fails closed below.
     }
   }
   return payloads;
@@ -282,7 +282,10 @@ export class KieGeminiGroundedSearchProvider implements WebSearchProvider {
     });
 
     const fetched = await Promise.allSettled(
-      sourceResults.map(async (source) => ({ source, document: await this.fetchProvider.fetchPage(source.canonicalUrl ?? source.url) })),
+      sourceResults.map(async (source) => ({
+        source,
+        document: await this.fetchProvider.fetchPage(source.canonicalUrl ?? source.url),
+      })),
     );
     const candidates: Array<{ source: SearchResult; candidate: WebPageImageCandidate; score: number }> = [];
     for (const result of fetched) {
@@ -333,6 +336,6 @@ export function createKieGeminiGroundedSearchProvider(fetchProvider?: WebFetchPr
   if (!kie.configured) {
     throw new WebToolError("WEB_SEARCH_NOT_CONFIGURED", "KIE API key is required for KIE grounded search");
   }
-  const model = (serverEnv.KIE_WEB_SEARCH_MODEL ?? "").trim() || "gemini-3-6-flash";
+  const model = (process.env.KIE_WEB_SEARCH_MODEL ?? "").trim() || "gemini-3-6-flash";
   return new KieGeminiGroundedSearchProvider(kie.baseUrl, kie.apiKey, model, fetchProvider);
 }
