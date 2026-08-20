@@ -69,6 +69,29 @@ function context(overrides: Partial<WorkflowTickContext> = {}): WorkflowTickCont
   };
 }
 
+function conceptStage(input?: { approved?: boolean }) {
+  return {
+    persisted: true,
+    acceptedConcepts: [concept],
+    conceptRuns: [{ runId: "concept-run-1", conceptId: "concept-1" }],
+    explorerMetadata: input?.approved
+      ? {
+          model: "claude-sonnet-5",
+          human_reviews: {
+            "concept-run-1": {
+              reviewId: "review-1",
+              conceptRunId: "concept-run-1",
+              conceptId: "concept-1",
+              decision: "approve",
+              rawFeedback: null,
+            },
+          },
+        }
+      : { model: "claude-sonnet-5", human_reviews: {} },
+    rejectionCount: 1,
+  };
+}
+
 describe("game_discovery_batch@1 workflow", () => {
   it("validates the objective and schedules the Concept Explorer tick", async () => {
     const result = await gameDiscoveryBatchV1(context());
@@ -80,22 +103,17 @@ describe("game_discovery_batch@1 workflow", () => {
     expect(result.enqueueReason).toBe("concept_generation");
     expect(result.stateReason).toBe("s4_002_ready_for_concept_explorer");
     expect(result.eventType).toBe("discovery.objective_ready");
+    expect(result.state?.human_concept_gate_required).toBe(true);
   });
 
-  it("resumes from already-persisted concepts and wakes pre-evaluation without repeating the LLM call", async () => {
+  it("resumes from already-persisted concepts and parks at the human concept gate without repeating the LLM call", async () => {
     let llmCalls = 0;
     const result = await gameDiscoveryBatchV1(
       context({
         currentStage: "concept_generation_pending",
         services: {
           gameDiscovery: {
-            getConceptStage: async () => ({
-              persisted: true,
-              acceptedConcepts: [concept],
-              conceptRuns: [{ runId: "concept-run-1", conceptId: "concept-1" }],
-              explorerMetadata: { model: "claude-sonnet-5" },
-              rejectionCount: 1,
-            }),
+            getConceptStage: async () => conceptStage(),
           },
           kieClaude: {
             generate: async () => {
@@ -109,11 +127,43 @@ describe("game_discovery_batch@1 workflow", () => {
 
     expect(llmCalls).toBe(0);
     expect(result.status).toBe("waiting");
-    expect(result.currentStage).toBe("pre_evaluation_pending");
+    expect(result.currentStage).toBe("human_concept_approval_pending");
     expect(result.progress).toBe(35);
+    expect(result.nextActionAt).toBeNull();
+    expect(result.enqueueReason).toBeUndefined();
+    expect(result.stateReason).toBe("s4_003_resumed_waiting_for_human_concept_review");
+  });
+
+  it("advances to pre-evaluation only after every active concept is human-approved", async () => {
+    const result = await gameDiscoveryBatchV1(
+      context({
+        currentStage: "human_concept_approval_pending",
+        state: {
+          creative_run_id: "creative-run-1",
+          discovery_objective: objective,
+          human_concept_gate_required: true,
+          human_concept_gate_passed: false,
+        },
+        services: {
+          gameDiscovery: {
+            getConceptStage: async () => conceptStage({ approved: true }),
+          },
+          kieClaude: {
+            generate: async () => {
+              throw new Error("should not be called");
+            },
+          },
+        } as unknown as NonNullable<WorkflowTickContext["services"]>,
+      }),
+    );
+
+    expect(result.status).toBe("waiting");
+    expect(result.currentStage).toBe("pre_evaluation_pending");
+    expect(result.progress).toBe(40);
     expect(result.nextActionAt).toEqual(expect.any(String));
     expect(result.enqueueReason).toBe("concept_pre_evaluation");
-    expect(result.stateReason).toBe("s4_003_resumed_from_persisted_concepts");
+    expect(result.state?.human_concept_gate_passed).toBe(true);
+    expect(result.stateReason).toBe("s4_003_human_concept_gate_passed");
   });
 
   it("parks durably after gameplay moments while shot planning is not enabled", async () => {
