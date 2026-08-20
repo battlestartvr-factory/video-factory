@@ -20,12 +20,16 @@ describe("Stage 4 human media approval contract", () => {
     const workflow = source("worker/workflows/game-discovery-batch-stage4-video-v1.ts");
     const discoveryUi = source("components/discovery/discovery-page-client.tsx");
     const chatUi = source("components/chat/discovery-task-card.tsx");
+    const promptCompiler = source("lib/game-discovery/prompt-compiler.ts");
 
     expect(workflow).toContain('currentStage: "human_video_approval_pending"');
     expect(workflow).toContain('currentStage: "video_revision_pending"');
     expect(workflow).toContain("getGameplayVideoApprovalStage");
     expect(workflow).toContain("human_requested_regeneration: true");
     expect(workflow).toContain("automatic_video_regeneration: false");
+    expect(promptCompiler).toContain("HUMAN FEEDBACK MEMORY — APPLY THIS TO THE REGENERATION");
+    expect(promptCompiler).toContain("feedback.mustAvoid");
+    expect(promptCompiler).toContain("feedback.mustShow");
 
     for (const ui of [discoveryUi, chatUi]) {
       expect(ui).toContain("Утвердить");
