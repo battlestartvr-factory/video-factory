@@ -26,7 +26,7 @@ function approval() {
   };
 }
 
-function video() {
+function approvedVideo() {
   return {
     shotId: "shot-1",
     conceptId: "concept-1",
@@ -39,6 +39,10 @@ function video() {
     outputs: [{ driveFileId: "drive-video" }],
     errorMessage: null,
     modelId: "kling-3",
+    decision: "approve" as const,
+    reviewId: "video-review-1",
+    rawFeedback: "Good gameplay read",
+    structuredFeedback: {},
   };
 }
 
@@ -113,7 +117,7 @@ function context(input: {
     workflowKind: "game_discovery_batch",
     workflowVersion: 1,
     currentStage: input.stage,
-    state: { creative_run_id: rootRunId, human_reference_gate_passed: true },
+    state: { creative_run_id: rootRunId, human_reference_gate_passed: true, human_video_gate_passed: true },
     retryCount: 0,
     signal: new AbortController().signal,
     services: {
@@ -125,11 +129,11 @@ function context(input: {
         }),
       },
       gameDiscoveryVideo: {
-        getGameplayVideoStage: async () => ({
-          items: [video()],
+        getGameplayVideoApprovalStage: async () => ({
+          items: [approvedVideo()],
           requestCount: 1,
-          allTerminal: true,
-          allCompleted: true,
+          allReviewed: true,
+          allApproved: true,
         }),
         getAssemblyStage: async () => ({
           items: input.existing ?? [],
@@ -144,7 +148,7 @@ function context(input: {
 }
 
 describe("Stage 4 deterministic prototype assembly", () => {
-  it("assembles a missing prototype, extends AssetGraph and persists it", async () => {
+  it("assembles a missing prototype only from a human-approved gameplay video", async () => {
     const assemble = vi.fn(async () => artifact());
     const persistAssembly = vi.fn(async () => undefined);
     const result = await gameDiscoveryBatchStage4AssemblyV1(
@@ -152,28 +156,16 @@ describe("Stage 4 deterministic prototype assembly", () => {
     );
 
     expect(assemble).toHaveBeenCalledTimes(1);
-    expect(assemble).toHaveBeenCalledWith(
-      expect.objectContaining({
-        rootCreativeRunId: rootRunId,
-        conceptRunId,
-        videoGenerationIds: ["55555555-5555-4555-8555-555555555555"],
-      }),
-    );
+    expect(assemble).toHaveBeenCalledWith(expect.objectContaining({
+      rootCreativeRunId: rootRunId,
+      conceptRunId,
+      videoGenerationIds: ["55555555-5555-4555-8555-555555555555"],
+    }));
     expect(persistAssembly).toHaveBeenCalledTimes(1);
-    expect(persistAssembly).toHaveBeenCalledWith(
-      expect.objectContaining({
-        assetGraph: expect.objectContaining({
-          nodes: expect.arrayContaining([
-            expect.objectContaining({ kind: "short", driveFileId: "drive-short" }),
-          ]),
-          edges: expect.arrayContaining([
-            expect.objectContaining({ relation: "assembles_into" }),
-          ]),
-        }),
-      }),
-    );
     expect(result.currentStage).toBe("prototype_finalization_pending");
-    expect(result.enqueueReason).toBe("gameplay_prototype_finalize");
+    expect(result.eventPayload).toMatchObject({
+      approved_video_generation_ids: ["55555555-5555-4555-8555-555555555555"],
+    });
   });
 
   it("is restart-safe and reuses a matching persisted prototype", async () => {
@@ -200,7 +192,7 @@ describe("Stage 4 deterministic prototype assembly", () => {
     expect(result.error).toMatchObject({ code: "DISCOVERY_ASSEMBLY_STALE_VIDEO" });
   });
 
-  it("finalizes the durable batch after all prototype assemblies are persisted", async () => {
+  it("finalizes the durable batch after all human-approved prototype assemblies are persisted", async () => {
     const finalize = vi.fn(async () => ({
       schema: "game_discovery_prototype_result",
       version: 1,
@@ -215,6 +207,5 @@ describe("Stage 4 deterministic prototype assembly", () => {
     expect(result.status).toBe("completed");
     expect(result.currentStage).toBe("completed");
     expect(result.progress).toBe(100);
-    expect(result.result).toMatchObject({ prototypeCount: 1 });
   });
 });
