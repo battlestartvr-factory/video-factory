@@ -1,4 +1,8 @@
 import { exploreConcepts } from "../../lib/game-discovery/concept-explorer";
+import {
+  applyHumanConceptReviews,
+  type HumanConceptReviewState,
+} from "../../lib/game-discovery/human-concept-gate";
 import { planGameplayMoments } from "../../lib/game-discovery/moment-planner";
 import { preEvaluateConcepts } from "../../lib/game-discovery/pre-evaluator";
 import { discoveryObjectiveSpecV1Schema } from "../../lib/game-discovery/schemas";
@@ -8,6 +12,37 @@ import type { WorkflowTickContext, WorkflowTickHandler } from "./types";
 
 function text(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function object(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+function conceptReviewsFromMetadata(metadata: Record<string, unknown>): HumanConceptReviewState[] {
+  return Object.values(object(metadata.human_reviews))
+    .map((value) => {
+      const row = object(value);
+      const conceptRunId = text(row.conceptRunId);
+      const conceptId = text(row.conceptId);
+      const decision = text(row.decision);
+      if (
+        !conceptRunId ||
+        !conceptId ||
+        (decision !== "approve" && decision !== "revise" && decision !== "reject")
+      ) {
+        return null;
+      }
+      return {
+        conceptRunId,
+        conceptId,
+        decision,
+        rawFeedback: text(row.rawFeedback),
+        reviewId: text(row.reviewId),
+      } satisfies HumanConceptReviewState;
+    })
+    .filter((review): review is HumanConceptReviewState => review !== null);
 }
 
 function requireDiscoveryRuntime(context: WorkflowTickContext) {
@@ -91,6 +126,8 @@ export const gameDiscoveryBatchV1: WorkflowTickHandler = async (context) => {
         discovery_objective: objectiveResult.data,
         objective_validated_at: now,
         stage4_schema_version: 1,
+        human_concept_gate_required: true,
+        human_concept_gate_passed: false,
       },
       stateReason: "s4_002_ready_for_concept_explorer",
       eventType: "discovery.objective_ready",
@@ -117,10 +154,9 @@ export const gameDiscoveryBatchV1: WorkflowTickHandler = async (context) => {
       const now = new Date().toISOString();
       return {
         status: "waiting",
-        currentStage: "pre_evaluation_pending",
+        currentStage: "human_concept_approval_pending",
         progress: 35,
-        nextActionAt: now,
-        enqueueReason: "concept_pre_evaluation",
+        nextActionAt: null,
         state: {
           ...context.state,
           concept_ids: persisted.acceptedConcepts.map((concept) => concept.conceptId),
@@ -130,9 +166,11 @@ export const gameDiscoveryBatchV1: WorkflowTickHandler = async (context) => {
           concept_explorer: persisted.explorerMetadata,
           concept_generation_completed_at:
             text(context.state.concept_generation_completed_at) ?? now,
+          human_concept_gate_required: true,
+          human_concept_gate_passed: false,
         },
-        stateReason: "s4_003_resumed_from_persisted_concepts",
-        eventType: "discovery.concepts_resumed",
+        stateReason: "s4_003_resumed_waiting_for_human_concept_review",
+        eventType: "discovery.concepts_ready_for_review",
         eventPayload: {
           creative_run_id: creativeRunId,
           accepted_count: persisted.acceptedConcepts.length,
@@ -188,10 +226,9 @@ export const gameDiscoveryBatchV1: WorkflowTickHandler = async (context) => {
     const completedAt = new Date().toISOString();
     return {
       status: "waiting",
-      currentStage: "pre_evaluation_pending",
+      currentStage: "human_concept_approval_pending",
       progress: 35,
-      nextActionAt: completedAt,
-      enqueueReason: "concept_pre_evaluation",
+      nextActionAt: null,
       state: {
         ...context.state,
         concept_ids: exploration.accepted.map((concept) => concept.conceptId),
@@ -206,9 +243,11 @@ export const gameDiscoveryBatchV1: WorkflowTickHandler = async (context) => {
           usage: exploration.usage,
           raw_response_hashes: exploration.rawResponseHashes,
         },
+        human_concept_gate_required: true,
+        human_concept_gate_passed: false,
       },
-      stateReason: "s4_003_concept_explorer_complete",
-      eventType: "discovery.concepts_ready",
+      stateReason: "s4_003_concepts_ready_for_human_review",
+      eventType: "discovery.concepts_ready_for_review",
       eventPayload: {
         creative_run_id: creativeRunId,
         objective_id: objectiveResult.data.objectiveId,
@@ -225,7 +264,240 @@ export const gameDiscoveryBatchV1: WorkflowTickHandler = async (context) => {
     };
   }
 
+  if (context.currentStage === "human_concept_approval_pending") {
+    const runtime = requireDiscoveryRuntime(context);
+    let concepts;
+    try {
+      concepts = await runtime.repository.getConceptStage({ rootCreativeRunId: creativeRunId });
+    } catch (error) {
+      throw retryablePersistenceError("CONCEPT_APPROVAL_RECONCILE_FAILED", error);
+    }
+
+    if (!concepts.persisted || !concepts.acceptedConcepts.length) {
+      throw new DurableWorkflowError({
+        code: "CONCEPT_APPROVAL_CONCEPTS_MISSING",
+        message: "Human concept approval requires persisted active concepts",
+        retryable: false,
+      });
+    }
+
+    const runByConceptId = new Map(concepts.conceptRuns.map((run) => [run.conceptId, run]));
+    const reviews = conceptReviewsFromMetadata(concepts.explorerMetadata);
+    const reviewByRunId = new Map(reviews.map((review) => [review.conceptRunId, review]));
+    const activeRows = concepts.acceptedConcepts.map((concept) => {
+      const run = runByConceptId.get(concept.conceptId);
+      if (!run) {
+        throw new DurableWorkflowError({
+          code: "CONCEPT_APPROVAL_RUN_MISSING",
+          message: `Active concept ${concept.conceptId} has no persisted concept run`,
+          retryable: false,
+        });
+      }
+      return { concept, run, review: reviewByRunId.get(run.runId) ?? null };
+    });
+
+    if (!activeRows.every((item) => item.review !== null)) {
+      return {
+        status: "waiting",
+        currentStage: "human_concept_approval_pending",
+        progress: 35,
+        nextActionAt: null,
+        state: {
+          ...context.state,
+          human_concept_gate_required: true,
+          human_concept_gate_passed: false,
+          concept_ids: concepts.acceptedConcepts.map((concept) => concept.conceptId),
+          concept_run_ids: activeRows.map((item) => item.run.runId),
+        },
+        stateReason: "s4_003_waiting_for_human_concept_review",
+        eventType: "discovery.waiting_for_concept_review",
+        eventPayload: {
+          reviewed_count: activeRows.filter((item) => item.review !== null).length,
+          expected_count: activeRows.length,
+        },
+      };
+    }
+
+    const changed = activeRows.filter(
+      (item) => item.review?.decision === "revise" || item.review?.decision === "reject",
+    );
+    if (changed.length) {
+      const now = new Date().toISOString();
+      return {
+        status: "waiting",
+        currentStage: "concept_revision_pending",
+        progress: 37,
+        nextActionAt: now,
+        enqueueReason: "human_concept_regeneration",
+        state: {
+          ...context.state,
+          human_concept_gate_required: true,
+          human_concept_gate_passed: false,
+          concept_ids: concepts.acceptedConcepts.map((concept) => concept.conceptId),
+          concept_run_ids: activeRows.map((item) => item.run.runId),
+        },
+        stateReason: "s4_003_human_concept_changes_requested",
+        eventType: "discovery.concept_changes_requested",
+        eventPayload: {
+          revise_concept_ids: changed
+            .filter((item) => item.review?.decision === "revise")
+            .map((item) => item.concept.conceptId),
+          reject_concept_ids: changed
+            .filter((item) => item.review?.decision === "reject")
+            .map((item) => item.concept.conceptId),
+        },
+      };
+    }
+
+    const now = new Date().toISOString();
+    return {
+      status: "waiting",
+      currentStage: "pre_evaluation_pending",
+      progress: 40,
+      nextActionAt: now,
+      enqueueReason: "concept_pre_evaluation",
+      state: {
+        ...context.state,
+        human_concept_gate_required: true,
+        human_concept_gate_passed: true,
+        human_concept_gate_passed_at: now,
+        human_approved_concept_ids: concepts.acceptedConcepts.map((concept) => concept.conceptId),
+        concept_ids: concepts.acceptedConcepts.map((concept) => concept.conceptId),
+        concept_run_ids: activeRows.map((item) => item.run.runId),
+      },
+      stateReason: "s4_003_human_concept_gate_passed",
+      eventType: "discovery.concept_gate_passed",
+      eventPayload: {
+        approved_concept_ids: concepts.acceptedConcepts.map((concept) => concept.conceptId),
+      },
+    };
+  }
+
+  if (context.currentStage === "concept_revision_pending") {
+    const runtime = requireDiscoveryRuntime(context);
+    let concepts;
+    let history;
+    try {
+      [concepts, history] = await Promise.all([
+        runtime.repository.getConceptStage({ rootCreativeRunId: creativeRunId }),
+        runtime.repository.getConceptHistory({ rootCreativeRunId: creativeRunId, limit: 200 }),
+      ]);
+    } catch (error) {
+      throw retryablePersistenceError("HUMAN_CONCEPT_REGENERATION_CONTEXT_FAILED", error);
+    }
+
+    const runByConceptId = new Map(concepts.conceptRuns.map((run) => [run.conceptId, run]));
+    const reviews = conceptReviewsFromMetadata(concepts.explorerMetadata).filter((review) =>
+      concepts.acceptedConcepts.some((concept) => concept.conceptId === review.conceptId),
+    );
+    const reviewsByRunId = new Map(reviews.map((review) => [review.conceptRunId, review]));
+    const completeReviews = concepts.acceptedConcepts.map((concept) => {
+      const run = runByConceptId.get(concept.conceptId);
+      return run ? reviewsByRunId.get(run.runId) ?? null : null;
+    });
+
+    if (completeReviews.some((review) => review === null)) {
+      return {
+        status: "waiting",
+        currentStage: "human_concept_approval_pending",
+        progress: 35,
+        nextActionAt: null,
+        state: context.state,
+        stateReason: "s4_003_human_concept_regeneration_missing_review",
+      };
+    }
+
+    let regenerated;
+    try {
+      regenerated = await applyHumanConceptReviews({
+        llm: runtime.claude,
+        objective: objectiveResult.data,
+        activeConcepts: concepts.acceptedConcepts,
+        reviews: completeReviews as HumanConceptReviewState[],
+        history,
+        model: "claude-sonnet-5",
+        signal: context.signal,
+      });
+    } catch (error) {
+      if (error instanceof KieClaudeTaskError) throw providerFailure(error, "HUMAN_CONCEPT_GATE");
+      if (context.signal.aborted) throw error;
+      throw new DurableWorkflowError({
+        code: "HUMAN_CONCEPT_REGENERATION_FAILED",
+        message: error instanceof Error ? error.message : String(error),
+        retryable: false,
+        cause: error,
+      });
+    }
+
+    let conceptRuns;
+    try {
+      conceptRuns = await runtime.repository.persistConceptExploration({
+        jobId: context.jobId,
+        rootCreativeRunId: creativeRunId,
+        result: {
+          accepted: regenerated.activeConcepts,
+          rejected: [],
+          requestedCount: concepts.acceptedConcepts.length,
+          generatedCount: regenerated.regeneratedConcepts.length,
+          replacementAttempts: regenerated.attempts,
+          model: regenerated.model,
+          rawResponseHashes: regenerated.rawResponseHashes,
+          usage: regenerated.usage,
+        },
+      });
+    } catch (error) {
+      throw retryablePersistenceError("HUMAN_CONCEPT_REGENERATION_PERSIST_FAILED", error);
+    }
+
+    const changedReviews = reviews.filter(
+      (review) => review.decision === "revise" || review.decision === "reject",
+    );
+
+    return {
+      status: "waiting",
+      currentStage: "human_concept_approval_pending",
+      progress: 38,
+      nextActionAt: null,
+      state: {
+        ...context.state,
+        concept_ids: regenerated.activeConcepts.map((concept) => concept.conceptId),
+        concept_run_ids: conceptRuns.map((run) => run.runId),
+        human_concept_gate_required: true,
+        human_concept_gate_passed: false,
+        human_concept_regeneration: {
+          model: regenerated.model,
+          usage: regenerated.usage,
+          raw_response_hashes: regenerated.rawResponseHashes,
+          attempts: regenerated.attempts,
+        },
+      },
+      stateReason: "s4_003_human_concepts_regenerated_waiting_for_review",
+      eventType: "discovery.concepts_regenerated_for_review",
+      eventPayload: {
+        active_concept_ids: regenerated.activeConcepts.map((concept) => concept.conceptId),
+        regenerated_concept_ids: regenerated.regeneratedConcepts.map((concept) => concept.conceptId),
+        revised_count: changedReviews.filter((review) => review.decision === "revise").length,
+        replaced_count: changedReviews.filter((review) => review.decision === "reject").length,
+      },
+    };
+  }
+
   if (context.currentStage === "pre_evaluation_pending") {
+    if (
+      context.state.human_concept_gate_required === true &&
+      context.state.human_concept_gate_passed !== true
+    ) {
+      return {
+        status: "waiting",
+        currentStage: "human_concept_approval_pending",
+        progress: 35,
+        nextActionAt: null,
+        state: context.state,
+        stateReason: "s4_003_pre_evaluation_blocked_by_human_concept_gate",
+        eventType: "discovery.pre_evaluation_blocked_by_concept_gate",
+      };
+    }
+
     const runtime = requireDiscoveryRuntime(context);
     let planning;
     let concepts;
