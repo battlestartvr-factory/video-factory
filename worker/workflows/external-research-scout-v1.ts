@@ -1,4 +1,5 @@
 import { DurableWorkflowError } from "../../lib/orchestrator/retry";
+import { researchScoutEvidenceBundleV1Schema } from "../../lib/research-intelligence/evidence-bundle";
 import { researchScoutReportSpecV1Schema } from "../../lib/research-intelligence/schemas";
 import type { WorkflowTickHandler } from "./types";
 
@@ -58,7 +59,7 @@ export const externalResearchScoutV1: WorkflowTickHandler = async (context) => {
     context: scout,
     signal: context.signal,
   });
-  const report = researchScoutReportSpecV1Schema.parse(execution.report);
+  let report = researchScoutReportSpecV1Schema.parse(execution.report);
 
   if (report.researchRunId !== scout.researchRunId || report.scoutRole !== scout.scoutRole) {
     throw new DurableWorkflowError({
@@ -79,6 +80,63 @@ export const externalResearchScoutV1: WorkflowTickHandler = async (context) => {
     });
   }
 
+  let evidencePersistDuplicate = false;
+  if (execution.evidenceBundle) {
+    const research = context.services?.researchIntelligence;
+    if (!research) {
+      throw new DurableWorkflowError({
+        code: "RESEARCH_EVIDENCE_REPOSITORY_NOT_CONFIGURED",
+        message: "Scout returned source-backed evidence but Research Intelligence repository is missing",
+        retryable: false,
+      });
+    }
+    const bundle = researchScoutEvidenceBundleV1Schema.parse(execution.evidenceBundle);
+    if (bundle.researchRunId !== scout.researchRunId || bundle.scoutRole !== scout.scoutRole) {
+      throw new DurableWorkflowError({
+        code: "RESEARCH_SCOUT_EVIDENCE_LINEAGE_MISMATCH",
+        message: "Scout evidence bundle belongs to another durable assignment",
+        retryable: false,
+      });
+    }
+    if (
+      bundle.sources.length > scout.assignment.budget.maxFetchedSources ||
+      bundle.evidence.length > scout.assignment.budget.maxEvidenceItems
+    ) {
+      throw new DurableWorkflowError({
+        code: "RESEARCH_SCOUT_EVIDENCE_BUDGET_EXCEEDED",
+        message: "Scout evidence bundle exceeds its durable source/evidence budget",
+        retryable: false,
+        details: {
+          source_count: bundle.sources.length,
+          max_sources: scout.assignment.budget.maxFetchedSources,
+          evidence_count: bundle.evidence.length,
+          max_evidence: scout.assignment.budget.maxEvidenceItems,
+        },
+      });
+    }
+
+    const persistedEvidence = await research.persistScoutEvidenceBundle({
+      jobId: context.jobId,
+      bundle,
+    });
+    evidencePersistDuplicate = persistedEvidence.duplicate;
+
+    const sourceIds = report.sourceIds.map((ref) => persistedEvidence.sourceIdsByRef[ref]);
+    const evidenceIds = report.evidenceIds.map((ref) => persistedEvidence.evidenceIdsByRef[ref]);
+    if (sourceIds.some((id) => !id) || evidenceIds.some((id) => !id)) {
+      throw new DurableWorkflowError({
+        code: "RESEARCH_SCOUT_REPORT_EVIDENCE_REF_INVALID",
+        message: "Scout report source/evidence refs do not match its atomic evidence bundle",
+        retryable: false,
+      });
+    }
+    report = researchScoutReportSpecV1Schema.parse({
+      ...report,
+      sourceIds,
+      evidenceIds,
+    });
+  }
+
   const persisted = await repository.persistScoutReport({
     jobId: context.jobId,
     report,
@@ -96,6 +154,7 @@ export const externalResearchScoutV1: WorkflowTickHandler = async (context) => {
       research_run_id: scout.researchRunId,
       scout_role: scout.scoutRole,
       phase: "completed",
+      evidence_persist_duplicate: evidencePersistDuplicate,
       report_persist_duplicate: persisted.duplicate,
     },
     result: { scout_report: persisted.report },
@@ -104,6 +163,7 @@ export const externalResearchScoutV1: WorkflowTickHandler = async (context) => {
     eventPayload: {
       research_run_id: scout.researchRunId,
       scout_role: scout.scoutRole,
+      evidence_persist_duplicate: evidencePersistDuplicate,
       report_persist_duplicate: persisted.duplicate,
     },
     creativeRunId: scout.creativeRunId,

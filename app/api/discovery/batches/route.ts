@@ -7,12 +7,17 @@ import {
   createGameDiscoveryBatch,
   listGameDiscoveryBatches,
 } from "@/lib/game-discovery/service";
+import { createGameDiscoveryBatchV2 } from "@/lib/game-discovery/service-v2";
+import { researchPolicySpecV1Schema } from "@/lib/research-intelligence/schemas";
 
 const createDiscoveryBatchSchema = z
   .object({
     projectId: z.string().uuid().nullable().optional(),
     hypothesis: z.string().trim().min(1).max(4_000).nullable().optional(),
     objective: discoveryObjectiveSpecV1Schema,
+    // Keep v1 as the product default until PR8 production acceptance explicitly flips it.
+    workflowVersion: z.union([z.literal(1), z.literal(2)]).default(1),
+    researchPolicy: researchPolicySpecV1Schema.optional(),
   })
   .strict();
 
@@ -53,19 +58,27 @@ export async function POST(request: Request) {
   }
 
   try {
-    const result = await createGameDiscoveryBatch({
+    const common = {
       requestId,
       userId: user.id,
       projectId: parsed.data.projectId ?? null,
       objective: parsed.data.objective,
       hypothesis: parsed.data.hypothesis ?? null,
-    });
+    };
+    const result =
+      parsed.data.workflowVersion === 2
+        ? await createGameDiscoveryBatchV2({
+            ...common,
+            researchPolicy: parsed.data.researchPolicy,
+          })
+        : await createGameDiscoveryBatch(common);
 
     return apiSuccess(
       {
         creativeRun: result.creativeRun,
         factoryJobId: result.factoryJobId,
         duplicate: result.duplicate,
+        workflowVersion: parsed.data.workflowVersion,
       },
       201,
     );

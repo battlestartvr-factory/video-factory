@@ -9,10 +9,14 @@ import type { KieMarketTaskAdapter } from "../../lib/models/kie/market-task";
 import type { KieVeoTaskAdapter } from "../../lib/models/kie/veo-task";
 import type { ConceptCouncilDesignerExecutor } from "../../lib/research-intelligence/concept-council";
 import type { ConceptCouncilRepository } from "../../lib/research-intelligence/concept-council-runtime";
+import type { ConceptCouncilCuratorExecutor } from "../../lib/research-intelligence/concept-curator";
+import type { GameDiscoveryV2Repository } from "../../lib/research-intelligence/game-discovery-v2";
+import type { ResearchIntelligenceRepository } from "../../lib/research-intelligence/repository";
 import type {
   ResearchScoutExecutor,
   ResearchScoutRepository,
 } from "../../lib/research-intelligence/scout-runtime";
+import type { ResearchSynthesizerExecutor } from "../../lib/research-intelligence/synthesis";
 
 export type DurableTickStatus =
   | "queued"
@@ -30,10 +34,14 @@ export interface WorkflowServices {
   gameDiscovery?: GameDiscoveryWorkerRepository;
   gameDiscoveryVideo?: GameDiscoveryVideoRepository;
   gameDiscoveryAssembly?: GameDiscoveryAssemblyRuntime;
+  gameDiscoveryV2?: GameDiscoveryV2Repository;
   researchScouts?: ResearchScoutRepository;
   researchScoutExecutor?: ResearchScoutExecutor | null;
+  researchIntelligence?: ResearchIntelligenceRepository;
+  researchSynthesizerExecutor?: ResearchSynthesizerExecutor | null;
   conceptCouncil?: ConceptCouncilRepository;
   conceptCouncilDesignerExecutor?: ConceptCouncilDesignerExecutor | null;
+  conceptCouncilCuratorExecutor?: ConceptCouncilCuratorExecutor | null;
   kieClaude?: KieClaudeTaskAdapter | null;
   kieMarketTask: KieMarketTaskAdapter | null;
   kieVeoTask: KieVeoTaskAdapter | null;
