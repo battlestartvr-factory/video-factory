@@ -60,6 +60,8 @@ group by media_type, index_status
 order by media_type, index_status;
 ```
 
+Stage 4 closeout acceptance on 2026-08-20 is `image / indexed = 76` with no pending, captioning or failed image rows.
+
 Enqueue pending image references through the existing service-role RPC, not by hand-building queue messages:
 
 ```sql
@@ -69,7 +71,22 @@ where media_type = 'image'
   and index_status = 'pending_caption';
 ```
 
-If a failed caption is deliberately approved for a paid retry, first reset only that reviewed row to `pending_caption`, clear the attempt/error fields, then enqueue through the same RPC. Do not globally retry failures: a failure may contain paid evidence that should be repaired deterministically from `caption_debug.rawResponse` via the stored-caption repair path when possible.
+### Failed stored-caption repair is not a paid retry
+
+A failed reference can contain a complete paid model response in `caption_debug.rawResponse`. When the failure is only deterministic schema/provider-format drift, repair that stored evidence before considering another provider call.
+
+`repairGameplayReferenceFromStoredCaption()` deliberately runs only while `index_status = 'failed'`. The internal index route attempts this stored repair **before** claiming a new caption permit. Therefore:
+
+- do **not** reset a repairable failed row to `pending_caption` merely to make it enqueueable;
+- do **not** call `gameplay_reference_enqueue_index_v1` for that repair path; that RPC is intentionally pending-only;
+- enqueue a new durable `gameplay_reference_index@1` job for the failed reference while leaving the reference row `failed`;
+- first verify there is no active index job for the same reference;
+- preserve the old failed job as history rather than mutating it back to queued;
+- after completion, verify `caption_usage.modelCalls` did not increase and `schemaRepairModelCalls` remains `0` when no model repair was used.
+
+During Stage 4 closeout, five schema-drift failures were recovered this way after deterministic normalization hardening. All five repair jobs completed from stored raw captions and the final library reached 76/76 indexed without a second provider call for those rows.
+
+If a failed caption genuinely lacks usable stored evidence and a **paid retry is deliberately approved**, then reset only that reviewed row to `pending_caption`, clear the relevant attempt/error fields according to the caption-permit contract, and enqueue through the normal RPC. Do not globally retry failures.
 
 The current worker reads `core_orchestrator_v1` one delivery at a time; large library backfills therefore complete progressively. Do not enqueue duplicate active index jobs for the same reference.
 
@@ -98,4 +115,4 @@ Known-good run IDs and closeout evidence are in `docs/current-project-state.md`.
 
 ## Production release
 
-Merge/push to `main` only after CI succeeds for the exact commit. `Deploy Production` then SSH-deploys that commit to the VPS. The legacy Vercel status is not the production deploy gate.
+Merge/push to `main` only after CI succeeds for the exact commit. `Deploy Production` then SSH-deploys that commit to the VPS. Verify the newest production worker heartbeat reports the expected `build_sha`. The legacy Vercel status is not the production deploy gate.
