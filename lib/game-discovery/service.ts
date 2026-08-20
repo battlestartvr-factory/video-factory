@@ -53,18 +53,32 @@ export interface GameplayReferenceReview {
   created_at: string;
 }
 
+export interface GameplayVideoReview extends GameplayReferenceReview {
+  approved_reference_generation_id: string | null;
+}
+
 export interface GameDiscoveryBatchDetail {
   root: CreativeRun;
   factoryJob: Record<string, unknown> | null;
   conceptRuns: Array<Record<string, unknown>>;
   referenceGenerations: Array<Record<string, unknown>>;
+  videoGenerations: Array<Record<string, unknown>>;
   reviews: GameplayReferenceReview[];
+  videoReviews: GameplayVideoReview[];
 }
 
 function rpcObject(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : {};
+}
+
+function currentGenerationIds(requests: Record<string, unknown>): string[] {
+  return [...new Set(
+    Object.values(requests)
+      .map((value) => rpcObject(value).generation_id)
+      .filter((value): value is string => typeof value === "string" && value.length > 0),
+  )];
 }
 
 export async function createGameDiscoveryBatch(
@@ -157,12 +171,18 @@ export async function getGameDiscoveryBatchDetail(input: {
   if (!root) return null;
   const service = createSupabaseServiceClient();
 
-  const referenceRequests = rpcObject(rpcObject(root.outputs).reference_image_requests);
-  const generationIds = Object.values(referenceRequests)
-    .map((value) => rpcObject(value).generation_id)
-    .filter((value): value is string => typeof value === "string" && value.length > 0);
+  const outputs = rpcObject(root.outputs);
+  const referenceGenerationIds = currentGenerationIds(rpcObject(outputs.reference_image_requests));
+  const videoGenerationIds = currentGenerationIds(rpcObject(outputs.gameplay_video_requests));
 
-  const [jobResult, conceptsResult, generationsResult, reviewsResult] = await Promise.all([
+  const [
+    jobResult,
+    conceptsResult,
+    referenceGenerationsResult,
+    videoGenerationsResult,
+    reviewsResult,
+    videoReviewsResult,
+  ] = await Promise.all([
     root.factory_job_id
       ? service.from("factory_jobs").select("*").eq("id", root.factory_job_id).maybeSingle()
       : Promise.resolve({ data: null, error: null }),
@@ -172,11 +192,19 @@ export async function getGameDiscoveryBatchDetail(input: {
       .eq("parent_run_id", root.id)
       .contains("metadata", { domain_kind: "coop_game_concept" })
       .order("created_at", { ascending: true }),
-    generationIds.length
-      ? service.from("generations").select("*").in("id", generationIds)
+    referenceGenerationIds.length
+      ? service.from("generations").select("*").in("id", referenceGenerationIds)
+      : Promise.resolve({ data: [], error: null }),
+    videoGenerationIds.length
+      ? service.from("generations").select("*").in("id", videoGenerationIds)
       : Promise.resolve({ data: [], error: null }),
     service
       .from("gameplay_reference_reviews")
+      .select("*")
+      .eq("root_creative_run_id", root.id)
+      .order("created_at", { ascending: true }),
+    service
+      .from("gameplay_video_reviews")
       .select("*")
       .eq("root_creative_run_id", root.id)
       .order("created_at", { ascending: true }),
@@ -184,15 +212,19 @@ export async function getGameDiscoveryBatchDetail(input: {
 
   if (jobResult.error) throw new Error(`Failed to load discovery factory job: ${jobResult.error.message}`);
   if (conceptsResult.error) throw new Error(`Failed to load discovery concepts: ${conceptsResult.error.message}`);
-  if (generationsResult.error) throw new Error(`Failed to load reference generations: ${generationsResult.error.message}`);
+  if (referenceGenerationsResult.error) throw new Error(`Failed to load reference generations: ${referenceGenerationsResult.error.message}`);
+  if (videoGenerationsResult.error) throw new Error(`Failed to load gameplay video generations: ${videoGenerationsResult.error.message}`);
   if (reviewsResult.error) throw new Error(`Failed to load reference reviews: ${reviewsResult.error.message}`);
+  if (videoReviewsResult.error) throw new Error(`Failed to load gameplay video reviews: ${videoReviewsResult.error.message}`);
 
   return {
     root,
     factoryJob: jobResult.data as Record<string, unknown> | null,
     conceptRuns: (conceptsResult.data ?? []) as Array<Record<string, unknown>>,
-    referenceGenerations: (generationsResult.data ?? []) as Array<Record<string, unknown>>,
+    referenceGenerations: (referenceGenerationsResult.data ?? []) as Array<Record<string, unknown>>,
+    videoGenerations: (videoGenerationsResult.data ?? []) as Array<Record<string, unknown>>,
     reviews: (reviewsResult.data ?? []) as GameplayReferenceReview[],
+    videoReviews: (videoReviewsResult.data ?? []) as GameplayVideoReview[],
   };
 }
 
@@ -213,6 +245,110 @@ export async function listGameplayReferenceReviews(input: {
   return (data ?? []) as GameplayReferenceReview[];
 }
 
+export async function listGameplayVideoReviews(input: {
+  userId: string;
+  rootRunId: string;
+}): Promise<GameplayVideoReview[]> {
+  const root = await getGameDiscoveryBatch({ userId: input.userId, runId: input.rootRunId });
+  if (!root) throw new Error("FORBIDDEN");
+
+  const service = createSupabaseServiceClient();
+  const { data, error } = await service
+    .from("gameplay_video_reviews")
+    .select("*")
+    .eq("root_creative_run_id", input.rootRunId)
+    .order("created_at", { ascending: true });
+  if (error) throw new Error(`Failed to list gameplay video reviews: ${error.message}`);
+  return (data ?? []) as GameplayVideoReview[];
+}
+
+async function structureHumanGameplayFeedback(input: {
+  decision: "approve" | "reject" | "revise";
+  rawFeedback: string;
+  conceptId: string;
+  shotId: string;
+  conceptRun: Record<string, any>;
+  mediaKind: "reference_image" | "video";
+}) {
+  let structured;
+  let model: string | null = null;
+  let usage: Record<string, unknown> = { media_kind: input.mediaKind };
+
+  if (input.rawFeedback) {
+    structured = fallbackGameplayReferenceFeedback({
+      rawFeedback: input.rawFeedback,
+      decision: input.decision,
+    });
+    const config = getKieConfig();
+    if (config.configured) {
+      try {
+        const llm = new KieClaudeTaskAdapter(config.baseUrl, config.apiKey);
+        const result = await structureGameplayReferenceFeedback({
+          llm,
+          rawFeedback: input.rawFeedback,
+          decision: input.decision,
+          conceptSummary:
+            typeof input.conceptRun.outputs?.coop_game_concept?.oneSentencePitch === "string"
+              ? input.conceptRun.outputs.coop_game_concept.oneSentencePitch
+              : input.conceptId,
+          shotSummary:
+            typeof input.conceptRun.outputs?.gameplay_shot?.action === "string"
+              ? input.conceptRun.outputs.gameplay_shot.action
+              : input.shotId,
+        });
+        structured = result.feedback;
+        model = result.model;
+        usage = { ...result.usage, media_kind: input.mediaKind };
+      } catch (error) {
+        usage = {
+          media_kind: input.mediaKind,
+          feedback_structuring_fallback: true,
+          reason: error instanceof Error ? error.message.slice(0, 500) : String(error).slice(0, 500),
+        };
+      }
+    } else {
+      usage = {
+        media_kind: input.mediaKind,
+        feedback_structuring_fallback: true,
+        reason: "KIE_NOT_CONFIGURED",
+      };
+    }
+  } else {
+    structured = gameplayReferenceFeedbackV1Schema.parse({
+      schema: "gameplay_reference_feedback",
+      version: 1,
+      errorTags: [],
+      mustShow: [],
+      mustAvoid: [],
+      reusableScope: "shot",
+      summary:
+        input.decision === "approve"
+          ? `${input.mediaKind === "video" ? "Gameplay video" : "Reference"} approved without additional feedback.`
+          : "Review decision recorded without additional written feedback.",
+    });
+  }
+
+  return { structured, model, usage };
+}
+
+async function loadConceptForHumanReview(input: {
+  rootRunId: string;
+  conceptRunId: string;
+}): Promise<Record<string, any>> {
+  const service = createSupabaseServiceClient();
+  const { data: conceptRun, error: conceptError } = await service
+    .from("creative_runs")
+    .select("id,parent_run_id,metadata,outputs")
+    .eq("id", input.conceptRunId)
+    .eq("parent_run_id", input.rootRunId)
+    .maybeSingle();
+  if (conceptError) throw new Error(`Failed to load concept run: ${conceptError.message}`);
+  if (!conceptRun || conceptRun.metadata?.domain_kind !== "coop_game_concept") {
+    throw new Error("CONCEPT_RUN_NOT_FOUND");
+  }
+  return conceptRun as Record<string, any>;
+}
+
 export async function recordGameplayReferenceReview(input: {
   userId: string;
   rootRunId: string;
@@ -227,69 +363,21 @@ export async function recordGameplayReferenceReview(input: {
   const root = await getGameDiscoveryBatch({ userId: input.userId, runId: input.rootRunId });
   if (!root) throw new Error("FORBIDDEN");
 
-  const service = createSupabaseServiceClient();
-  const { data: conceptRun, error: conceptError } = await service
-    .from("creative_runs")
-    .select("id,parent_run_id,metadata,outputs")
-    .eq("id", input.conceptRunId)
-    .eq("parent_run_id", input.rootRunId)
-    .maybeSingle();
-  if (conceptError) throw new Error(`Failed to load concept run: ${conceptError.message}`);
-  if (!conceptRun || conceptRun.metadata?.domain_kind !== "coop_game_concept") {
-    throw new Error("CONCEPT_RUN_NOT_FOUND");
-  }
-
+  const conceptRun = await loadConceptForHumanReview({
+    rootRunId: input.rootRunId,
+    conceptRunId: input.conceptRunId,
+  });
   const rawFeedback = input.rawFeedback?.trim() ?? "";
-  let structured;
-  let model: string | null = null;
-  let usage: Record<string, unknown> = {};
+  const { structured, model, usage } = await structureHumanGameplayFeedback({
+    decision: input.decision,
+    rawFeedback,
+    conceptId: input.conceptId,
+    shotId: input.shotId,
+    conceptRun,
+    mediaKind: "reference_image",
+  });
 
-  if (rawFeedback) {
-    structured = fallbackGameplayReferenceFeedback({ rawFeedback, decision: input.decision });
-    const config = getKieConfig();
-    if (config.configured) {
-      try {
-        const llm = new KieClaudeTaskAdapter(config.baseUrl, config.apiKey);
-        const result = await structureGameplayReferenceFeedback({
-          llm,
-          rawFeedback,
-          decision: input.decision,
-          conceptSummary:
-            typeof conceptRun.outputs?.coop_game_concept?.oneSentencePitch === "string"
-              ? conceptRun.outputs.coop_game_concept.oneSentencePitch
-              : input.conceptId,
-          shotSummary:
-            typeof conceptRun.outputs?.gameplay_shot?.action === "string"
-              ? conceptRun.outputs.gameplay_shot.action
-              : input.shotId,
-        });
-        structured = result.feedback;
-        model = result.model;
-        usage = result.usage;
-      } catch (error) {
-        usage = {
-          feedback_structuring_fallback: true,
-          reason: error instanceof Error ? error.message.slice(0, 500) : String(error).slice(0, 500),
-        };
-      }
-    } else {
-      usage = { feedback_structuring_fallback: true, reason: "KIE_NOT_CONFIGURED" };
-    }
-  } else {
-    structured = gameplayReferenceFeedbackV1Schema.parse({
-      schema: "gameplay_reference_feedback",
-      version: 1,
-      errorTags: [],
-      mustShow: [],
-      mustAvoid: [],
-      reusableScope: "shot",
-      summary:
-        input.decision === "approve"
-          ? "Reference approved without additional feedback."
-          : "Review decision recorded without additional written feedback.",
-    });
-  }
-
+  const service = createSupabaseServiceClient();
   const { data, error } = await service.rpc("orchestrator_record_gameplay_reference_review", {
     payload: {
       root_creative_run_id: input.rootRunId,
@@ -310,4 +398,55 @@ export async function recordGameplayReferenceReview(input: {
   const review = rpcObject(rpcObject(data).review);
   if (typeof review.id !== "string") throw new Error("Invalid gameplay reference review response");
   return review as unknown as GameplayReferenceReview;
+}
+
+export async function recordGameplayVideoReview(input: {
+  userId: string;
+  rootRunId: string;
+  conceptRunId: string;
+  generationId: string;
+  conceptId: string;
+  momentId: string;
+  shotId: string;
+  decision: "approve" | "reject" | "revise";
+  rawFeedback?: string | null;
+}): Promise<GameplayVideoReview> {
+  const root = await getGameDiscoveryBatch({ userId: input.userId, runId: input.rootRunId });
+  if (!root) throw new Error("FORBIDDEN");
+
+  const conceptRun = await loadConceptForHumanReview({
+    rootRunId: input.rootRunId,
+    conceptRunId: input.conceptRunId,
+  });
+  const rawFeedback = input.rawFeedback?.trim() ?? "";
+  const { structured, model, usage } = await structureHumanGameplayFeedback({
+    decision: input.decision,
+    rawFeedback,
+    conceptId: input.conceptId,
+    shotId: input.shotId,
+    conceptRun,
+    mediaKind: "video",
+  });
+
+  const service = createSupabaseServiceClient();
+  const { data, error } = await service.rpc("orchestrator_record_gameplay_video_review", {
+    payload: {
+      root_creative_run_id: input.rootRunId,
+      concept_run_id: input.conceptRunId,
+      generation_id: input.generationId,
+      user_id: input.userId,
+      concept_id: input.conceptId,
+      moment_id: input.momentId,
+      shot_id: input.shotId,
+      decision: input.decision,
+      raw_feedback: rawFeedback || null,
+      structured_feedback: structured,
+      model,
+      usage,
+    },
+  });
+  if (error) throw new Error(`Failed to record gameplay video review: ${error.message}`);
+  const review = rpcObject(rpcObject(data).review);
+  if (typeof review.id !== "string") throw new Error("Invalid gameplay video review response");
+  return review as unknown as GameplayVideoReview;
 }
