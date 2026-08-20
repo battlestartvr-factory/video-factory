@@ -65,6 +65,22 @@ const PACK_SECTIONS = [
 ] as const;
 
 type PackSection = (typeof PACK_SECTIONS)[number];
+type EvidenceRef = EvidencePackSpecV1["marketLandscape"][number];
+type PackSections = Record<PackSection, EvidenceRef[]>;
+
+function emptyPackSections(): PackSections {
+  return {
+    marketLandscape: [],
+    mechanicLandscape: [],
+    playerPositiveSignals: [],
+    playerPainSignals: [],
+    saturatedPatterns: [],
+    whiteSpaces: [],
+    counterexamples: [],
+    gameplayReferencePatterns: [],
+    visualReferencePatterns: [],
+  };
+}
 
 function normalizeInput(input: ResearchSynthesisInputV1): ResearchSynthesisInputV1 {
   const roles = new Set(researchScoutRoleSchema.options);
@@ -229,7 +245,7 @@ function freshnessMultiplier(value: ResearchEvidenceSpecV1["freshnessClass"]): n
   }
 }
 
-function evidenceRef(item: ResearchEvidenceSpecV1, conflicted: boolean) {
+function evidenceRef(item: ResearchEvidenceSpecV1, conflicted: boolean): EvidenceRef {
   const conflictMultiplier = conflicted ? 0.8 : 1;
   return {
     evidenceId: item.evidenceId,
@@ -305,10 +321,7 @@ export class MockResearchSynthesizer implements ResearchSynthesizerExecutor {
       });
     }
 
-    const sections = Object.fromEntries(PACK_SECTIONS.map((section) => [section, []])) as Record<
-      PackSection,
-      EvidencePackSpecV1[PackSection]
-    >;
+    const sections = emptyPackSections();
     const seenClaims = new Set<string>();
     const sorted = [...synthesisInput.evidence].sort(
       (a, b) => b.confidence - a.confidence || a.evidenceId.localeCompare(b.evidenceId),
