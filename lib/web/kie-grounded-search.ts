@@ -64,6 +64,20 @@ function safeCanonicalUrl(raw: string): string | null {
   }
 }
 
+function normalizeKieBaseUrl(raw: string | undefined): string {
+  const trimmed = (raw ?? "").trim().replace(/\/+$/, "");
+  if (!trimmed) return "https://api.kie.ai";
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.hostname === "api.kie.ai" || parsed.hostname.endsWith(".kie.ai")) {
+      return `${parsed.protocol}//${parsed.host}`;
+    }
+    return trimmed;
+  } catch {
+    return trimmed;
+  }
+}
+
 function freshnessInstruction(value?: SearchOptions["freshness"]): string {
   if (value === "current") return "Prioritize sources from the last 30 days when the subject is time-sensitive.";
   if (value === "recent") return "Prefer recent sources while retaining authoritative evergreen sources when useful.";
