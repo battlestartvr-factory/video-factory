@@ -17,8 +17,12 @@ import { KieMarketTaskAdapter } from "../lib/models/kie/market-task";
 import { KieVeoTaskAdapter } from "../lib/models/kie/veo-task";
 import { MockConceptCouncilDesigner } from "../lib/research-intelligence/concept-council";
 import { ConceptCouncilRepository } from "../lib/research-intelligence/concept-council-runtime";
+import { MockConceptCouncilCurator } from "../lib/research-intelligence/concept-curator";
+import { GameDiscoveryV2Repository } from "../lib/research-intelligence/game-discovery-v2";
 import { MockResearchScoutExecutor } from "../lib/research-intelligence/mock-scout-executor";
+import { ResearchIntelligenceRepository } from "../lib/research-intelligence/repository";
 import { ResearchScoutRepository } from "../lib/research-intelligence/scout-runtime";
+import { MockResearchSynthesizer } from "../lib/research-intelligence/synthesis";
 import { loadWorkerConfig, type WorkerConfig } from "./config";
 import { workerLog } from "./log";
 import { createWorkerRpcClient } from "./rpc-client";
@@ -290,6 +294,7 @@ export async function runWorker(): Promise<void> {
   const repository = new OrchestratorRepository(rpcClient);
   const queue = new PgmqQueueAdapter(rpcClient, config.queueMode);
   const researchScouts = new ResearchScoutRepository(rpcClient);
+  const researchIntelligence = new ResearchIntelligenceRepository(rpcClient);
   const conceptCouncil = new ConceptCouncilRepository(rpcClient);
   const services: WorkflowServices = {
     providerTasks: new ProviderTaskRepository(rpcClient),
@@ -297,10 +302,14 @@ export async function runWorker(): Promise<void> {
     generationVideos: new GenerationVideoRepository(rpcClient),
     gameDiscovery: new GameDiscoveryWorkerRepository(rpcClient),
     gameDiscoveryVideo: new GameDiscoveryVideoRepository(rpcClient),
+    gameDiscoveryV2: new GameDiscoveryV2Repository(rpcClient),
     researchScouts,
     researchScoutExecutor: config.mockWorkflows ? new MockResearchScoutExecutor() : null,
+    researchIntelligence,
+    researchSynthesizerExecutor: config.mockWorkflows ? new MockResearchSynthesizer() : null,
     conceptCouncil,
     conceptCouncilDesignerExecutor: config.mockWorkflows ? new MockConceptCouncilDesigner() : null,
+    conceptCouncilCuratorExecutor: config.mockWorkflows ? new MockConceptCouncilCurator() : null,
     kieClaude: config.kieApiKey
       ? new KieClaudeTaskAdapter(config.kieApiBaseUrl, config.kieApiKey)
       : null,
