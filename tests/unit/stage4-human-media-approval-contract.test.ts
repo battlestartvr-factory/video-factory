@@ -12,7 +12,7 @@ describe("Stage 4 human media approval contract", () => {
 
     expect(inspected).not.toContain("inspectGameplayVideosBeforeAssetGraph");
     expect(inspected).not.toContain("gameplay-authenticity-video-stage");
-    expect(imageGate).toContain("human_reference_approval_pending");
+    expect(imageGate).toContain("MAX_AUTOMATIC_IMAGE_AUTHENTICITY_REVISIONS_PER_SHOT = 0");
     expect(imageGate).not.toContain("inspectGameplayImageFromWorker");
   });
 
