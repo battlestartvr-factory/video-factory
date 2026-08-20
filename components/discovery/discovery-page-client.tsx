@@ -18,8 +18,13 @@ interface BatchDetail {
   factoryJob: Record<string, unknown> | null;
   conceptRuns: Array<Record<string, unknown>>;
   referenceGenerations: Array<Record<string, unknown>>;
+  videoGenerations: Array<Record<string, unknown>>;
   reviews: Array<Record<string, unknown>>;
+  videoReviews: Array<Record<string, unknown>>;
 }
+
+type ReviewDecision = "approve" | "revise" | "reject";
+type ReviewMedia = "reference" | "video";
 
 function object(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -55,6 +60,15 @@ function generationOutputUrl(generation: Record<string, unknown> | undefined): s
   return null;
 }
 
+function generationMap(items: Array<Record<string, unknown>> | undefined) {
+  const map = new Map<string, Record<string, unknown>>();
+  for (const generation of items ?? []) {
+    const id = str(generation.id);
+    if (id) map.set(id, generation);
+  }
+  return map;
+}
+
 function decisionLabel(decision: unknown): string {
   if (decision === "approve") return "Утверждено";
   if (decision === "revise") return "Нужна правка";
@@ -71,15 +85,18 @@ function stageLabel(stage: string | null): string {
     shot_planning_pending: "Планирование кадра",
     reference_image_generation_pending: "Подготовка reference-изображений",
     reference_image_waiting: "Генерация reference-изображений",
-    human_reference_approval_pending: "Нужно ваше утверждение",
-    reference_revision_pending: "Ожидается исправление reference",
+    human_reference_approval_pending: "Нужно ваше решение по reference",
+    reference_revision_pending: "Перегенерация reference по вашему feedback",
     video_generation_pending: "Reference утверждён — видео разблокировано",
     video_generation_waiting: "Генерация gameplay-видео",
+    human_video_approval_pending: "Нужно ваше решение по gameplay-видео",
+    video_revision_pending: "Перегенерация gameplay-видео по вашему feedback",
     asset_graph_pending: "Фиксация lineage и AssetGraph",
     assembly_pending: "Сборка вертикального prototype",
     prototype_finalization_pending: "Финализация prototype",
     completed: "Prototype готов",
     reference_rejected_no_video: "Reference отклонён — видео не создаётся",
+    video_rejected_no_prototype: "Gameplay-видео отклонены — prototype не собирается",
   };
   return stage ? labels[stage] ?? stage : "—";
 }
@@ -124,8 +141,10 @@ export function DiscoveryPageClient({ initialBatches }: { initialBatches: Discov
       "shot_planning_pending",
       "reference_image_generation_pending",
       "reference_image_waiting",
+      "reference_revision_pending",
       "video_generation_pending",
       "video_generation_waiting",
+      "video_revision_pending",
       "asset_graph_pending",
       "assembly_pending",
       "prototype_finalization_pending",
@@ -135,34 +154,36 @@ export function DiscoveryPageClient({ initialBatches }: { initialBatches: Discov
     return () => window.clearInterval(timer);
   }, [currentStage, loadDetail, selectedId]);
 
-  const generations = useMemo(() => {
-    const map = new Map<string, Record<string, unknown>>();
-    for (const generation of detail?.referenceGenerations ?? []) {
-      const id = str(generation.id);
-      if (id) map.set(id, generation);
-    }
-    return map;
-  }, [detail]);
+  const referenceGenerations = useMemo(
+    () => generationMap(detail?.referenceGenerations),
+    [detail],
+  );
+  const videoGenerations = useMemo(
+    () => generationMap(detail?.videoGenerations),
+    [detail],
+  );
 
   const submitReview = async (input: {
+    media: ReviewMedia;
     conceptRunId: string;
     generationId: string;
     conceptId: string;
     momentId: string;
     shotId: string;
-    decision: "approve" | "revise" | "reject";
+    decision: ReviewDecision;
   }) => {
     if (!selectedId) return;
     const feedback = feedbackByGeneration[input.generationId]?.trim() ?? "";
     if (input.decision !== "approve" && !feedback) {
-      setError("Для правки или отклонения напишите, что именно нужно исправить. Это станет памятью завода.");
+      setError("Для правки или отклонения напишите причину. Комментарий станет опытом ИИ-завода.");
       return;
     }
 
-    setSubmitting(`${input.generationId}:${input.decision}`);
+    setSubmitting(`${input.media}:${input.generationId}:${input.decision}`);
     setError(null);
     try {
-      const response = await fetch(`/api/discovery/batches/${selectedId}/reference-reviews`, {
+      const endpoint = input.media === "video" ? "video-reviews" : "reference-reviews";
+      const response = await fetch(`/api/discovery/batches/${selectedId}/${endpoint}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -178,6 +199,7 @@ export function DiscoveryPageClient({ initialBatches }: { initialBatches: Discov
       const payload = await response.json();
       if (!response.ok || !payload?.ok) throw new Error(payload?.error?.message ?? "Не удалось сохранить решение");
       await loadDetail(selectedId, true);
+      window.setTimeout(() => void loadDetail(selectedId, true), 1200);
     } catch (submitError) {
       setError(submitError instanceof Error ? submitError.message : "Не удалось сохранить решение");
     } finally {
@@ -196,7 +218,7 @@ export function DiscoveryPageClient({ initialBatches }: { initialBatches: Discov
             <h1 className="text-2xl font-semibold text-foreground">Поиск игры</h1>
           </div>
           <p className="mt-1 max-w-3xl text-sm text-muted-foreground">
-            Концепт → gameplay-момент → reference-кадр → ваше решение → gameplay-видео → готовый 9:16 prototype.
+            Концепт → gameplay-момент → reference → ваше решение → gameplay-видео → ваше решение → prototype.
           </p>
         </div>
         {selectedId && (
@@ -211,9 +233,9 @@ export function DiscoveryPageClient({ initialBatches }: { initialBatches: Discov
         <div className="flex items-start gap-3">
           <ShieldCheck className="mt-0.5 h-5 w-5 shrink-0 text-accent" />
           <div>
-            <p className="text-sm font-medium text-foreground">Human approval gate активен</p>
+            <p className="text-sm font-medium text-foreground">Human approval gates активны для картинок и видео</p>
             <p className="mt-1 text-xs leading-5 text-muted-foreground">
-              Reference-картинки делаются в экономичном режиме 1K. Любое платное gameplay-видео остаётся заблокированным до решения «Утвердить». После approve завод собирает детерминированный 1080×1920 prototype через FFmpeg и сохраняет его в Drive.
+              ИИ не отклоняет и не заменяет сгенерированные reference-картинки или gameplay-видео. Только вы решаете: «Утвердить», «Исправить» или «Отклонить». Комментарии к решениям сохраняются как опыт завода; человеческие перегенерации можно повторять без лимита.
             </p>
           </div>
         </div>
@@ -273,14 +295,22 @@ export function DiscoveryPageClient({ initialBatches }: { initialBatches: Discov
                 const moment = object(outputs.gameplay_moment);
                 const shot = object(outputs.gameplay_shot);
                 const referenceRequest = object(outputs.reference_image_request);
+                const videoRequest = object(outputs.gameplay_video_request);
                 const prototypeAssembly = object(outputs.prototype_assembly);
+
                 const generationId = str(referenceRequest.generation_id);
-                const generation = generationId ? generations.get(generationId) : undefined;
+                const generation = generationId ? referenceGenerations.get(generationId) : undefined;
                 const imageUrl = generationOutputUrl(generation);
                 const review = generationId ? latestReview(detail.reviews, generationId) : null;
-                const conceptId = str(concept.conceptId) ?? str(referenceRequest.concept_id) ?? "concept";
-                const momentId = str(moment.momentId) ?? str(referenceRequest.moment_id) ?? "moment";
-                const shotId = str(shot.shotId) ?? str(referenceRequest.shot_id) ?? "shot";
+
+                const videoGenerationId = str(videoRequest.generation_id);
+                const videoGeneration = videoGenerationId ? videoGenerations.get(videoGenerationId) : undefined;
+                const videoUrl = generationOutputUrl(videoGeneration);
+                const videoReview = videoGenerationId ? latestReview(detail.videoReviews, videoGenerationId) : null;
+
+                const conceptId = str(concept.conceptId) ?? str(referenceRequest.concept_id) ?? str(videoRequest.concept_id) ?? "concept";
+                const momentId = str(moment.momentId) ?? str(referenceRequest.moment_id) ?? str(videoRequest.moment_id) ?? "moment";
+                const shotId = str(shot.shotId) ?? str(referenceRequest.shot_id) ?? str(videoRequest.shot_id) ?? "shot";
                 const conceptRunId = str(run.id) ?? "";
                 const prototypeReady = Boolean(str(prototypeAssembly.driveFileId));
                 const prototypeDuration = numberValue(prototypeAssembly.durationSeconds);
@@ -349,7 +379,7 @@ export function DiscoveryPageClient({ initialBatches }: { initialBatches: Discov
                             <div className="flex items-center justify-between gap-3">
                               <div>
                                 <p className="text-sm font-medium text-foreground">Ваше решение по reference</p>
-                                <p className="mt-0.5 text-xs text-muted-foreground">Видео этого gameplay-кадра заблокировано до approve.</p>
+                                <p className="mt-0.5 text-xs text-muted-foreground">ИИ не бракует картинку. Только ваше approve разблокирует видео.</p>
                               </div>
                               <Badge variant={review?.decision === "approve" ? "success" : review?.decision === "reject" ? "danger" : review?.decision === "revise" ? "warning" : "secondary"}>
                                 {decisionLabel(review?.decision)}
@@ -359,32 +389,18 @@ export function DiscoveryPageClient({ initialBatches }: { initialBatches: Discov
                             <textarea
                               value={feedbackByGeneration[generationId] ?? str(review?.raw_feedback) ?? ""}
                               onChange={(event) => setFeedbackByGeneration((current) => ({ ...current, [generationId]: event.target.value }))}
-                              placeholder="Что неверно в gameplay-картинке? Например: не видно зависимости второго игрока, камера слишком кинематографичная, действие непонятно…"
+                              placeholder="Почему вы принимаете картинку или что нужно изменить? Комментарий сохранится как опыт завода."
                               className="min-h-28 w-full resize-y rounded-lg border border-border bg-background/60 px-3 py-2 text-sm text-foreground outline-none transition-colors placeholder:text-muted focus:border-accent"
                             />
 
                             <div className="flex flex-wrap gap-2">
-                              <Button
-                                size="sm"
-                                onClick={() => void submitReview({ conceptRunId, generationId, conceptId, momentId, shotId, decision: "approve" })}
-                                disabled={submitting !== null}
-                              >
+                              <Button size="sm" onClick={() => void submitReview({ media: "reference", conceptRunId, generationId, conceptId, momentId, shotId, decision: "approve" })} disabled={submitting !== null}>
                                 <Check className="h-4 w-4" /> Утвердить
                               </Button>
-                              <Button
-                                size="sm"
-                                variant="secondary"
-                                onClick={() => void submitReview({ conceptRunId, generationId, conceptId, momentId, shotId, decision: "revise" })}
-                                disabled={submitting !== null}
-                              >
+                              <Button size="sm" variant="secondary" onClick={() => void submitReview({ media: "reference", conceptRunId, generationId, conceptId, momentId, shotId, decision: "revise" })} disabled={submitting !== null}>
                                 <RotateCcw className="h-4 w-4" /> Исправить
                               </Button>
-                              <Button
-                                size="sm"
-                                variant="danger"
-                                onClick={() => void submitReview({ conceptRunId, generationId, conceptId, momentId, shotId, decision: "reject" })}
-                                disabled={submitting !== null}
-                              >
+                              <Button size="sm" variant="danger" onClick={() => void submitReview({ media: "reference", conceptRunId, generationId, conceptId, momentId, shotId, decision: "reject" })} disabled={submitting !== null}>
                                 <X className="h-4 w-4" /> Отклонить
                               </Button>
                             </div>
@@ -400,13 +416,69 @@ export function DiscoveryPageClient({ initialBatches }: { initialBatches: Discov
                       )}
                     </div>
 
+                    {videoGenerationId && (
+                      <div className="border-t border-border bg-background/10 p-4">
+                        {!videoUrl ? (
+                          <div className="rounded-lg border border-dashed border-border p-6 text-center">
+                            <RefreshCw className={cn("mx-auto h-5 w-5 text-muted", videoGeneration?.status !== "failed" && "animate-spin")} />
+                            <p className="mt-2 text-sm text-muted-foreground">
+                              {videoGeneration?.status === "failed" ? "Gameplay-видео завершилось ошибкой провайдера." : "Генерируется gameplay-видео…"}
+                            </p>
+                          </div>
+                        ) : (
+                          <div className="grid gap-4 xl:grid-cols-[minmax(0,520px)_minmax(0,1fr)]">
+                            <div className="overflow-hidden rounded-xl border border-border bg-black">
+                              <video controls playsInline preload="metadata" src={videoUrl} className="aspect-video w-full object-contain" />
+                            </div>
+                            <div className="space-y-3">
+                              <div className="flex items-center justify-between gap-3">
+                                <div>
+                                  <p className="text-sm font-medium text-foreground">Ваше решение по gameplay-видео</p>
+                                  <p className="mt-0.5 text-xs text-muted-foreground">ИИ не может забраковать это видео. Prototype собирается только из видео, которые утвердили вы.</p>
+                                </div>
+                                <Badge variant={videoReview?.decision === "approve" ? "success" : videoReview?.decision === "reject" ? "danger" : videoReview?.decision === "revise" ? "warning" : "secondary"}>
+                                  {decisionLabel(videoReview?.decision)}
+                                </Badge>
+                              </div>
+
+                              <textarea
+                                value={feedbackByGeneration[videoGenerationId] ?? str(videoReview?.raw_feedback) ?? ""}
+                                onChange={(event) => setFeedbackByGeneration((current) => ({ ...current, [videoGenerationId]: event.target.value }))}
+                                placeholder="Почему видео хорошее или что нужно исправить? Например: движение камеры, действие игроков, физика, читаемость co-op."
+                                className="min-h-28 w-full resize-y rounded-lg border border-border bg-background/60 px-3 py-2 text-sm text-foreground outline-none transition-colors placeholder:text-muted focus:border-accent"
+                              />
+
+                              <div className="flex flex-wrap gap-2">
+                                <Button size="sm" onClick={() => void submitReview({ media: "video", conceptRunId, generationId: videoGenerationId, conceptId, momentId, shotId, decision: "approve" })} disabled={submitting !== null}>
+                                  <Check className="h-4 w-4" /> Утвердить
+                                </Button>
+                                <Button size="sm" variant="secondary" onClick={() => void submitReview({ media: "video", conceptRunId, generationId: videoGenerationId, conceptId, momentId, shotId, decision: "revise" })} disabled={submitting !== null}>
+                                  <RotateCcw className="h-4 w-4" /> Исправить
+                                </Button>
+                                <Button size="sm" variant="danger" onClick={() => void submitReview({ media: "video", conceptRunId, generationId: videoGenerationId, conceptId, momentId, shotId, decision: "reject" })} disabled={submitting !== null}>
+                                  <X className="h-4 w-4" /> Отклонить
+                                </Button>
+                              </div>
+
+                              {Boolean(videoReview?.structured_feedback) && (
+                                <div className="rounded-lg border border-border bg-background/40 p-3">
+                                  <p className="text-[11px] font-semibold uppercase tracking-wider text-muted">Память из video feedback</p>
+                                  <p className="mt-1 text-xs leading-5 text-muted-foreground">{str(object(videoReview?.structured_feedback).summary)}</p>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
                     {prototypeReady && selectedId && (
                       <div className="border-t border-border bg-background/20 p-4">
                         <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
                           <div>
                             <p className="text-sm font-semibold text-foreground">Готовый gameplay prototype</p>
                             <p className="mt-1 text-xs text-muted-foreground">
-                              Детерминированная FFmpeg-сборка из одобренной gameplay-ветки; durable-копия хранится в Google Drive.
+                              Детерминированная FFmpeg-сборка только из human-approved gameplay-видео; durable-копия хранится в Google Drive.
                             </p>
                           </div>
                           <div className="flex flex-wrap gap-2">
