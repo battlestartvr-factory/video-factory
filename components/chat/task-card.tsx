@@ -4,6 +4,7 @@ import { Loader2, CheckCircle2, XCircle, Clock, AlertCircle } from "lucide-react
 import { cn } from "@/lib/utils";
 import type { TaskCardData } from "@/lib/types/workspace";
 import { DiscoveryTaskCard } from "./discovery-task-card";
+import { DiscoveryV2TaskCard } from "./discovery-v2-task-card";
 
 const STATUS_CONFIG: Record<string, { label: string; icon: typeof Clock; color: string }> = {
   queued: { label: "В очереди", icon: Clock, color: "text-zinc-400" },
@@ -28,7 +29,10 @@ export function TaskCard({ task }: TaskCardProps) {
       ? task.settings.runId
       : null;
   if (discoveryRunId) {
-    return <DiscoveryTaskCard task={task} runId={discoveryRunId} />;
+    const workflowVersion = Number(task.settings?.workflowVersion ?? 1);
+    return workflowVersion === 2
+      ? <DiscoveryV2TaskCard task={task} runId={discoveryRunId} />
+      : <DiscoveryTaskCard task={task} runId={discoveryRunId} />;
   }
 
   const config = STATUS_CONFIG[task.status] ?? STATUS_CONFIG.queued;
@@ -65,10 +69,7 @@ export function TaskCard({ task }: TaskCardProps) {
             <span>{task.progress}%</span>
           </div>
           <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-border">
-            <div
-              className="h-full rounded-full bg-accent transition-all duration-300"
-              style={{ width: `${task.progress}%` }}
-            />
+            <div className="h-full rounded-full bg-accent transition-all duration-300" style={{ width: `${task.progress}%` }} />
           </div>
         </div>
       )}
