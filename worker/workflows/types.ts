@@ -7,6 +7,10 @@ import type { GameDiscoveryAssemblyRuntime } from "../../lib/game-discovery/asse
 import type { KieClaudeTaskAdapter } from "../../lib/models/kie/claude-task";
 import type { KieMarketTaskAdapter } from "../../lib/models/kie/market-task";
 import type { KieVeoTaskAdapter } from "../../lib/models/kie/veo-task";
+import type {
+  ResearchScoutExecutor,
+  ResearchScoutRepository,
+} from "../../lib/research-intelligence/scout-runtime";
 
 export type DurableTickStatus =
   | "queued"
@@ -24,6 +28,8 @@ export interface WorkflowServices {
   gameDiscovery?: GameDiscoveryWorkerRepository;
   gameDiscoveryVideo?: GameDiscoveryVideoRepository;
   gameDiscoveryAssembly?: GameDiscoveryAssemblyRuntime;
+  researchScouts?: ResearchScoutRepository;
+  researchScoutExecutor?: ResearchScoutExecutor | null;
   kieClaude?: KieClaudeTaskAdapter | null;
   kieMarketTask: KieMarketTaskAdapter | null;
   kieVeoTask: KieVeoTaskAdapter | null;
@@ -54,6 +60,7 @@ export interface WorkflowTickOutcome {
   stateReason?: string | null;
   eventType?: string;
   eventPayload?: Record<string, unknown>;
+  creativeRunId?: string | null;
   enqueueReason?: string | null;
 }
 
