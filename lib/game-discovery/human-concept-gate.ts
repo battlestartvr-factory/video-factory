@@ -15,7 +15,7 @@ export interface HumanConceptReviewState {
   conceptId: string;
   decision: HumanConceptDecision;
   rawFeedback: string | null;
-  reviewId?: string | null;
+  reviewId: string | null;
 }
 
 export interface HumanConceptGateLlm {
@@ -40,11 +40,6 @@ const MAX_REGENERATION_ATTEMPTS = 3;
 
 function stableHash(value: string): string {
   return createHash("sha256").update(value).digest("hex");
-}
-
-function clip(value: string, max: number): string {
-  const normalized = value.trim().replace(/\s+/g, " ");
-  return normalized.length <= max ? normalized : `${normalized.slice(0, max - 1).trimEnd()}…`;
 }
 
 function stripCodeFence(text: string): string {
