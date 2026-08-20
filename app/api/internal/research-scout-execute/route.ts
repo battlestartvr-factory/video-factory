@@ -31,6 +31,21 @@ const requestSchema = z
   })
   .strict();
 
+const NON_RETRYABLE_PROVIDER_CODES = new Set([
+  "WEB_SEARCH_GROUNDING_MISSING",
+  "WEB_SEARCH_INVALID_RESPONSE",
+  "WEB_SEARCH_NOT_CONFIGURED",
+  "RESEARCH_SCOUT_NO_GROUNDED_SOURCES",
+  "RESEARCH_SCOUT_NO_SAFE_FETCHED_SOURCES",
+  "RESEARCH_SCOUT_GROUNDED_CLAIMS_MISSING",
+]);
+
+function statusForExecutionError(code: string): number {
+  if (code === "WEB_SEARCH_RATE_LIMITED") return 429;
+  if (NON_RETRYABLE_PROVIDER_CODES.has(code)) return 422;
+  return 502;
+}
+
 export async function POST(request: Request) {
   const expectedToken = resolveSupabaseServiceRoleKey();
   if (!verifyIngestBearerToken(request.headers.get("authorization"), expectedToken ?? undefined)) {
@@ -82,8 +97,12 @@ export async function POST(request: Request) {
     const value = error as { code?: unknown; message?: unknown };
     const code = typeof value?.code === "string" ? value.code : "KIE_RESEARCH_SCOUT_EXECUTION_FAILED";
     const message = typeof value?.message === "string" ? value.message : String(error);
-    const status = code === "WEB_SEARCH_RATE_LIMITED" ? 429 : 502;
-    console.error("research.kie_scout_execution_failed", { code, error: message.slice(0, 2_000) });
+    const status = statusForExecutionError(code);
+    console.error("research.kie_scout_execution_failed", {
+      code,
+      status,
+      error: message.slice(0, 2_000),
+    });
     return NextResponse.json(
       { ok: false, code, message: message.slice(0, 2_000) },
       { status, headers: { "Cache-Control": "no-store" } },
