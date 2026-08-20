@@ -15,6 +15,8 @@ import {
 import { KieClaudeTaskAdapter } from "../lib/models/kie/claude-task";
 import { KieMarketTaskAdapter } from "../lib/models/kie/market-task";
 import { KieVeoTaskAdapter } from "../lib/models/kie/veo-task";
+import { MockConceptCouncilDesigner } from "../lib/research-intelligence/concept-council";
+import { ConceptCouncilRepository } from "../lib/research-intelligence/concept-council-runtime";
 import { MockResearchScoutExecutor } from "../lib/research-intelligence/mock-scout-executor";
 import { ResearchScoutRepository } from "../lib/research-intelligence/scout-runtime";
 import { loadWorkerConfig, type WorkerConfig } from "./config";
@@ -288,6 +290,7 @@ export async function runWorker(): Promise<void> {
   const repository = new OrchestratorRepository(rpcClient);
   const queue = new PgmqQueueAdapter(rpcClient, config.queueMode);
   const researchScouts = new ResearchScoutRepository(rpcClient);
+  const conceptCouncil = new ConceptCouncilRepository(rpcClient);
   const services: WorkflowServices = {
     providerTasks: new ProviderTaskRepository(rpcClient),
     generationImages: new GenerationImageRepository(rpcClient),
@@ -296,6 +299,8 @@ export async function runWorker(): Promise<void> {
     gameDiscoveryVideo: new GameDiscoveryVideoRepository(rpcClient),
     researchScouts,
     researchScoutExecutor: config.mockWorkflows ? new MockResearchScoutExecutor() : null,
+    conceptCouncil,
+    conceptCouncilDesignerExecutor: config.mockWorkflows ? new MockConceptCouncilDesigner() : null,
     kieClaude: config.kieApiKey
       ? new KieClaudeTaskAdapter(config.kieApiBaseUrl, config.kieApiKey)
       : null,
