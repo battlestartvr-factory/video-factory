@@ -135,7 +135,8 @@ export function DiscoveryV2TaskCard({ task, runId }: DiscoveryV2TaskCardProps) {
   }, [runId]);
 
   useEffect(() => {
-    void load();
+    const timer = window.setTimeout(() => void load(), 0);
+    return () => window.clearTimeout(timer);
   }, [load]);
 
   const jobStatus = str(detail?.factoryJob?.status) ?? task.status;
