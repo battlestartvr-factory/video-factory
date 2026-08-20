@@ -15,6 +15,7 @@ describe("observed cheap gameplay caption drift", () => {
       fovEstimate: "~90 degrees",
       teammateCountVisible: "2 teammates",
       visibleInputAffordance: null,
+      gameResponse: null,
       visibleGoal: "Gather loot and survive",
       visibleRisk: "yes",
       hudVisible: "not visible",
@@ -23,6 +24,7 @@ describe("observed cheap gameplay caption drift", () => {
     expect(normalized.fovEstimate).toBe(90);
     expect(normalized.teammateCountVisible).toBe(2);
     expect(normalized.visibleInputAffordance).toBe(GAMEPLAY_REFERENCE_NONE_VISIBLE);
+    expect(normalized.gameResponse).toBe(GAMEPLAY_REFERENCE_NONE_VISIBLE);
     // A descriptive answer is not proof that the goal itself is visibly encoded in the frame.
     expect(normalized.visibleGoal).toBe(false);
     expect(normalized.visibleRisk).toBe(true);
