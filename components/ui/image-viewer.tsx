@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import { createPortal } from "react-dom";
 import { X } from "lucide-react";
 
@@ -11,12 +11,6 @@ interface ImageViewerProps {
 }
 
 export function ImageViewer({ src, alt = "Изображение", onClose }: ImageViewerProps) {
-  const [mounted, setMounted] = useState(false);
-
-  useEffect(() => {
-    setMounted(true);
-  }, []);
-
   useEffect(() => {
     if (!src) return;
 
@@ -34,7 +28,7 @@ export function ImageViewer({ src, alt = "Изображение", onClose }: Im
     };
   }, [src, onClose]);
 
-  if (!mounted || !src) return null;
+  if (!src || typeof document === "undefined") return null;
 
   return createPortal(
     <div
