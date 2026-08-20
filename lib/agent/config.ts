@@ -33,6 +33,11 @@ export const CONTENT_LIMITS = {
   maxWebSearchResults: 8,
   maxWebFetchRedirects: 3,
   webFetchTimeoutMs: 10_000,
+  // Stage 4.5 external visual candidates are evidence, not generated assets. These
+  // defaults intentionally fail closed before archive/provider compilation (PR6).
+  maxWebImageBytes: 8_000_000,
+  maxWebImageDimension: 8_192,
+  maxWebImagePixels: 16_000_000,
   maxImageOutputs: 4,
   maxVideoOutputs: 4,
 } as const;
