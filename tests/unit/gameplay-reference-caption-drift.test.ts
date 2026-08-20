@@ -15,6 +15,7 @@ describe("observed cheap gameplay caption drift", () => {
       fovEstimate: "~90 degrees",
       teammateCountVisible: "2 teammates",
       visibleInputAffordance: null,
+      gameResponse: null,
       visibleGoal: "Gather loot and survive",
       visibleRisk: "yes",
       hudVisible: "not visible",
@@ -23,10 +24,39 @@ describe("observed cheap gameplay caption drift", () => {
     expect(normalized.fovEstimate).toBe(90);
     expect(normalized.teammateCountVisible).toBe(2);
     expect(normalized.visibleInputAffordance).toBe(GAMEPLAY_REFERENCE_NONE_VISIBLE);
+    expect(normalized.gameResponse).toBe(GAMEPLAY_REFERENCE_NONE_VISIBLE);
     // A descriptive answer is not proof that the goal itself is visibly encoded in the frame.
     expect(normalized.visibleGoal).toBe(false);
     expect(normalized.visibleRisk).toBe(true);
     expect(normalized.hudVisible).toBe(false);
+  });
+
+  it("drops boolean drift from optional descriptive fields instead of inventing text", () => {
+    const normalized = normalizeGameplayReferenceCaptionPayload({
+      failureRisk: false,
+      successState: true,
+      cameraDistance: false,
+      environmentType: true,
+    }) as Record<string, unknown>;
+
+    expect(normalized.failureRisk).toBeNull();
+    expect(normalized.successState).toBeNull();
+    expect(normalized.cameraDistance).toBeNull();
+    expect(normalized.environmentType).toBeNull();
+  });
+
+  it("preserves numeric scalar evidence as strings for descriptive fields", () => {
+    const normalized = normalizeGameplayReferenceCaptionPayload({
+      cameraDistance: 2.5,
+      cameraHeight: 1.2,
+      teammateDistance: 3,
+      realismLevel: 0.3,
+    }) as Record<string, unknown>;
+
+    expect(normalized.cameraDistance).toBe("2.5");
+    expect(normalized.cameraHeight).toBe("1.2");
+    expect(normalized.teammateDistance).toBe("3");
+    expect(normalized.realismLevel).toBe("0.3");
   });
 
   it("does not equate nearby teammates with visible coop dependency", () => {
