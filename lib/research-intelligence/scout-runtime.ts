@@ -1,5 +1,6 @@
 import { DurableWorkflowError } from "../orchestrator/retry";
 import { requireRpcObject, type OrchestratorRpcClient } from "../orchestrator/rpc";
+import type { ResearchScoutEvidenceBundleV1 } from "./evidence-bundle";
 import {
   researchPlanSpecV1Schema,
   researchScoutAssignmentSpecV1Schema,
@@ -51,6 +52,12 @@ export interface ResearchScoutJobContext {
 
 export interface ResearchScoutExecutionResult {
   report: ResearchScoutReportSpecV1;
+  /**
+   * Optional atomic source/evidence payload produced by the bounded Scout execution.
+   * Report source/evidence IDs may use bundle-local refs; the workflow maps them to
+   * durable Research Memory IDs before persisting the report.
+   */
+  evidenceBundle?: ResearchScoutEvidenceBundleV1;
   usage?: Record<string, unknown>;
   model?: string | null;
   provider?: string | null;
