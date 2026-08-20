@@ -13,6 +13,10 @@ function pngHeader(width: number, height: number): Uint8Array {
   ]);
 }
 
+function responseBody(bytes: Uint8Array): ArrayBuffer {
+  return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+}
+
 afterEach(() => {
   vi.unstubAllGlobals();
 });
@@ -99,7 +103,7 @@ describe("Stage 4.5 PR2 safe image fetch", () => {
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue(
-        new Response(bytes, {
+        new Response(responseBody(bytes), {
           status: 200,
           headers: { "content-type": "image/png", "content-length": String(bytes.byteLength) },
         }),
@@ -134,7 +138,7 @@ describe("Stage 4.5 PR2 safe image fetch", () => {
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue(
-        new Response(bytes, { status: 200, headers: { "content-type": "image/png" } }),
+        new Response(responseBody(bytes), { status: 200, headers: { "content-type": "image/png" } }),
       ),
     );
     const provider = createWebFetchProvider(publicLookup);
