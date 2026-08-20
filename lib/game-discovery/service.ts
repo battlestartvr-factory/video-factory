@@ -267,12 +267,15 @@ async function structureHumanGameplayFeedback(input: {
   rawFeedback: string;
   conceptId: string;
   shotId: string;
-  conceptRun: Record<string, any>;
+  conceptRun: Record<string, unknown>;
   mediaKind: "reference_image" | "video";
 }) {
   let structured;
   let model: string | null = null;
   let usage: Record<string, unknown> = { media_kind: input.mediaKind };
+  const outputs = rpcObject(input.conceptRun.outputs);
+  const concept = rpcObject(outputs.coop_game_concept);
+  const shot = rpcObject(outputs.gameplay_shot);
 
   if (input.rawFeedback) {
     structured = fallbackGameplayReferenceFeedback({
@@ -287,14 +290,10 @@ async function structureHumanGameplayFeedback(input: {
           llm,
           rawFeedback: input.rawFeedback,
           decision: input.decision,
+          mediaKind: input.mediaKind,
           conceptSummary:
-            typeof input.conceptRun.outputs?.coop_game_concept?.oneSentencePitch === "string"
-              ? input.conceptRun.outputs.coop_game_concept.oneSentencePitch
-              : input.conceptId,
-          shotSummary:
-            typeof input.conceptRun.outputs?.gameplay_shot?.action === "string"
-              ? input.conceptRun.outputs.gameplay_shot.action
-              : input.shotId,
+            typeof concept.oneSentencePitch === "string" ? concept.oneSentencePitch : input.conceptId,
+          shotSummary: typeof shot.action === "string" ? shot.action : input.shotId,
         });
         structured = result.feedback;
         model = result.model;
@@ -334,7 +333,7 @@ async function structureHumanGameplayFeedback(input: {
 async function loadConceptForHumanReview(input: {
   rootRunId: string;
   conceptRunId: string;
-}): Promise<Record<string, any>> {
+}): Promise<Record<string, unknown>> {
   const service = createSupabaseServiceClient();
   const { data: conceptRun, error: conceptError } = await service
     .from("creative_runs")
@@ -343,10 +342,10 @@ async function loadConceptForHumanReview(input: {
     .eq("parent_run_id", input.rootRunId)
     .maybeSingle();
   if (conceptError) throw new Error(`Failed to load concept run: ${conceptError.message}`);
-  if (!conceptRun || conceptRun.metadata?.domain_kind !== "coop_game_concept") {
+  if (!conceptRun || rpcObject(conceptRun.metadata).domain_kind !== "coop_game_concept") {
     throw new Error("CONCEPT_RUN_NOT_FOUND");
   }
-  return conceptRun as Record<string, any>;
+  return conceptRun as unknown as Record<string, unknown>;
 }
 
 export async function recordGameplayReferenceReview(input: {
