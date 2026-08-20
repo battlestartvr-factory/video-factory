@@ -10,6 +10,7 @@ import {
   gameplayMomentSpecV1Schema,
   shotSpecV1Schema,
 } from "@/lib/game-discovery/schemas";
+import { resolveExternalVisualReferenceInput } from "@/lib/research-intelligence/external-visual-reference-service";
 import { resolveSupabaseServiceRoleKey } from "@/lib/supabase/service-config";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 
@@ -18,9 +19,25 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
 type Stage4ReferenceRequest = Record<string, unknown>;
+type ProviderReferenceAsset = {
+  id: string;
+  url: string;
+  role: string;
+  mimeType: string;
+  filename: string;
+};
 
 function requiredText(body: Stage4ReferenceRequest, key: string, max = 8_000): string {
   const value = body[key];
+  if (typeof value !== "string" || !value.trim() || value.trim().length > max) {
+    throw new Error(`INVALID_${key.toUpperCase()}`);
+  }
+  return value.trim();
+}
+
+function optionalText(body: Stage4ReferenceRequest, key: string, max = 8_000): string | null {
+  const value = body[key];
+  if (value == null || value === "") return null;
   if (typeof value !== "string" || !value.trim() || value.trim().length > max) {
     throw new Error(`INVALID_${key.toUpperCase()}`);
   }
@@ -75,21 +92,93 @@ export async function POST(request: Request) {
 
     if (body.action === "admit_reference_image") {
       const referenceSet = stage4GameplayReferenceSetSchema.parse(body.referenceSet);
-      const assets = await materializeStage4GameplayReferences(referenceSet);
+      const gameplayAssets = await materializeStage4GameplayReferences(referenceSet);
+      const modelId = requiredText(body, "modelId", 160);
+      const conceptId = requiredText(body, "conceptId", 160);
+      const prompt = requiredText(body, "prompt");
+      const rootCreativeRunId = requiredText(body, "rootCreativeRunId", 100);
       const supabase = createSupabaseServiceClient();
+
+      let researchRunId = optionalText(body, "researchRunId", 160);
+      if (!researchRunId) {
+        const { data: linkedResearchRun, error: linkedResearchError } = await supabase
+          .from("research_runs")
+          .select("id")
+          .eq("root_creative_run_id", rootCreativeRunId)
+          .in("status", ["running", "completed"])
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        if (linkedResearchError) {
+          console.warn("stage4_5.research_lineage_lookup_failed", {
+            root_creative_run_id: rootCreativeRunId,
+            error: linkedResearchError.message,
+          });
+        } else if (typeof linkedResearchRun?.id === "string") {
+          researchRunId = linkedResearchRun.id;
+        }
+      }
+
+      const explicitExternalVisualQuery = optionalText(body, "externalVisualQuery", 2_000);
+      const externalVisualQuery = researchRunId
+        ? explicitExternalVisualQuery ?? `${prompt.slice(0, 1_700)}\nFind real gameplay screenshot source pages that clarify this co-op mechanic, interaction grammar, camera, readable player roles, environment/object behavior, and failure state.`
+        : null;
+      const mustNotCopy = Array.isArray(body.mustNotCopy)
+        ? body.mustNotCopy.filter((item): item is string => typeof item === "string" && item.trim().length > 0).slice(0, 20)
+        : [];
+
+      let referenceAssets: ProviderReferenceAsset[] = gameplayAssets;
+      let referenceLineage: unknown[] = [...referenceSet.references];
+      let finalPrompt = prompt;
+      let externalReferenceCount = 0;
+      let externalReferenceWarning: string | null = null;
+
+      if (researchRunId && externalVisualQuery) {
+        try {
+          const external = await resolveExternalVisualReferenceInput({
+            researchRunId,
+            conceptId,
+            providerModel: modelId,
+            existingReferenceCount: gameplayAssets.length,
+            query: externalVisualQuery,
+            mustNotCopy,
+            signal: request.signal,
+          });
+          if (external) {
+            externalReferenceCount = external.referenceAssets.length;
+            referenceAssets = [...gameplayAssets, ...external.referenceAssets];
+            referenceLineage = [...referenceSet.references, ...external.lineage.references];
+            finalPrompt = `${prompt}\n\nSOURCE-GROUNDED EXTERNAL VISUAL REFERENCE INSTRUCTIONS:\n${external.promptInstructionBlock}\n\nREFERENCE FIREWALL: external references are evidence only. Never copy source identity, characters, branding, proprietary UI, exact level layout, or composition verbatim.`;
+          }
+        } catch (externalError) {
+          externalReferenceWarning = externalError instanceof Error ? externalError.message : String(externalError);
+          console.warn("stage4_5.external_visual_reference_skipped", {
+            research_run_id: researchRunId,
+            concept_id: conceptId,
+            error: externalReferenceWarning.slice(0, 1_000),
+          });
+        }
+      }
+
       const { data, error } = await supabase.rpc("orchestrator_create_gameplay_reference_image", {
         payload: {
           root_job_id: requiredText(body, "rootJobId", 100),
-          root_creative_run_id: requiredText(body, "rootCreativeRunId", 100),
+          root_creative_run_id: rootCreativeRunId,
           request_id: requiredText(body, "requestId", 100),
-          concept_id: requiredText(body, "conceptId", 160),
+          concept_id: conceptId,
           moment_id: requiredText(body, "momentId", 160),
           shot_id: requiredText(body, "shotId", 160),
-          prompt: requiredText(body, "prompt"),
-          model_id: requiredText(body, "modelId", 160),
-          settings: { aspectRatio: "16:9", effectiveQuality: "2K" },
-          reference_assets: assets,
-          reference_lineage: referenceSet.references,
+          prompt: finalPrompt,
+          model_id: modelId,
+          settings: {
+            aspectRatio: "16:9",
+            effectiveQuality: "2K",
+            stage4_5_external_research_run_id: researchRunId,
+            stage4_5_external_reference_count: externalReferenceCount,
+            stage4_5_external_reference_warning: externalReferenceWarning,
+          },
+          reference_assets: referenceAssets,
+          reference_lineage: referenceLineage,
         },
       });
       if (error) throw new Error(`REFERENCE_IMAGE_ADMISSION_FAILED:${error.message}`);
@@ -105,7 +194,11 @@ export async function POST(request: Request) {
             generationId: generation.id,
             factoryJobId: result.factory_job_id,
             duplicate: result.duplicate === true,
-            referenceCount: referenceSet.references.length,
+            referenceCount: referenceAssets.length,
+            gameplayReferenceCount: gameplayAssets.length,
+            externalReferenceCount,
+            externalReferenceWarning,
+            researchRunId,
           },
         },
         { status: 200, headers: { "Cache-Control": "no-store" } },
