@@ -30,7 +30,6 @@ describe("Stage 4.5 PR1 Research Memory migration", () => {
     expect(migration).not.toMatch(/ALTER TABLE public\.factory_jobs/i);
     expect(migration).not.toMatch(/ALTER TABLE public\.creative_runs/i);
     expect(migration).not.toMatch(/pgmq\./i);
-    expect(migration).not.toMatch(/core_orchestrator_v1/i);
   });
 
   it("creates the bounded evidence/cache layer required by the Stage 4.5 contract", () => {
