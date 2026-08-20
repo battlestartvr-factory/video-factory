@@ -107,16 +107,18 @@ export async function structureGameplayReferenceFeedback(input: {
   llm: Pick<KieClaudeTaskAdapter, "generate">;
   rawFeedback: string;
   decision: "approve" | "reject" | "revise";
+  mediaKind?: "reference_image" | "video";
   conceptSummary?: string;
   shotSummary?: string;
   signal?: AbortSignal;
 }): Promise<FeedbackStructuringResult> {
   const policy = getDiscoveryLlmPolicy("feedback_structuring");
+  const mediaLabel = input.mediaKind === "video" ? "gameplay-video" : "gameplay reference-image";
   const response = await input.llm.generate({
     model: policy.primaryModel,
     system:
-      "You structure human review feedback for an AI co-op gameplay factory. Preserve explicit criticism. Extract durable constraints only when the user clearly said or strongly implied them. Never invent preferences.",
-    prompt: `Convert this gameplay reference-image review into structured memory.\n\nDECISION: ${input.decision}\nCONCEPT: ${input.conceptSummary ?? "not provided"}\nSHOT: ${input.shotSummary ?? "not provided"}\nRAW USER FEEDBACK:\n${input.rawFeedback}\n\nReturn ONLY JSON with schema gameplay_reference_feedback version 1 and fields errorTags, mustShow, mustAvoid, reusableScope, summary.\n- errorTags: concise machine-readable obvious failure categories such as gameplay_authenticity_failure, coop_dependency_not_visible, wrong_camera, too_cinematic, unreadable_consequence. Use only failures supported by the feedback. If the user explicitly says the result does not look like a game/gameplay or reads as cinematic/trailer/spectator instead of active gameplay, gameplay_authenticity_failure is REQUIRED.\n- mustShow: future visible requirements clearly requested by the user.\n- mustAvoid: concrete rejected patterns that should not be repeated.\n- reusableScope: shot for local correction, concept for this game idea, project only for a clearly general preference/rule.\n- summary: faithful compact paraphrase of the feedback.\nDo not infer a project-wide rule from a one-off aesthetic comment.`,
+      "You structure human review feedback for an AI co-op gameplay factory. The human is the final judge of generated media. Preserve explicit praise and criticism as reusable memory, but never invent preferences or override the human decision.",
+    prompt: `Convert this human ${mediaLabel} review into structured factory memory.\n\nDECISION: ${input.decision}\nMEDIA: ${input.mediaKind ?? "reference_image"}\nCONCEPT: ${input.conceptSummary ?? "not provided"}\nSHOT: ${input.shotSummary ?? "not provided"}\nRAW USER FEEDBACK:\n${input.rawFeedback}\n\nReturn ONLY JSON with schema gameplay_reference_feedback version 1 and fields errorTags, mustShow, mustAvoid, reusableScope, summary.\n- errorTags: concise machine-readable obvious failure categories such as gameplay_authenticity_failure, coop_dependency_not_visible, wrong_camera, too_cinematic, unreadable_consequence. Use only failures supported by the feedback. If the user explicitly says the result does not look like a game/gameplay or reads as cinematic/trailer/spectator instead of active gameplay, gameplay_authenticity_failure is REQUIRED.\n- mustShow: future visible requirements clearly requested by the user. For an APPROVE decision, also preserve a clearly praised visible trait here when the user explicitly says why they like it.\n- mustAvoid: concrete rejected patterns that should not be repeated. Even when DECISION is APPROVE, put any explicit criticism or unwanted detail from the comment here instead of ignoring it.\n- reusableScope: shot for local correction, concept for this game idea, project only for a clearly general preference/rule.\n- summary: faithful compact paraphrase of both praise and criticism and why the human made this decision.\nDo not turn vague praise such as "nice" into a hard visual rule. Do not infer a project-wide rule from a one-off aesthetic comment.`,
     maxTokens: policy.maxOutputTokens,
     thinking: policy.thinking,
     signal: input.signal,
