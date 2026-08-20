@@ -20,10 +20,13 @@ Do not optimize the repository as a generic content generator. Image/video gener
 
 - Stage 1–3: durable platform/orchestration foundation — DONE.
 - **Stage 4: Game Discovery Pipeline — technical DONE and production closeout accepted.**
-- Stage 5/6 are next: Gameplay Quality Evaluator + Learning/Memory Loop.
-- Stage 7 external market/trend intelligence should be added after the internal evaluation/learning loop can use evidence correctly.
+- **Stage 4.5: External Intelligence & Research Council v1 — implementation in progress.** This is a bounded, on-demand research layer for a concrete discovery objective, not the broad Stage 7 Trend Radar.
+- Stage 5/6 follow Stage 4.5: Gameplay Quality Evaluator + Learning/Memory Loop.
+- Stage 7 remains the later broad/periodic external market-intelligence layer after the internal evaluation/learning loop can use evidence correctly.
 
 Stage 4 technical closure does **not** mean every future paid acceptance smoke must run now. The explicit deferred item is the paid Tilt Salvage authenticity regression; run it later when it answers a real regression/product question.
+
+Stage 4.5 must be additive. `game_discovery_batch@1` remains the known-good fallback. The new path will be versioned as `game_discovery_batch@2` and must re-enter the existing Stage 4 downstream handlers after research/concept curation rather than cloning or rewriting them.
 
 ## 3. Stage 4 production evidence
 
@@ -39,17 +42,38 @@ Known-good complete batch:
 
 An earlier complete batch also reached concept -> media -> assembly end-to-end. Historical failed/cancelled attempts are evidence and must remain queryable.
 
-## 4. Human Concept Approval Gate
+## 4. Human Gates are non-negotiable
 
-The latest Stage 4 extension is a durable human concept gate before pre-evaluation/media generation.
+Stage 4 currently has three durable human-controlled gates and Stage 4.5 must preserve all three:
 
-Decisions: `approve | revise | reject`.
+1. **Human Concept Approval Gate** before concept pre-evaluation/media spend.
+2. **Human Reference Image Approval Gate** before gameplay video admission.
+3. **Human Video Approval Gate** before deterministic assembly/finalization.
 
-Critical contract: reject removes the active concept and requires a **mechanically new** replacement. Merely changing setting/art direction is not sufficient. Unit coverage lives in `tests/unit/human-concept-gate.test.ts`.
+Decisions remain `approve | revise | reject`.
 
-The same evidence-first philosophy applies to reference-image and video human gates.
+Critical concept contract: reject removes the active concept and requires a **mechanically new** replacement. Merely changing setting/art direction is not sufficient. Unit coverage lives in `tests/unit/human-concept-gate.test.ts`.
 
-## 5. Terminal lineage closeout fix
+Generated reference images and gameplay videos remain human-controlled evidence. AI inspection cannot silently reject them or bypass the gate; human revise/reject feedback must remain durable and feed the explicit regeneration path.
+
+## 5. Stage 4.5 implementation contract
+
+Canonical repo companion: `docs/stage4-5-external-intelligence-research-council-v1.md`.
+
+The v1 shape is intentionally bounded:
+
+- Research Director -> exactly 5 independent durable Research Scouts -> one Research Synthesizer/Evidence Pack;
+- 3 independent Concept Council designers -> one Curator -> final 6 grounded cards;
+- web/search/fetch/image-search tools are restricted to the Research subsystem;
+- downstream concept/image/video agents consume typed evidence/references rather than browsing directly;
+- Research Memory stores fresh source-backed evidence/cache/provenance and is **not** Stage 6 strategic memory;
+- no always-on trend radar, broad social listening, recursive browsing, or automatic `memory_items` promotion;
+- external web images are evidence/reference candidates, never generated factory assets and never automatically Gameplay Reference Library entries;
+- hard default research caps: 20 web queries, 30 fetched text sources, 24 image candidates, one research round.
+
+PR1 establishes only typed contracts + Research Memory tables/indexes + regression boundaries. It does not perform provider calls and does not change Stage 4 runtime behavior.
+
+## 6. Terminal lineage closeout fix
 
 Production previously contained 7 historical root `creative_runs` left `running/queued` after their `factory_jobs` were already `failed/cancelled`.
 
@@ -61,7 +85,7 @@ Migration `20260820081126_stage4_root_creative_run_terminal_sync.sql`:
 
 Final production acceptance on 2026-08-20 returned **0 stale root terminal mismatches**. See `docs/factory-runbook.md` for the audit query.
 
-## 6. Gameplay Reference Library
+## 7. Gameplay Reference Library
 
 Seed library:
 
@@ -94,7 +118,7 @@ failed = 0
 
 Operationally important: deterministic stored-caption repair is intentionally different from a paid retry. A stored repair keeps the reference row in `failed` long enough for `repairGameplayReferenceFromStoredCaption()` to consume `caption_debug.rawResponse`; resetting it to `pending_caption` would bypass that repair gate and can authorize a new provider call. See `docs/factory-runbook.md`.
 
-## 7. Production / deployment
+## 8. Production / deployment
 
 Primary production: `https://battlestart-factory.duckdns.org` on Ubuntu VPS + Docker Compose + Caddy.
 
@@ -106,20 +130,33 @@ The Stage 4 closeout runtime merge was accepted on production only after the pro
 
 A legacy Vercel GitHub check can show failure and is not authoritative for VPS production. Disable/remove that external integration when Vercel account access is available; do not redesign application code around it.
 
-## 8. Non-negotiable engineering invariants
+## 9. Non-negotiable engineering invariants
 
 1. DB workflow state is authoritative; queue delivery is only a wake-up.
 2. Preserve restart safety, leases, idempotency and event dedupe.
-3. Keep objective -> concept -> moment -> shot -> generation -> human review -> assembly lineage intact.
-4. Human feedback is evidence and must be stored before it is reused.
-5. Do not let a prettier generated artifact conceal a weak game mechanic.
-6. Do not silently broaden paid retries.
-7. Drive stores durable binaries; Supabase stores structured facts/evidence/pointers.
-8. New migrations applied to production must also exist in Git with matching version/name.
+3. Keep objective -> concept -> moment -> shot -> generation -> human review -> assembly lineage intact; Stage 4.5 extends the front of that chain with source-backed research lineage.
+4. All three Stage 4 Human Gates remain durable and mandatory in the v2 path.
+5. Human feedback is evidence and must be stored before it is reused.
+6. Do not let a prettier generated artifact conceal a weak game mechanic.
+7. Do not silently broaden paid retries or research budgets.
+8. Drive stores durable binaries; Supabase stores structured facts/evidence/pointers.
+9. Research Memory is fresh evidence/cache; it does not automatically write Stage 6 durable learnings.
+10. New migrations applied to production must also exist in Git with matching version/name.
 
-## 9. What the next agent should build
+## 10. What the next agent should build
 
-Prioritize Stage 5/6 as one product loop while keeping separate domain responsibilities:
+Until Stage 4.5 is closed, follow the PR sequence in `docs/stage4-5-external-intelligence-research-council-v1.md`:
+
+1. contracts + DB;
+2. provider-neutral safe search/fetch/image-search layer;
+3. durable Research Director + 5 Scout fan-out/fan-in;
+4. evidence synthesis/Evidence Pack;
+5. Concept Council + Curator;
+6. controlled external visual references;
+7. `game_discovery_batch@2` integration reusing existing Stage 4 Human Gates/downstream handlers;
+8. UI/observability + bounded production acceptance.
+
+After Stage 4.5, resume Stage 5/6 as one product loop while keeping separate domain responsibilities:
 
 ```text
 DISCOVERY
@@ -134,6 +171,6 @@ Evaluator dimensions should stay separable: game concept quality, co-op value, n
 
 Learning should turn evaluator findings + human `Love / Maybe / Reject` rationale + generation outcomes into atomic, evidence-backed reusable learnings. The key product metric is **Learning Lift**: whether later batches measurably improve because of accumulated evidence, rather than simply producing more random concepts.
 
-## 10. Do not redo
+## 11. Do not redo
 
-Do not restart Stage 4 from scratch, replace durable orchestration with an ad-hoc agent loop, or add broad trend ingestion before Stage 5/6 can consume evidence. Use Stage 4 as the experiment-production substrate and move the intelligence frontier forward.
+Do not restart Stage 4 from scratch, replace durable orchestration with an ad-hoc agent loop, bypass any Human Gate, or turn Stage 4.5 into broad trend ingestion. Use Stage 4 as the experiment-production substrate and add only the bounded tactical external evidence layer defined for Stage 4.5.
