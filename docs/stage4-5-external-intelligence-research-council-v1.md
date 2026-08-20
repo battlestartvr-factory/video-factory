@@ -179,3 +179,42 @@ PR1 is complete when:
 - no real search/provider calls are introduced.
 
 The next implementation step after PR1 is the provider-neutral safe Search/Fetch Layer with mocks first.
+
+## Provider decision before PR8 — KIE-only external research
+
+Decision recorded 2026-08-20: keep the paid external-intelligence path inside the existing KIE account/API key instead of adding a second search subscription.
+
+Production research target:
+
+```text
+KIE Gemini 3.6 Flash + Google Search grounding
+  -> exact grounded source-page URLs and grounded claim spans
+  -> existing Stage 4.5 Safe Fetch boundary
+  -> typed ResearchEvidence / Research Memory
+
+For visual research:
+KIE Google-grounded source pages
+  -> bounded extraction of og:image / twitter:image / page <img> candidates
+  -> existing safe image fetch + MIME/dimension/hash checks
+  -> existing PR6 dedupe/archive/provenance/reference-selection path
+```
+
+Rules:
+
+- KIE is the only paid search/model provider required by this path; page/image HTTP fetches are performed by the factory itself.
+- `KIE_API_KEY` is reused; no second `WEB_SEARCH_API_KEY` is required for the KIE-only path.
+- default research model is `gemini-3-6-flash`, configurable with `KIE_WEB_SEARCH_MODEL` for controlled rollback/experiments.
+- a text result is accepted only when KIE returns Google grounding source URLs; prose without grounding fails closed.
+- each production Scout performs one bounded KIE grounded-search/model call, then safe-fetches only the selected grounded pages. This preserves the one-model-call-per-Scout v1 budget.
+- image discovery does not pretend KIE exposes a separate image-search API. It intentionally discovers real image candidates from KIE-grounded source pages and preserves the source-page URL as provenance.
+- actual image bytes still pass PR2/PR6 safety and validation before becoming an `ExternalVisualReference`.
+- source-page images never become generated assets and never auto-enter the Gameplay Reference Library.
+- the KIE production Scout path is explicitly enabled with `WEB_SEARCH_PROVIDER=kie`; it is not silently activated by merely having a KIE key.
+- `game_discovery_batch@1` remains the production default until PR8 acceptance; all three Human Gates remain unchanged.
+
+Public capability evidence used for this provider decision:
+
+- KIE Gemini 3.5/3.6 surfaces expose Google Search grounding; KIE uses Gemini-compatible model endpoints for grounded generation.
+- Google lists Gemini 3.6 Flash among models supporting Google Search grounding/search-as-a-tool.
+
+A live bounded KIE acceptance request is still required before PR8 flips any production default.
