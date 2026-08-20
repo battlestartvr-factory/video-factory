@@ -30,7 +30,9 @@ export function canonicalizeWebUrl(raw: string): string {
   url.search = "";
   for (const [key, value] of params) url.searchParams.append(key, value);
 
-  if (url.pathname.length > 1) url.pathname = url.pathname.replace(/\/+$/, "");
+  // Do not collapse a path's trailing slash: servers are allowed to treat `/game`
+  // and `/game/` as distinct resources. Canonicalization removes transport noise,
+  // not source semantics.
   return url.toString();
 }
 
