@@ -90,33 +90,34 @@ async function handleAssemblyPending(context: WorkflowTickContext): Promise<Work
   }
 
   const services = runtime(context);
-  let approvals;
-  let videoStage;
+  let referenceApprovals;
+  let videoApprovals;
   let assemblyStage;
   try {
-    [approvals, videoStage, assemblyStage] = await Promise.all([
+    [referenceApprovals, videoApprovals, assemblyStage] = await Promise.all([
       services.gameDiscovery.getReferenceApprovalStage({ rootCreativeRunId }),
-      services.video.getGameplayVideoStage({ rootCreativeRunId }),
+      services.video.getGameplayVideoApprovalStage({ rootCreativeRunId }),
       services.video.getAssemblyStage({ rootCreativeRunId }),
     ]);
   } catch (error) {
     throw persistenceError("GAMEPLAY_ASSEMBLY_RECONCILE_FAILED", error);
   }
 
-  const approved = approvals.items.filter((item) => item.decision === "approve");
-  if (!approved.length || !videoStage.allCompleted) {
+  const approvedReferences = referenceApprovals.items.filter((item) => item.decision === "approve");
+  const approvedVideos = videoApprovals.items.filter((item) => item.decision === "approve");
+  if (!videoApprovals.allReviewed || !approvedVideos.length) {
     return failedOutcome({
       context,
       stage: "assembly_pending",
       code: "DISCOVERY_ASSEMBLY_INPUTS_INCOMPLETE",
-      message: "Prototype assembly requires current approved references and completed gameplay videos",
+      message: "Prototype assembly requires at least one human-approved gameplay video",
       reason: "s4_006_assembly_inputs_incomplete",
       eventType: "discovery.prototype_assembly_failed",
     });
   }
 
   const conceptCounts = new Map<string, number>();
-  for (const item of approved) {
+  for (const item of approvedVideos) {
     conceptCounts.set(item.conceptRunId, (conceptCounts.get(item.conceptRunId) ?? 0) + 1);
   }
   const multiShot = [...conceptCounts.entries()].find(([, count]) => count > 1);
@@ -131,15 +132,15 @@ async function handleAssemblyPending(context: WorkflowTickContext): Promise<Work
     });
   }
 
-  const videosByShot = new Map(videoStage.items.map((item) => [item.shotId, item]));
+  const referencesByShot = new Map(approvedReferences.map((item) => [item.shotId, item]));
   const existingByConcept = new Map(assemblyStage.items.map((item) => [item.conceptRunId, item]));
   const artifacts = [];
   const newlyAssembledConceptIds: string[] = [];
 
-  for (const reference of approved) {
-    const video = videosByShot.get(reference.shotId);
+  for (const video of approvedVideos) {
+    const reference = referencesByShot.get(video.shotId);
     if (
-      !video ||
+      !reference ||
       video.status !== "completed" ||
       video.approvedReferenceGenerationId !== reference.generationId ||
       video.conceptRunId !== reference.conceptRunId ||
@@ -150,17 +151,17 @@ async function handleAssemblyPending(context: WorkflowTickContext): Promise<Work
         context,
         stage: "assembly_pending",
         code: "DISCOVERY_ASSEMBLY_LINEAGE_MISMATCH",
-        message: `Prototype assembly lineage mismatch for shot ${reference.shotId}`,
+        message: `Prototype assembly lineage mismatch for human-approved video ${video.shotId}`,
         reason: "s4_006_assembly_lineage_mismatch",
         eventType: "discovery.prototype_assembly_failed",
-        payload: { shot_id: reference.shotId },
+        payload: { shot_id: video.shotId, video_generation_id: video.generationId },
       });
     }
 
-    const existing = existingByConcept.get(reference.conceptRunId);
+    const existing = existingByConcept.get(video.conceptRunId);
     if (existing) {
       if (
-        existing.conceptId !== reference.conceptId ||
+        existing.conceptId !== video.conceptId ||
         existing.inputVideoGenerationIds.length !== 1 ||
         existing.inputVideoGenerationIds[0] !== video.generationId
       ) {
@@ -168,11 +169,11 @@ async function handleAssemblyPending(context: WorkflowTickContext): Promise<Work
           context,
           stage: "assembly_pending",
           code: "DISCOVERY_ASSEMBLY_STALE_VIDEO",
-          message: `Persisted prototype for ${reference.conceptId} is tied to a stale gameplay video`,
+          message: `Persisted prototype for ${video.conceptId} is tied to a stale gameplay video`,
           reason: "s4_006_stale_assembly_detected",
           eventType: "discovery.prototype_assembly_failed",
           payload: {
-            concept_id: reference.conceptId,
+            concept_id: video.conceptId,
             current_video_generation_id: video.generationId,
             assembly_video_generation_ids: existing.inputVideoGenerationIds,
           },
@@ -186,8 +187,8 @@ async function handleAssemblyPending(context: WorkflowTickContext): Promise<Work
     try {
       assembly = await services.assembly.assembleConceptPrototype({
         rootCreativeRunId,
-        conceptRunId: reference.conceptRunId,
-        conceptId: reference.conceptId,
+        conceptRunId: video.conceptRunId,
+        conceptId: video.conceptId,
         videoGenerationIds: [video.generationId],
         signal: context.signal,
       });
@@ -197,10 +198,10 @@ async function handleAssemblyPending(context: WorkflowTickContext): Promise<Work
 
     const baseGraph = buildGameplayAssetGraph({
       objectiveRunId: rootCreativeRunId,
-      conceptRunId: reference.conceptRunId,
-      conceptId: reference.conceptId,
-      momentId: reference.momentId,
-      shotId: reference.shotId,
+      conceptRunId: video.conceptRunId,
+      conceptId: video.conceptId,
+      momentId: video.momentId,
+      shotId: video.shotId,
       approvedReferenceGenerationId: reference.generationId,
       approvedReferenceOutputs: reference.outputs,
       videoGenerationId: video.generationId,
@@ -212,7 +213,7 @@ async function handleAssemblyPending(context: WorkflowTickContext): Promise<Work
       await services.video.persistAssembly({
         rootJobId: context.jobId,
         rootCreativeRunId,
-        conceptRunId: reference.conceptRunId,
+        conceptRunId: video.conceptRunId,
         assembly,
         assetGraph: assembledGraph,
       });
@@ -221,7 +222,7 @@ async function handleAssemblyPending(context: WorkflowTickContext): Promise<Work
     }
 
     artifacts.push(assembly);
-    newlyAssembledConceptIds.push(reference.conceptId);
+    newlyAssembledConceptIds.push(video.conceptId);
   }
 
   return {
@@ -234,13 +235,15 @@ async function handleAssemblyPending(context: WorkflowTickContext): Promise<Work
       ...context.state,
       prototype_assemblies: artifacts,
       prototype_assemblies_completed_at: new Date().toISOString(),
+      human_video_gate_passed: true,
     },
-    stateReason: "s4_006_prototype_assemblies_ready",
+    stateReason: "s4_006_human_approved_prototype_assemblies_ready",
     eventType: "discovery.prototype_assemblies_ready",
     eventPayload: {
       prototype_count: artifacts.length,
       newly_assembled_concept_ids: newlyAssembledConceptIds,
       reused_count: artifacts.length - newlyAssembledConceptIds.length,
+      approved_video_generation_ids: approvedVideos.map((item) => item.generationId),
       next_stage: "prototype_finalization_pending",
     },
   };
