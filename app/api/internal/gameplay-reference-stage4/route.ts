@@ -19,6 +19,13 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
 type Stage4ReferenceRequest = Record<string, unknown>;
+type ProviderReferenceAsset = {
+  id: string;
+  url: string;
+  role: string;
+  mimeType: string;
+  filename: string;
+};
 
 function requiredText(body: Stage4ReferenceRequest, key: string, max = 8_000): string {
   const value = body[key];
@@ -120,7 +127,7 @@ export async function POST(request: Request) {
         ? body.mustNotCopy.filter((item): item is string => typeof item === "string" && item.trim().length > 0).slice(0, 20)
         : [];
 
-      let referenceAssets = gameplayAssets;
+      let referenceAssets: ProviderReferenceAsset[] = gameplayAssets;
       let referenceLineage: unknown[] = [...referenceSet.references];
       let finalPrompt = prompt;
       let externalReferenceCount = 0;
