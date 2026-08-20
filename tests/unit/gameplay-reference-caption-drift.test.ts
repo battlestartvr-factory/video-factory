@@ -29,6 +29,20 @@ describe("observed cheap gameplay caption drift", () => {
     expect(normalized.hudVisible).toBe(false);
   });
 
+  it("drops boolean drift from optional descriptive fields instead of inventing text", () => {
+    const normalized = normalizeGameplayReferenceCaptionPayload({
+      failureRisk: false,
+      successState: true,
+      cameraDistance: false,
+      environmentType: true,
+    }) as Record<string, unknown>;
+
+    expect(normalized.failureRisk).toBeNull();
+    expect(normalized.successState).toBeNull();
+    expect(normalized.cameraDistance).toBeNull();
+    expect(normalized.environmentType).toBeNull();
+  });
+
   it("does not equate nearby teammates with visible coop dependency", () => {
     const normalized = normalizeGameplayReferenceCaptionPayload({
       coopDependencyVisible: true,
