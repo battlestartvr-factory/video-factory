@@ -6,6 +6,8 @@ import {
 } from "../../lib/game-discovery/gameplay-authenticity-inspection";
 import type { GameplayAuthenticitySpecV1 } from "../../lib/game-discovery/gameplay-authenticity";
 
+const VIDEO_INSPECTION_ATTEMPTS = 2;
+
 function internalBaseUrl(): string {
   return (process.env.WORKER_APP_INTERNAL_URL ?? "http://app:3000").trim() || "http://app:3000";
 }
@@ -138,9 +140,18 @@ export async function inspectGameplayVideoFromWorker(input: {
   plannedAuthenticity: GameplayAuthenticitySpecV1;
   signal: AbortSignal;
 }): Promise<GameplayVideoAuthenticityInspectionV1> {
-  const data = await requestInspection<{ inspection: unknown }>(
-    { action: "video", ...input, signal: undefined },
-    input.signal,
-  );
-  return gameplayVideoAuthenticityInspectionV1Schema.parse(data.inspection);
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= VIDEO_INSPECTION_ATTEMPTS; attempt += 1) {
+    try {
+      const data = await requestInspection<{ inspection: unknown }>(
+        { action: "video", ...input, signal: undefined },
+        input.signal,
+      );
+      return gameplayVideoAuthenticityInspectionV1Schema.parse(data.inspection);
+    } catch (error) {
+      lastError = error;
+      if (input.signal.aborted || attempt === VIDEO_INSPECTION_ATTEMPTS) throw error;
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error(String(lastError));
 }
