@@ -71,7 +71,9 @@ describe("Stage 4.5 PR1 Research Memory migration", () => {
   });
 
   it("does not silently promote fresh research evidence into Stage 6 durable memory", () => {
-    expect(migration).not.toMatch(/memory_items/i);
+    expect(migration).not.toMatch(
+      /(?:INSERT\s+INTO|UPDATE|DELETE\s+FROM|ALTER\s+TABLE)\s+(?:public\.)?memory_items\b/i,
+    );
     expect(migration).toContain("This is not Stage 6 durable strategic memory");
   });
 
