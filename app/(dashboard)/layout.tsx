@@ -1,5 +1,6 @@
 import { Sidebar, MobileNav } from "@/components/layout/sidebar";
 import { DemoBanner } from "@/components/ui/states";
+import { DashboardGenerationImageViewer } from "@/components/ui/dashboard-generation-image-viewer";
 import { ThemeProvider } from "@/components/providers/theme-provider";
 import { RecentChatsProvider } from "@/components/providers/recent-chats-provider";
 import { isMockWorkflowsEnabled } from "@/lib/env/mock-workflows";
@@ -51,6 +52,7 @@ export default async function DashboardLayout({
             </div>
           </div>
           <MobileNav />
+          <DashboardGenerationImageViewer />
         </div>
       </RecentChatsProvider>
     </ThemeProvider>
