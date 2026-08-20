@@ -153,6 +153,7 @@ describe("Stage 4.5 PR5 Concept Council acceptance", () => {
   it("rejects a mechanical near-duplicate even when its setting is changed", async () => {
     const outputs = await allDesignerOutputs();
     const base = outputs[0]!.candidates[0]!;
+    const rankedBase: ConceptHypothesisSpecV1 = { ...base, researchConfidence: 0.99 };
     const reskin: ConceptHypothesisSpecV1 = {
       ...base,
       candidateId: "candidate-reskin-only",
@@ -169,7 +170,7 @@ describe("Stage 4.5 PR5 Concept Council acceptance", () => {
 
     const candidates = outputs.flatMap((output) => output.candidates);
     const result = curateConceptCandidates({
-      candidates: [reskin, ...candidates.slice(0, 11)],
+      candidates: [reskin, rankedBase, ...candidates.slice(1, 11)],
       evidencePack: evidencePack(),
       generatedAt: "2026-08-20T12:10:00.000Z",
     });
