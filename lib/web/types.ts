@@ -1,3 +1,5 @@
+import type { WebPageImageCandidate } from "./page-images";
+
 export type SearchFreshnessIntent = "current" | "recent" | "evergreen" | "mixed";
 
 export interface SearchOptions {
@@ -54,6 +56,8 @@ export interface WebDocument {
   byteLength?: number;
   urlSha256?: string;
   contentSha256?: string;
+  /** Bounded candidates extracted from the already-safe fetched HTML. Never treated as generated assets. */
+  imageCandidates?: WebPageImageCandidate[];
 }
 
 export interface WebImage {

@@ -8,6 +8,7 @@ export * from "./concept-council";
 export * from "./concept-council-runtime";
 export * from "./concept-curator";
 export * from "./game-discovery-v2";
+export * from "./kie-research-scout";
 export * from "./visual-references";
 export * from "./visual-reference-runtime";
 export * from "./visual-reference-archive-client";

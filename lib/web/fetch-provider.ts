@@ -3,6 +3,7 @@ import { htmlToText } from "@/lib/knowledge/extraction";
 import { truncateText } from "@/lib/agent/redaction";
 import { readImageDimensions, sniffImageMime } from "./image-metadata";
 import { canonicalizeWebUrl, sha256Hex, textContentSha256, urlSha256 } from "./normalization";
+import { extractPageImageCandidates } from "./page-images";
 import { validateWebFetchUrl, type DnsLookupFn } from "./url-safety";
 import {
   domainFromUrl,
@@ -132,6 +133,7 @@ async function fetchPage(url: string, lookup?: DnsLookupFn): Promise<WebDocument
   const titleMatch = isHtml ? safeHtml.match(/<title[^>]*>([\s\S]*?)<\/title>/i) : null;
   const canonicalUrl = canonicalizeWebUrl(finalUrl.toString());
   const now = new Date().toISOString();
+  const imageCandidates = isHtml ? extractPageImageCandidates(safeHtml, finalUrl) : [];
 
   return {
     url: finalUrl.toString(),
@@ -144,10 +146,8 @@ async function fetchPage(url: string, lookup?: DnsLookupFn): Promise<WebDocument
     contentType: contentType || (isHtml ? "text/html" : "text/plain"),
     byteLength: bytes.byteLength,
     urlSha256: urlSha256(canonicalUrl),
-    // Hash the full bounded normalized extraction, not the smaller model-facing excerpt.
-    // This prevents two sources with the same prefix but different later evidence from
-    // being falsely deduplicated after maxWebFetchChars truncation.
     contentSha256: textContentSha256(extracted),
+    imageCandidates,
   };
 }
 

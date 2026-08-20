@@ -1,5 +1,10 @@
 export { createWebSearchProvider } from "./search-provider";
 export { createWebFetchProvider } from "./fetch-provider";
+export {
+  KieGeminiGroundedSearchProvider,
+  createKieGeminiGroundedSearchProvider,
+} from "./kie-grounded-search";
+export { extractPageImageCandidates, type WebPageImageCandidate, type WebPageImageCandidateKind } from "./page-images";
 export { validateWebFetchUrl, assertSafeWebUrl, WebUrlError } from "./url-safety";
 export {
   canonicalizeWebUrl,
