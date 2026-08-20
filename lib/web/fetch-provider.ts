@@ -21,6 +21,7 @@ function normalizedMime(contentType: string | null): string {
 
 function pageMimeAllowed(contentType: string): boolean {
   if (!contentType) return true;
+  if (contentType.endsWith("+xml")) return true;
   return PAGE_MIME_PREFIXES.some((allowed) =>
     allowed.endsWith("/") ? contentType.startsWith(allowed) : contentType === allowed,
   );
@@ -143,7 +144,10 @@ async function fetchPage(url: string, lookup?: DnsLookupFn): Promise<WebDocument
     contentType: contentType || (isHtml ? "text/html" : "text/plain"),
     byteLength: bytes.byteLength,
     urlSha256: urlSha256(canonicalUrl),
-    contentSha256: textContentSha256(text),
+    // Hash the full bounded normalized extraction, not the smaller model-facing excerpt.
+    // This prevents two sources with the same prefix but different later evidence from
+    // being falsely deduplicated after maxWebFetchChars truncation.
+    contentSha256: textContentSha256(extracted),
   };
 }
 
