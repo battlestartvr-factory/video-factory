@@ -257,6 +257,7 @@ describe("generation_image@1 lifecycle", () => {
       "core_smoke@1",
       "external_research_scout@1",
       "game_discovery_batch@1",
+      "game_discovery_batch@2",
       "gameplay_authenticity_planning_smoke@1",
       "gameplay_reference_index@1",
       "gameplay_reference_retrieval_smoke@1",
