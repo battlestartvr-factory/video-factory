@@ -19,7 +19,7 @@ Do not optimize the repository as a generic content generator. Image/video gener
 ## 2. Stage status
 
 - Stage 1–3: durable platform/orchestration foundation — DONE.
-- **Stage 4: Game Discovery Pipeline — technical DONE.**
+- **Stage 4: Game Discovery Pipeline — technical DONE and production closeout accepted.**
 - Stage 5/6 are next: Gameplay Quality Evaluator + Learning/Memory Loop.
 - Stage 7 external market/trend intelligence should be added after the internal evaluation/learning loop can use evidence correctly.
 
@@ -59,30 +59,40 @@ Migration `20260820081126_stage4_root_creative_run_terminal_sync.sql`:
 - deliberately excludes child creative runs;
 - backfills historical mismatches.
 
-Post-migration acceptance query must return `0` stale root terminal mismatches. See `docs/factory-runbook.md`.
+Final production acceptance on 2026-08-20 returned **0 stale root terminal mismatches**. See `docs/factory-runbook.md` for the audit query.
 
 ## 6. Gameplay Reference Library
 
 Seed library:
 
 - 10 games
-- 76 image references
+- **76 / 76 image references indexed**
 - all 76 have durable Google Drive pointers
 - structured schema captures camera, player-control evidence, co-op dependency, mechanics, readability, art/production cues, provenance and dedupe fields
 - deterministic/perceptual dedupe and purpose-aware retrieval are implemented
 - vector-ready HNSW/RPC primitive exists, but current v1 caption indexing does not populate embeddings; do not report vector semantic retrieval as active until embeddings are actually written
 
-On 2026-08-20 the remaining 53 image references (52 pending + one reviewed failed empty response) were deliberately admitted to the existing durable indexing workflow. The failed empty-response row was explicitly reset for one paid retry. **Before claiming library closeout, verify the live counts below.**
+Final Stage 4 library closeout was completed on 2026-08-20. The remaining 53 image references were admitted to the existing durable `gameplay_reference_index@1` workflow. The first full pass ended at `71 indexed / 5 failed`; all five failures were provider-format/schema drift with usable paid caption evidence already stored in `caption_debug.rawResponse`.
 
-```sql
-select index_status, count(*)
-from gameplay_references
-where media_type = 'image'
-group by index_status
-order by index_status;
+The deterministic normalizer was hardened for the observed drift classes:
+
+- boolean values in optional descriptive text fields fail closed to `null` instead of inventing prose;
+- missing required visible-response text maps to `none_visible`;
+- finite numeric scalar evidence in descriptive distance/height and `realismLevel` fields is preserved by stringifying the observed number;
+- visibility/readability evidence still fails closed when the model returns unsupported descriptive strings.
+
+After the hardened code passed CI and was deployed to the production worker, five new durable index jobs repaired the failed references from their **stored raw captions**. No second provider call was made: final `caption_usage` on every repaired row remained `modelCalls = 1` and `schemaRepairModelCalls = 0`.
+
+Final live acceptance:
+
+```text
+indexed = 76
+pending_caption = 0
+captioning = 0
+failed = 0
 ```
 
-Closeout target: `indexed = 76`, with no `pending_caption`, `captioning` or `failed` rows.
+Operationally important: deterministic stored-caption repair is intentionally different from a paid retry. A stored repair keeps the reference row in `failed` long enough for `repairGameplayReferenceFromStoredCaption()` to consume `caption_debug.rawResponse`; resetting it to `pending_caption` would bypass that repair gate and can authorize a new provider call. See `docs/factory-runbook.md`.
 
 ## 7. Production / deployment
 
@@ -91,6 +101,8 @@ Primary production: `https://battlestart-factory.duckdns.org` on Ubuntu VPS + Do
 Canonical release path:
 
 `main -> GitHub CI -> Deploy Production -> SSH -> exact commit on VPS`.
+
+The Stage 4 closeout runtime merge was accepted on production only after the production worker heartbeat reported the exact merged commit. Keep using worker `build_sha` as one of the deployment acceptance checks.
 
 A legacy Vercel GitHub check can show failure and is not authoritative for VPS production. Disable/remove that external integration when Vercel account access is available; do not redesign application code around it.
 
