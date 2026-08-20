@@ -2,7 +2,7 @@ import { coreSmokeV1 } from "./core-smoke-v1";
 import { externalResearchScoutV1 } from "./external-research-scout-v1";
 import { gameDiscoveryBatchStage4InspectedV1 } from "./game-discovery-batch-stage4-inspected-v1";
 import {
-  conceptCouncilMemberV1Production,
+  conceptCouncilMemberV1Production as conceptCouncilMemberV1,
   gameDiscoveryBatchV2Production,
 } from "./stage4-5-production-adapters";
 import { gameplayAuthenticityPlanningSmokeV1 } from "./gameplay-authenticity-planning-smoke-v1";
@@ -13,7 +13,7 @@ import { generationVideoV1 } from "./generation-video-v1";
 import type { WorkflowTickHandler } from "./types";
 
 const registry = new Map<string, WorkflowTickHandler>([
-  ["concept_council_member@1", conceptCouncilMemberV1Production],
+  ["concept_council_member@1", conceptCouncilMemberV1],
   ["core_smoke@1", coreSmokeV1],
   ["external_research_scout@1", externalResearchScoutV1],
   ["game_discovery_batch@1", gameDiscoveryBatchStage4InspectedV1],
