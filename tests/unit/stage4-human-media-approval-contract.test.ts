@@ -34,14 +34,19 @@ describe("Stage 4 human media approval contract", () => {
     expect(ui).toContain("video-reviews");
   });
 
-  it("stores image and video comments in the same durable factory feedback memory", () => {
-    const migration = source("supabase/migrations/20260820054000_stage4_human_video_review_gate.sql");
+  it("stores image and video comments in durable factory feedback memory with decision context", () => {
+    const videoGateMigration = source("supabase/migrations/20260820054000_stage4_human_video_review_gate.sql");
+    const memoryMigration = source("supabase/migrations/20260820061000_human_review_notes_memory.sql");
 
-    expect(migration).toContain("CREATE TABLE IF NOT EXISTS public.gameplay_video_reviews");
-    expect(migration).toContain("orchestrator_record_gameplay_video_review");
-    expect(migration).toContain("orchestrator_get_gameplay_video_approval_stage");
-    expect(migration).toContain("FROM public.gameplay_reference_reviews");
-    expect(migration).toContain("FROM public.gameplay_video_reviews");
-    expect(migration).toContain("gameplay_video_request_history");
+    expect(videoGateMigration).toContain("CREATE TABLE IF NOT EXISTS public.gameplay_video_reviews");
+    expect(videoGateMigration).toContain("orchestrator_record_gameplay_video_review");
+    expect(videoGateMigration).toContain("orchestrator_get_gameplay_video_approval_stage");
+    expect(videoGateMigration).toContain("gameplay_video_request_history");
+
+    expect(memoryMigration).toContain("FROM public.gameplay_reference_reviews");
+    expect(memoryMigration).toContain("FROM public.gameplay_video_reviews");
+    expect(memoryMigration).toContain("'review_note'");
+    expect(memoryMigration).toContain("'[reference_image]['");
+    expect(memoryMigration).toContain("'[video]['");
   });
 });
