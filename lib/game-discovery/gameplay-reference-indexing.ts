@@ -158,6 +158,10 @@ function normalizeNumber(value: unknown): unknown {
 
 function normalizeOptionalText(value: unknown): unknown {
   if (value == null) return null;
+  // Cheap vision models occasionally answer optional descriptive fields with true/false.
+  // A boolean cannot be safely expanded into descriptive evidence, so fail closed to null.
+  // Dedicated visibility booleans preserve the actual yes/no signal elsewhere in the schema.
+  if (typeof value === "boolean") return null;
   if (typeof value !== "string") return value;
   const trimmed = value.trim();
   return trimmed ? trimmed : null;
