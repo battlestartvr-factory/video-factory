@@ -62,6 +62,28 @@ services:
       AI_FACTORY_DATA_ROOT: /srv/ai-factory
       BUILD_SHA: ${DEPLOY_COMMIT:-local}
       GOOGLE_DRIVE_AUTH_MODE: oauth_user
+      ORCHESTRATOR_QUEUE_MODE: core
+      WORKER_CONCURRENCY: "1"
+    volumes:
+      - ${AI_FACTORY_DATA_ROOT:-/srv/ai-factory}:/srv/ai-factory
+    depends_on:
+      data-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  research-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    image: video-factory-worker:latest
+    env_file:
+      - ${AI_FACTORY_ENV_FILE:-/opt/ai-factory/.env}
+    environment:
+      NODE_ENV: production
+      AI_FACTORY_DATA_ROOT: /srv/ai-factory
+      BUILD_SHA: ${DEPLOY_COMMIT:-local}
+      ORCHESTRATOR_QUEUE_MODE: research
+      WORKER_CONCURRENCY: "5"
     volumes:
       - ${AI_FACTORY_DATA_ROOT:-/srv/ai-factory}:/srv/ai-factory
     depends_on:
