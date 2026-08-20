@@ -315,6 +315,7 @@ export function normalizeGameplayReferenceCaptionPayload(value: unknown): unknow
   normalized.visibleInputAffordance = normalizeRequiredVisibleText(
     normalized.visibleInputAffordance,
   );
+  normalized.gameResponse = normalizeRequiredVisibleText(normalized.gameResponse);
   normalized.mechanicTags = normalizeStringArray(normalized.mechanicTags);
   normalized.interactionModel = normalizeStringArray(normalized.interactionModel);
   normalized.stylizationTags = normalizeStringArray(normalized.stylizationTags);
