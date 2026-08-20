@@ -7,6 +7,8 @@ import type { GameDiscoveryAssemblyRuntime } from "../../lib/game-discovery/asse
 import type { KieClaudeTaskAdapter } from "../../lib/models/kie/claude-task";
 import type { KieMarketTaskAdapter } from "../../lib/models/kie/market-task";
 import type { KieVeoTaskAdapter } from "../../lib/models/kie/veo-task";
+import type { ConceptCouncilDesignerExecutor } from "../../lib/research-intelligence/concept-council";
+import type { ConceptCouncilRepository } from "../../lib/research-intelligence/concept-council-runtime";
 import type {
   ResearchScoutExecutor,
   ResearchScoutRepository,
@@ -30,6 +32,8 @@ export interface WorkflowServices {
   gameDiscoveryAssembly?: GameDiscoveryAssemblyRuntime;
   researchScouts?: ResearchScoutRepository;
   researchScoutExecutor?: ResearchScoutExecutor | null;
+  conceptCouncil?: ConceptCouncilRepository;
+  conceptCouncilDesignerExecutor?: ConceptCouncilDesignerExecutor | null;
   kieClaude?: KieClaudeTaskAdapter | null;
   kieMarketTask: KieMarketTaskAdapter | null;
   kieVeoTask: KieVeoTaskAdapter | null;
