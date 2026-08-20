@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
+// CI probe for the final Stage 4 human-controlled generated-media contract.
 function source(path: string) {
   return readFileSync(new URL(`../../${path}`, import.meta.url), "utf8");
 }
