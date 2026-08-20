@@ -1,5 +1,4 @@
 import { CONTENT_LIMITS } from "@/lib/agent/config";
-import { getKieConfig } from "@/lib/env/env.server";
 import { createWebFetchProvider } from "./fetch-provider";
 import { canonicalizeWebUrl, isDomainAllowed } from "./normalization";
 import type { WebPageImageCandidate } from "./page-images";
@@ -55,6 +54,20 @@ function safeCanonicalUrl(raw: string): string | null {
     return canonicalizeWebUrl(parsed.toString());
   } catch {
     return null;
+  }
+}
+
+function normalizeKieBaseUrl(raw: string | undefined): string {
+  const trimmed = (raw ?? "").trim().replace(/\/+$/, "");
+  if (!trimmed) return "https://api.kie.ai";
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.hostname === "api.kie.ai" || parsed.hostname.endsWith(".kie.ai")) {
+      return `${parsed.protocol}//${parsed.host}`;
+    }
+    return trimmed;
+  } catch {
+    return trimmed;
   }
 }
 
@@ -332,10 +345,11 @@ export class KieGeminiGroundedSearchProvider implements WebSearchProvider {
 }
 
 export function createKieGeminiGroundedSearchProvider(fetchProvider?: WebFetchProvider): WebSearchProvider {
-  const kie = getKieConfig();
-  if (!kie.configured) {
+  const apiKey = (process.env.KIE_API_KEY ?? process.env.AGENT_LLM_API_KEY ?? "").trim();
+  if (!apiKey) {
     throw new WebToolError("WEB_SEARCH_NOT_CONFIGURED", "KIE API key is required for KIE grounded search");
   }
+  const baseUrl = normalizeKieBaseUrl(process.env.KIE_API_BASE_URL ?? process.env.AGENT_LLM_BASE_URL);
   const model = (process.env.KIE_WEB_SEARCH_MODEL ?? "").trim() || "gemini-3-6-flash";
-  return new KieGeminiGroundedSearchProvider(kie.baseUrl, kie.apiKey, model, fetchProvider);
+  return new KieGeminiGroundedSearchProvider(baseUrl, apiKey, model, fetchProvider);
 }
