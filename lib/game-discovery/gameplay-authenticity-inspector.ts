@@ -123,11 +123,19 @@ function normalizeImageObservation(raw: Record<string, unknown>) {
 }
 
 function normalizeVideoObservation(raw: Record<string, unknown>) {
+  const cameraPhysicallyAttachedThroughout = bool(raw.cameraPhysicallyAttachedThroughout);
+  const cinematicCameraMovement = bool(raw.cinematicCameraMovement);
+  const cameraContinuousRaw = bool(raw.cameraContinuous);
+  const cameraContinuous =
+    typeof cameraContinuousRaw === "boolean"
+      ? cameraContinuousRaw
+      : cameraPhysicallyAttachedThroughout === true && cinematicCameraMovement === false;
+
   return gameplayVideoAuthenticityObservationV1Schema.parse({
     couldBeContinuousGameplayCapture: bool(raw.couldBeContinuousGameplayCapture),
-    cameraContinuous: bool(raw.cameraContinuous),
-    cameraPhysicallyAttachedThroughout: bool(raw.cameraPhysicallyAttachedThroughout),
-    cinematicCameraMovement: bool(raw.cinematicCameraMovement),
+    cameraContinuous,
+    cameraPhysicallyAttachedThroughout,
+    cinematicCameraMovement,
     handsOrToolsExpected: bool(raw.handsOrToolsExpected),
     handsToolsStableIfExpected: bool(raw.handsToolsStableIfExpected),
     hudPresent: bool(raw.hudPresent),
