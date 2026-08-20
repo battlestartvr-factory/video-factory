@@ -139,7 +139,7 @@ function upsertChunk(
 }
 
 function extractHttpUrls(text: string): string[] {
-  const matches = text.match(/https?:\/\/[^\s<>"'`]+/gi) ?? [];
+  const matches = text.match(/https?:\/\/[^\s<>"'`|]+/gi) ?? [];
   const output: string[] = [];
   const seen = new Set<string>();
   for (const match of matches) {
