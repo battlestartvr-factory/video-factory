@@ -15,6 +15,8 @@ import {
 import { KieClaudeTaskAdapter } from "../lib/models/kie/claude-task";
 import { KieMarketTaskAdapter } from "../lib/models/kie/market-task";
 import { KieVeoTaskAdapter } from "../lib/models/kie/veo-task";
+import { MockResearchScoutExecutor } from "../lib/research-intelligence/mock-scout-executor";
+import { ResearchScoutRepository } from "../lib/research-intelligence/scout-runtime";
 import { loadWorkerConfig, type WorkerConfig } from "./config";
 import { workerLog } from "./log";
 import { createWorkerRpcClient } from "./rpc-client";
@@ -95,12 +97,14 @@ async function safeAck(
     const archived = await queue.ack(delivery.msgId);
     workerLog(archived ? "info" : "warn", "orchestrator.queue.ack", {
       ...fields,
+      queue_mode: queue.mode,
       queue_msg_id: delivery.msgId,
       archived,
     });
   } catch (error) {
     workerLog("error", "orchestrator.queue.ack_failed", {
       ...fields,
+      queue_mode: queue.mode,
       queue_msg_id: delivery.msgId,
       error: errorPayload(error),
     });
@@ -114,12 +118,13 @@ async function processClaimedDelivery(input: {
   queue: PgmqQueueAdapter;
   services: WorkflowServices;
   config: WorkerConfig;
-  setActiveAbort: (controller: AbortController | null) => void;
+  registerAbort: (controller: AbortController) => () => void;
   isStopping: () => boolean;
 }): Promise<void> {
   const { delivery, claimed, repository, queue, services, config } = input;
   const fields = {
     worker_id: config.workerId,
+    queue_mode: config.queueMode,
     job_id: claimed.jobId,
     workflow_kind: claimed.workflowKind,
     workflow_version: claimed.workflowVersion,
@@ -131,7 +136,7 @@ async function processClaimedDelivery(input: {
   };
 
   const controller = new AbortController();
-  input.setActiveAbort(controller);
+  const unregisterAbort = input.registerAbort(controller);
   let leaseLost = false;
   let heartbeatInFlight = false;
 
@@ -234,6 +239,7 @@ async function processClaimedDelivery(input: {
         ...(outcome.eventPayload ?? {}),
         trace_id: delivery.message.trace_id,
       },
+      creativeRunId: outcome.creativeRunId,
       enqueueReason: outcome.enqueueReason,
       traceId: delivery.message.trace_id,
     });
@@ -256,7 +262,7 @@ async function processClaimedDelivery(input: {
     await safeAck(queue, delivery, fields);
   } finally {
     clearInterval(heartbeatTimer);
-    input.setActiveAbort(null);
+    unregisterAbort();
   }
 }
 
@@ -280,13 +286,16 @@ export async function runWorker(): Promise<void> {
   const config = loadWorkerConfig();
   const rpcClient = createWorkerRpcClient(config.supabaseUrl, config.serviceRoleKey);
   const repository = new OrchestratorRepository(rpcClient);
-  const queue = new PgmqQueueAdapter(rpcClient);
+  const queue = new PgmqQueueAdapter(rpcClient, config.queueMode);
+  const researchScouts = new ResearchScoutRepository(rpcClient);
   const services: WorkflowServices = {
     providerTasks: new ProviderTaskRepository(rpcClient),
     generationImages: new GenerationImageRepository(rpcClient),
     generationVideos: new GenerationVideoRepository(rpcClient),
     gameDiscovery: new GameDiscoveryWorkerRepository(rpcClient),
     gameDiscoveryVideo: new GameDiscoveryVideoRepository(rpcClient),
+    researchScouts,
+    researchScoutExecutor: config.mockWorkflows ? new MockResearchScoutExecutor() : null,
     kieClaude: config.kieApiKey
       ? new KieClaudeTaskAdapter(config.kieApiBaseUrl, config.kieApiKey)
       : null,
@@ -299,27 +308,44 @@ export async function runWorker(): Promise<void> {
     appUrl: config.appUrl,
   };
   let stopping = false;
-  let activeAbort: AbortController | null = null;
+  const activeAborts = new Set<AbortController>();
   let watchdogInFlight = false;
   let gameplayReferenceSyncInFlight = false;
+
+  const registerAbort = (controller: AbortController) => {
+    activeAborts.add(controller);
+    return () => activeAborts.delete(controller);
+  };
 
   const stop = (signal: string) => {
     if (stopping) return;
     stopping = true;
     workerLog("warn", "orchestrator.worker.stopping", {
       worker_id: config.workerId,
+      queue_mode: config.queueMode,
       signal,
+      active_jobs: activeAborts.size,
     });
-    activeAbort?.abort(new Error(`worker shutdown: ${signal}`));
+    for (const controller of activeAborts) {
+      controller.abort(new Error(`worker shutdown: ${signal}`));
+    }
   };
 
   process.on("SIGTERM", () => stop("SIGTERM"));
   process.on("SIGINT", () => stop("SIGINT"));
 
+  const heartbeatMetadata = () => ({
+    workflows: listRegisteredWorkflows(),
+    pid: process.pid,
+    queue_mode: config.queueMode,
+    concurrency: config.workerConcurrency,
+    mock_workflows: config.mockWorkflows,
+  });
+
   await repository.heartbeatWorker({
     workerId: config.workerId,
     buildSha: config.buildSha,
-    metadata: { workflows: listRegisteredWorkflows(), pid: process.pid },
+    metadata: heartbeatMetadata(),
   });
 
   const workerHeartbeatTimer = setInterval(() => {
@@ -327,11 +353,12 @@ export async function runWorker(): Promise<void> {
       .heartbeatWorker({
         workerId: config.workerId,
         buildSha: config.buildSha,
-        metadata: { workflows: listRegisteredWorkflows(), pid: process.pid },
+        metadata: heartbeatMetadata(),
       })
       .catch((error) =>
         workerLog("error", "orchestrator.worker.heartbeat_failed", {
           worker_id: config.workerId,
+          queue_mode: config.queueMode,
           error: errorPayload(error),
         }),
       );
@@ -345,6 +372,7 @@ export async function runWorker(): Promise<void> {
       if (result.recovered > 0 || result.staleLeases > 0) {
         workerLog("warn", "orchestrator.watchdog.recovered", {
           worker_id: config.workerId,
+          queue_mode: config.queueMode,
           recovered: result.recovered,
           stale_leases: result.staleLeases,
         });
@@ -352,6 +380,7 @@ export async function runWorker(): Promise<void> {
     } catch (error) {
       workerLog("error", "orchestrator.watchdog.failed", {
         worker_id: config.workerId,
+        queue_mode: config.queueMode,
         error: errorPayload(error),
       });
     } finally {
@@ -360,7 +389,7 @@ export async function runWorker(): Promise<void> {
   };
 
   const runGameplayReferenceSync = async () => {
-    if (gameplayReferenceSyncInFlight || stopping) return;
+    if (gameplayReferenceSyncInFlight || stopping || config.queueMode !== "core") return;
     gameplayReferenceSyncInFlight = true;
     try {
       const response = await fetch(`${workerInternalAppUrl()}/api/internal/gameplay-reference-sync`, {
@@ -414,23 +443,82 @@ export async function runWorker(): Promise<void> {
   await runWatchdog();
   const watchdogTimer = setInterval(() => void runWatchdog(), config.watchdogMs);
 
-  await runGameplayReferenceSync();
-  const gameplayReferenceSyncTimer = setInterval(
-    () => void runGameplayReferenceSync(),
-    gameplayReferenceSyncIntervalMs(),
-  );
+  let gameplayReferenceSyncTimer: ReturnType<typeof setInterval> | null = null;
+  if (config.queueMode === "core") {
+    await runGameplayReferenceSync();
+    gameplayReferenceSyncTimer = setInterval(
+      () => void runGameplayReferenceSync(),
+      gameplayReferenceSyncIntervalMs(),
+    );
+  }
 
   workerLog("info", "orchestrator.worker.started", {
     worker_id: config.workerId,
     build_sha: config.buildSha,
     workflows: listRegisteredWorkflows(),
+    queue_mode: config.queueMode,
+    worker_concurrency: config.workerConcurrency,
     lease_seconds: config.leaseSeconds,
     visibility_seconds: config.visibilitySeconds,
     watchdog_ms: config.watchdogMs,
     max_attempts: config.maxAttempts,
-    gameplay_reference_drive_sync_ms: gameplayReferenceSyncIntervalMs(),
-    gameplay_reference_drive_sync_max_new: gameplayReferenceSyncBatchSize(),
+    mock_workflows: config.mockWorkflows,
+    ...(config.queueMode === "core"
+      ? {
+          gameplay_reference_drive_sync_ms: gameplayReferenceSyncIntervalMs(),
+          gameplay_reference_drive_sync_max_new: gameplayReferenceSyncBatchSize(),
+        }
+      : {}),
   });
+
+  const processDelivery = async (delivery: QueueDelivery) => {
+    if (stopping) return;
+    const baseFields = {
+      worker_id: config.workerId,
+      queue_mode: config.queueMode,
+      job_id: delivery.message.job_id,
+      queue_msg_id: delivery.msgId,
+      queue_read_count: delivery.readCount,
+      trace_id: delivery.message.trace_id,
+      reason: delivery.message.reason,
+    };
+
+    let claim;
+    try {
+      claim = await repository.claimJob(
+        delivery.message.job_id,
+        config.workerId,
+        config.leaseSeconds,
+      );
+    } catch (error) {
+      workerLog("error", "orchestrator.job.claim_failed", {
+        ...baseFields,
+        error: errorPayload(error),
+      });
+      return;
+    }
+
+    if (!claim.claimed) {
+      workerLog("info", "orchestrator.job.delivery_skipped", {
+        ...baseFields,
+        reason: claim.reason,
+        status: claim.status,
+      });
+      await safeAck(queue, delivery, baseFields);
+      return;
+    }
+
+    await processClaimedDelivery({
+      delivery,
+      claimed: claim,
+      repository,
+      queue,
+      services,
+      config,
+      registerAbort,
+      isStopping: () => stopping,
+    });
+  };
 
   try {
     while (!stopping) {
@@ -438,11 +526,12 @@ export async function runWorker(): Promise<void> {
       try {
         deliveries = await queue.read({
           visibilitySeconds: config.visibilitySeconds,
-          quantity: 1,
+          quantity: config.workerConcurrency,
         });
       } catch (error) {
         workerLog("error", "orchestrator.queue.read_failed", {
           worker_id: config.workerId,
+          queue_mode: config.queueMode,
           error: errorPayload(error),
         });
         await sleep(Math.max(config.queuePollMs, 2000));
@@ -454,61 +543,21 @@ export async function runWorker(): Promise<void> {
         continue;
       }
 
-      for (const delivery of deliveries) {
-        if (stopping) break;
-        const baseFields = {
-          worker_id: config.workerId,
-          job_id: delivery.message.job_id,
-          queue_msg_id: delivery.msgId,
-          queue_read_count: delivery.readCount,
-          trace_id: delivery.message.trace_id,
-          reason: delivery.message.reason,
-        };
-
-        let claim;
-        try {
-          claim = await repository.claimJob(
-            delivery.message.job_id,
-            config.workerId,
-            config.leaseSeconds,
-          );
-        } catch (error) {
-          workerLog("error", "orchestrator.job.claim_failed", {
-            ...baseFields,
-            error: errorPayload(error),
-          });
-          continue;
-        }
-
-        if (!claim.claimed) {
-          workerLog("info", "orchestrator.job.delivery_skipped", {
-            ...baseFields,
-            reason: claim.reason,
-            status: claim.status,
-          });
-          await safeAck(queue, delivery, baseFields);
-          continue;
-        }
-
-        await processClaimedDelivery({
-          delivery,
-          claimed: claim,
-          repository,
-          queue,
-          services,
-          config,
-          setActiveAbort: (controller) => {
-            activeAbort = controller;
-          },
-          isStopping: () => stopping,
-        });
-      }
+      // Concurrency is across independent durable jobs/leases. A root ResearchRun never
+      // holds one long lease while Promise.all executes five Scouts in-process.
+      await Promise.all(deliveries.map((delivery) => processDelivery(delivery)));
     }
   } finally {
     clearInterval(workerHeartbeatTimer);
     clearInterval(watchdogTimer);
-    clearInterval(gameplayReferenceSyncTimer);
-    workerLog("info", "orchestrator.worker.stopped", { worker_id: config.workerId });
+    if (gameplayReferenceSyncTimer) clearInterval(gameplayReferenceSyncTimer);
+    for (const controller of activeAborts) {
+      if (!controller.signal.aborted) controller.abort(new Error("worker stopped"));
+    }
+    workerLog("info", "orchestrator.worker.stopped", {
+      worker_id: config.workerId,
+      queue_mode: config.queueMode,
+    });
   }
 }
 
