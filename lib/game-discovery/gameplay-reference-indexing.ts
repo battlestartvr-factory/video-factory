@@ -162,6 +162,9 @@ function normalizeOptionalText(value: unknown): unknown {
   // A boolean cannot be safely expanded into descriptive evidence, so fail closed to null.
   // Dedicated visibility booleans preserve the actual yes/no signal elsewhere in the schema.
   if (typeof value === "boolean") return null;
+  // Numeric distance/height values are still valid evidence; stringify the observed scalar
+  // rather than rejecting a paid caption or inventing a qualitative label such as "close".
+  if (typeof value === "number" && Number.isFinite(value)) return String(value);
   if (typeof value !== "string") return value;
   const trimmed = value.trim();
   return trimmed ? trimmed : null;
@@ -172,6 +175,12 @@ function normalizeRequiredVisibleText(value: unknown): unknown {
   if (typeof value !== "string") return value;
   const trimmed = value.trim();
   return trimmed || GAMEPLAY_REFERENCE_NONE_VISIBLE;
+}
+
+function normalizeRequiredTag(value: unknown): unknown {
+  if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  if (typeof value !== "string") return value;
+  return value.trim();
 }
 
 function normalizeStringArray(value: unknown): unknown {
@@ -310,6 +319,7 @@ export function normalizeGameplayReferenceCaptionPayload(value: unknown): unknow
   normalized.cameraType = normalizeCameraType(normalized.cameraType);
   normalized.productionScopeFeel = normalizeScope(normalized.productionScopeFeel);
   normalized.visualClutter = normalizeClutter(normalized.visualClutter);
+  normalized.realismLevel = normalizeRequiredTag(normalized.realismLevel);
   normalized.fovEstimate = normalizeNumber(normalized.fovEstimate);
   normalized.teammateCountVisible = normalizeNumber(normalized.teammateCountVisible);
   normalized.visibleInputAffordance = normalizeRequiredVisibleText(
