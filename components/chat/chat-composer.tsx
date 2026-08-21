@@ -76,11 +76,12 @@ export function ChatComposer({
   const [files, setFiles] = useState<PendingFile[]>([]);
   const [dragOver, setDragOver] = useState(false);
   const [submitting, setSubmitting] = useState(false);
-  const [autoStopRunId, setAutoStopRunId] = useState<string | null>(null);
+  const [autoStopTarget, setAutoStopTarget] = useState<{ chatId: string; runId: string } | null>(null);
   const [autoStopPending, setAutoStopPending] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const isHero = variant === "hero";
+  const autoStopRunId = autoStopTarget?.chatId === chatId ? autoStopTarget.runId : null;
   const effectiveStopActive = stopActive || Boolean(autoStopRunId);
   const effectiveStopPending = stopPending || autoStopPending;
   const effectiveDisabled = disabled || submitting;
@@ -90,41 +91,68 @@ export function ChatComposer({
     if (!chatId || stopActive) return;
 
     let cancelled = false;
-    let inFlight = false;
+    let source: EventSource | null = null;
+    let attachedRunId: string | null = null;
 
-    const inspect = async () => {
-      if (inFlight || cancelled) return;
-      inFlight = true;
-      try {
-        const messagesResponse = await fetch(`/api/chats/${chatId}/messages?limit=50`, { cache: "no-store" });
-        if (!messagesResponse.ok) return;
-        const messagesPayload = await messagesResponse.json().catch(() => null);
-        const runId = latestDiscoveryV2RunId(messagesPayload);
-        if (!runId) {
-          if (!cancelled) setAutoStopRunId(null);
-          return;
-        }
-
-        const batchResponse = await fetch(`/api/discovery/batches/${runId}`, { cache: "no-store" });
-        if (!batchResponse.ok) return;
-        const batchPayload = await batchResponse.json().catch(() => null);
-        const status = object(object(object(batchPayload).data).factoryJob).status;
-        if (cancelled) return;
-        setAutoStopRunId(
-          typeof status === "string" && !TERMINAL_FACTORY_STATUSES.has(status) ? runId : null,
-        );
-      } finally {
-        inFlight = false;
-      }
+    const detach = () => {
+      source?.close();
+      source = null;
+      attachedRunId = null;
     };
 
-    void inspect();
-    const timer = window.setInterval(() => void inspect(), autoStopRunId ? 1_500 : 4_000);
+    const markInactive = (runId: string) => {
+      setAutoStopTarget((current) => current?.runId === runId ? null : current);
+      if (attachedRunId === runId) detach();
+    };
+
+    const attach = (runId: string) => {
+      if (cancelled || attachedRunId === runId) return;
+      detach();
+      attachedRunId = runId;
+      setAutoStopTarget({ chatId, runId });
+      source = new EventSource(`/api/discovery/batches/${runId}/trace`);
+      source.addEventListener("trace", ((message: MessageEvent<string>) => {
+        try {
+          const payload = object(JSON.parse(message.data));
+          if (payload.eventType === "job.cancelled") markInactive(runId);
+        } catch {
+          // A malformed trace frame must not disable a valid Stop button.
+        }
+      }) as EventListener);
+      source.addEventListener("done", () => markInactive(runId));
+    };
+
+    const inspectOnce = async () => {
+      const messagesResponse = await fetch(`/api/chats/${chatId}/messages?limit=50`, { cache: "no-store" });
+      if (!messagesResponse.ok || cancelled) return;
+      const messagesPayload = await messagesResponse.json().catch(() => null);
+      const runId = latestDiscoveryV2RunId(messagesPayload);
+      if (!runId || cancelled) return;
+
+      const batchResponse = await fetch(`/api/discovery/batches/${runId}`, { cache: "no-store" });
+      if (!batchResponse.ok || cancelled) return;
+      const batchPayload = await batchResponse.json().catch(() => null);
+      const status = object(object(object(batchPayload).data).factoryJob).status;
+      if (typeof status === "string" && !TERMINAL_FACTORY_STATUSES.has(status)) attach(runId);
+    };
+
+    const onActivity = (event: Event) => {
+      if (!(event instanceof CustomEvent)) return;
+      const detail = object(event.detail);
+      const runId = typeof detail.runId === "string" ? detail.runId : null;
+      if (!runId) return;
+      if (detail.active === true) attach(runId);
+      else if (detail.active === false) markInactive(runId);
+    };
+
+    window.addEventListener("game-discovery-v2-activity", onActivity);
+    void inspectOnce();
     return () => {
       cancelled = true;
-      window.clearInterval(timer);
+      window.removeEventListener("game-discovery-v2-activity", onActivity);
+      detach();
     };
-  }, [autoStopRunId, chatId, stopActive]);
+  }, [chatId, stopActive]);
 
   const addFiles = useCallback((newFiles: FileList | File[]) => {
     const arr = Array.from(newFiles);
@@ -178,7 +206,11 @@ export function ChatComposer({
       });
       const payload = await response.json().catch(() => null);
       if (!response.ok || !payload?.ok) return;
-      setAutoStopRunId(null);
+      const stoppedRunId = autoStopRunId;
+      setAutoStopTarget(null);
+      window.dispatchEvent(new CustomEvent("game-discovery-v2-activity", {
+        detail: { runId: stoppedRunId, active: false },
+      }));
     } finally {
       setAutoStopPending(false);
     }
