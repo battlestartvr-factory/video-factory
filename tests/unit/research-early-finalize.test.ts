@@ -168,11 +168,15 @@ describe("PR4 Research early-finalize eligibility", () => {
 });
 
 describe("PR4 durable Answer now contract", () => {
-  it("revalidates coverage in the database, cancels/fences only unfinished Scouts, and keeps the root alive", () => {
+  it("revalidates coverage, fences a stale root lease, cancels/fences only unfinished Scouts, and keeps the root executable", () => {
     expect(requestMigration).toContain("orchestrator_request_research_early_finalize");
     expect(requestMigration).toContain("v_root.current_stage <> 'waiting_research_scouts'");
     expect(requestMigration).toContain("(v_early->>'eligible')::BOOLEAN");
     expect(requestMigration).toContain("public.research_early_finalize_scout_fanout(v_research_run_id)");
+    expect(requestMigration).toContain("status = 'queued'");
+    expect(requestMigration).toContain("lease_owner = NULL");
+    expect(requestMigration).toContain("lease_token = NULL");
+    expect(requestMigration).toContain("lease_expires_at = NULL");
     expect(requestMigration).toContain("state = jsonb_set(v_state, '{research_early_finalize}', v_early, true)");
     expect(requestMigration).toContain("next_action_at = NOW()");
     expect(requestMigration).toContain("'research.early_finalize_requested'");
