@@ -98,11 +98,20 @@ BEGIN
     'finalization', 'early_finalized'
   );
 
+  -- The root remains executable, but an already-running waiting-stage worker may
+  -- still hold a stale copy of state from immediately before the user's click.
+  -- Revoke that lease and requeue the same root stage so its stale finishTick is
+  -- rejected by the normal lease-token fence instead of overwriting requested=true.
   UPDATE public.factory_jobs AS fj
   SET
+    status = 'queued',
     state = jsonb_set(v_state, '{research_early_finalize}', v_early, true),
     state_reason = 'research_early_finalize_requested',
     next_action_at = NOW(),
+    lease_owner = NULL,
+    lease_token = NULL,
+    lease_expires_at = NULL,
+    last_heartbeat_at = NULL,
     updated_at = NOW()
   WHERE fj.id = p_root_job_id;
 
@@ -138,4 +147,4 @@ GRANT EXECUTE ON FUNCTION public.orchestrator_request_research_early_finalize(UU
   TO service_role;
 
 COMMENT ON FUNCTION public.orchestrator_request_research_early_finalize(UUID, UUID) IS
-  'User-authorized Answer-now boundary: revalidates coverage, scoped-cancels/fences unfinished Research Scouts, and wakes the root run for early-finalized synthesis.';
+  'User-authorized Answer-now boundary: revalidates coverage, scoped-cancels/fences unfinished Research Scouts, fences a stale root waiting-stage lease, and wakes the root run for early-finalized synthesis.';
