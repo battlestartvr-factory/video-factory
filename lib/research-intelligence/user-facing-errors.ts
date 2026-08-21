@@ -35,7 +35,8 @@ function looksLikeTechnicalDump(message: string): boolean {
 
 export function researchUserFacingFailure(error: unknown): ResearchUserFacingFailure {
   const row = object(error);
-  const code = stringValue(row.code);
+  const rawCode = stringValue(row.code);
+  const code = rawCode ? rawCode.slice(0, 120) : null;
   if (code && FRIENDLY_RESEARCH_ERRORS[code]) {
     return { code, message: FRIENDLY_RESEARCH_ERRORS[code]! };
   }
