@@ -119,7 +119,6 @@ describe("2026-08-21 production source identity regression", () => {
       }
     }
 
-    expect(coverage).toEqual(expect.objectContaining ? coverage : coverage);
     expect([...coverage]).toEqual(expect.arrayContaining([
       "competitor",
       "mechanics",
