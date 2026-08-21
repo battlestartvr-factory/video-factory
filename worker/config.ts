@@ -65,7 +65,10 @@ export function loadWorkerConfig(): WorkerConfig {
 
   const leaseSeconds = integerEnv("ORCHESTRATOR_LEASE_SECONDS", 90, 15, 900);
   const visibilitySeconds = integerEnv("ORCHESTRATOR_VISIBILITY_SECONDS", 120, 15, 3600);
-  const leaseHeartbeatMs = integerEnv("ORCHESTRATOR_LEASE_HEARTBEAT_MS", 30_000, 5_000, 300_000);
+  // Heartbeat is also the durable cancellation fence: orchestrator_request_cancel clears
+  // the active lease, so the next heartbeat aborts the in-flight job. Keep this short
+  // enough for a ChatGPT-style Stop button without introducing a second polling loop.
+  const leaseHeartbeatMs = integerEnv("ORCHESTRATOR_LEASE_HEARTBEAT_MS", 1_000, 250, 300_000);
   const queueMode = queueModeEnv();
 
   if (leaseHeartbeatMs >= leaseSeconds * 1000) {
