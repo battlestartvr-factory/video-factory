@@ -73,6 +73,10 @@ else
   git reset --hard origin/main
 fi
 
+log "Validating checked-in schema contract"
+bash scripts/check-schema-contract.sh
+EXPECTED_SCHEMA_VERSION="$(tr -d '\r\n[:space:]' < supabase/schema-contract.txt)"
+
 log "Loading production env from $ENV_FILE"
 set -a
 # shellcheck disable=SC1090
@@ -88,6 +92,28 @@ export DEPLOY_COMMIT="$(git rev-parse HEAD)"
 if [[ -z "${SUPABASE_SERVICE_ROLE_KEY:-}" && -z "${SUPABASE_SECRET_KEY:-}" ]]; then
   fail "SUPABASE_SERVICE_ROLE_KEY or SUPABASE_SECRET_KEY is required for the durable worker"
 fi
+SUPABASE_SERVER_KEY="${SUPABASE_SERVICE_ROLE_KEY:-${SUPABASE_SECRET_KEY:-}}"
+
+log "Verifying production database schema contract"
+schema_contract_response=""
+if ! schema_contract_response="$(curl -sS --fail-with-body --max-time 20 \
+  -X POST "${NEXT_PUBLIC_SUPABASE_URL%/}/rest/v1/rpc/orchestrator_get_deployment_schema_contract" \
+  -H "apikey: ${SUPABASE_SERVER_KEY}" \
+  -H "Authorization: Bearer ${SUPABASE_SERVER_KEY}" \
+  -H "Content-Type: application/json" \
+  --data '{}')"; then
+  fail "Unable to read production database schema contract; apply required Supabase migrations before deploying application code"
+fi
+schema_contract_compact="$(printf '%s' "$schema_contract_response" | tr -d '\r\n[:space:]')"
+DATABASE_SCHEMA_VERSION=""
+if [[ "$schema_contract_compact" =~ \"schema_version\":\"([0-9]{14})\" ]]; then
+  DATABASE_SCHEMA_VERSION="${BASH_REMATCH[1]}"
+fi
+[[ -n "$DATABASE_SCHEMA_VERSION" ]] || fail "Production database returned an invalid schema contract: $schema_contract_response"
+if [[ "$DATABASE_SCHEMA_VERSION" != "$EXPECTED_SCHEMA_VERSION" ]]; then
+  fail "Database schema drift: production=$DATABASE_SCHEMA_VERSION application=$EXPECTED_SCHEMA_VERSION. Apply Supabase migrations first; application deploy is blocked."
+fi
+log "Database schema contract matches application: $EXPECTED_SCHEMA_VERSION"
 
 [[ "${GOOGLE_DRIVE_INTEGRATION_ENABLED:-false}" == "true" ]] || fail "GOOGLE_DRIVE_INTEGRATION_ENABLED=true is required for durable media archive"
 : "${GOOGLE_DRIVE_SHARED_FOLDER_ID:?GOOGLE_DRIVE_SHARED_FOLDER_ID is required for durable media archive}"
