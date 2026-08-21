@@ -46,6 +46,16 @@ jobs:
           docker run --rm --entrypoint ffmpeg video-factory-worker:ci -version
           docker run --rm --entrypoint ffprobe video-factory-worker:ci -version
 
-      - run: pnpm test
+      - name: Unit tests shard 1 of 4
+        run: pnpm exec vitest run --shard=1/4
+
+      - name: Unit tests shard 2 of 4
+        run: pnpm exec vitest run --shard=2/4
+
+      - name: Unit tests shard 3 of 4
+        run: pnpm exec vitest run --shard=3/4
+
+      - name: Unit tests shard 4 of 4
+        run: pnpm exec vitest run --shard=4/4
 
       - run: pnpm build
