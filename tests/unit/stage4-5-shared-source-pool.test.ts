@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { SharedSourcePoolResearchScoutExecutor, sanitizeSharedPoolEvidenceClaim } from "@/lib/research-intelligence/shared-source-pool-scout";
 import type { ResearchScoutJobContext } from "@/lib/research-intelligence/scout-runtime";
@@ -122,5 +124,15 @@ describe("shared verified research source pool", () => {
         expect(result.usage?.shared_source_pool_reused).toBe(true);
       }
     }
+  });
+
+  it("keeps shared acquisition to one searchText invocation so KIE cannot exceed two paid calls", () => {
+    const source = readFileSync(
+      join(process.cwd(), "lib/research-intelligence/shared-source-pool.ts"),
+      "utf8",
+    );
+    expect(source.match(/searchProvider\.searchText\(/g) ?? []).toHaveLength(1);
+    expect(source).toContain("const MAX_KIE_PROVIDER_CALLS = 2");
+    expect(source).not.toContain("recoveryAcquisitionQuery");
   });
 });
