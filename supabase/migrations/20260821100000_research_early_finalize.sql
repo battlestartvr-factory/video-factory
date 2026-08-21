@@ -10,7 +10,7 @@ CREATE OR REPLACE FUNCTION public.orchestrator_request_research_early_finalize(
 RETURNS JSONB
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = public
+SET search_path = public, pgmq
 AS $$
 DECLARE
   v_root RECORD;
@@ -19,6 +19,8 @@ DECLARE
   v_research_run_id UUID;
   v_finalize JSONB;
   v_cancelled_scouts INTEGER := 0;
+  v_queue_msg_id BIGINT;
+  v_trace_id UUID := gen_random_uuid();
 BEGIN
   IF p_root_job_id IS NULL OR p_user_id IS NULL THEN
     RAISE EXCEPTION 'root job id and user id are required';
@@ -130,12 +132,48 @@ BEGIN
   )
   ON CONFLICT (dedupe_key) DO NOTHING;
 
+  -- Do not wait for the watchdog's reenqueue-after window. Publish an immediate
+  -- wake-up in the same transaction as the durable boundary. A previously queued
+  -- message is harmless: orchestrator_claim_job serializes on the job row and the
+  -- lease token prevents concurrent/stale commits.
+  SELECT msg_id
+  INTO v_queue_msg_id
+  FROM pgmq.send(
+    'core_orchestrator_v1',
+    jsonb_build_object(
+      'v', 1,
+      'job_id', p_root_job_id,
+      'reason', 'research_early_finalize',
+      'trace_id', v_trace_id
+    ),
+    0
+  ) AS msg_id;
+
+  UPDATE public.factory_jobs AS fj
+  SET last_enqueued_at = NOW()
+  WHERE fj.id = p_root_job_id;
+
+  INSERT INTO public.factory_workflow_events(job_id, event_type, dedupe_key, payload)
+  VALUES (
+    p_root_job_id,
+    'job.enqueued',
+    'queue:enqueued:' || v_queue_msg_id::TEXT,
+    jsonb_build_object(
+      'queue', 'core_orchestrator_v1',
+      'queue_msg_id', v_queue_msg_id,
+      'reason', 'research_early_finalize',
+      'delay_seconds', 0,
+      'trace_id', v_trace_id
+    )
+  );
+
   RETURN jsonb_build_object(
     'accepted', true,
     'duplicate', COALESCE((v_finalize->>'duplicate')::BOOLEAN, FALSE),
     'root_job_id', p_root_job_id,
     'research_run_id', v_research_run_id,
     'cancelled_scouts', v_cancelled_scouts,
+    'queue_msg_id', v_queue_msg_id,
     'finalization', 'early_finalized'
   );
 END;
@@ -147,4 +185,4 @@ GRANT EXECUTE ON FUNCTION public.orchestrator_request_research_early_finalize(UU
   TO service_role;
 
 COMMENT ON FUNCTION public.orchestrator_request_research_early_finalize(UUID, UUID) IS
-  'User-authorized Answer-now boundary: revalidates coverage, scoped-cancels/fences unfinished Research Scouts, fences a stale root waiting-stage lease, and wakes the root run for early-finalized synthesis.';
+  'User-authorized Answer-now boundary: revalidates coverage, scoped-cancels/fences unfinished Research Scouts, fences a stale root waiting-stage lease, and atomically wakes the root run for early-finalized synthesis.';
