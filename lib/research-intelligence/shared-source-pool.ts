@@ -227,7 +227,10 @@ function missingCoverage(coverage: Set<SourceCoverageCategory>): SourceCoverageC
 }
 
 function titleTokens(value: string): string[] {
-  const stop = new Set(["on", "steam", "official", "site", "game", "the", "a", "an", "community", "hub"]);
+  const stop = new Set([
+    "on", "steam", "official", "site", "game", "the", "a", "an", "community", "hub",
+    "review", "reviews", "forum", "forums", "thread", "general", "discussion", "discussions", "page", "home",
+  ]);
   return value
     .normalize("NFKC")
     .toLowerCase()
@@ -238,16 +241,35 @@ function titleTokens(value: string): string[] {
 }
 
 export function hasClearResearchSourceTitleMismatch(expected: string, actual: string): boolean {
+  // A provider may put the direct URL in the title field, and some Safe Fetch
+  // destinations (notably YouTube) expose only a host-like fallback title. Neither
+  // is evidence that the grounded destination is a different source.
+  if (isGenericSearchTitle(expected) || isGenericSearchTitle(actual)) return false;
+
   const expectedTokens = [...new Set(titleTokens(expected))];
   const actualTokens = new Set(titleTokens(actual));
   if (expectedTokens.length < 2 || actualTokens.size < 2) return false;
+
   const overlap = expectedTokens.filter((token) => actualTokens.has(token)).length;
-  return overlap / expectedTokens.length < 0.5;
+  // Two shared meaningful tokens are a strong entity anchor for shapes such as
+  // "Party Animals Forum Physics Thread" -> "Party Animals General Discussions".
+  if (overlap >= 2) return false;
+
+  // With no strong anchor, require roughly two thirds of the expected semantic
+  // title to survive. This still rejects real cross-game mismatches.
+  return overlap / expectedTokens.length < 0.67;
 }
 
 function isGenericSearchTitle(value: string): boolean {
   const title = value.trim().toLowerCase();
-  return !title || /^(?:www\.)?[\w.-]+\.(?:com|net|org|io|gg)$/.test(title);
+  if (!title) return true;
+  try {
+    const parsed = new URL(title);
+    if (parsed.protocol === "http:" || parsed.protocol === "https:") return true;
+  } catch {
+    // Not a URL; continue with host-like fallback detection.
+  }
+  return /^(?:www\.)?[\w.-]+\.(?:com|net|org|io|gg)$/.test(title);
 }
 
 export interface SharedSourcePoolProgressEvent {
