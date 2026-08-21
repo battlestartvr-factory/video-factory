@@ -4,6 +4,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createWebFetchProvider } from "../../lib/web/fetch-provider";
 import { KieGeminiGroundedSearchProvider } from "../../lib/web/kie-grounded-search";
 import type { WebFetchProvider } from "../../lib/web/types";
+import { KieGroundedResearchScoutExecutor } from "../../lib/research-intelligence/kie-research-scout";
+import type { ResearchScoutJobContext } from "../../lib/research-intelligence/scout-runtime";
+import type { ResearchToolbox } from "../../lib/research-intelligence/toolbox";
 
 const migration = readFileSync(
   join(process.cwd(), "supabase/migrations/20260821080000_real_stop_cancellation.sql"),
@@ -39,6 +42,34 @@ function abortableFetchMock(onStart?: () => void) {
       );
     });
   });
+}
+
+function scoutContext(): ResearchScoutJobContext {
+  return {
+    researchRunId: "research-run-stop-test",
+    scoutRole: "mechanics",
+    assignment: {
+      role: "mechanics",
+      mandate: "Find current co-op mechanic patterns.",
+      queryAngles: ["shared physical systems"],
+      freshness: "recent",
+      sourcePreferences: ["Steam"],
+      forbiddenOverlap: [],
+      imageSearchRequired: false,
+      budget: {
+        maxSearchQueries: 1,
+        maxFetchedSources: 2,
+        maxEvidenceItems: 3,
+        maxImageCandidates: 0,
+        maxModelCalls: 1,
+      },
+    },
+    creativeRunId: "creative-run-stop-test",
+    rootFactoryJobId: "root-job-stop-test",
+    rootCreativeRunId: "root-run-stop-test",
+    objectiveId: "objective-stop-test",
+    existingReport: null,
+  };
 }
 
 afterEach(() => {
@@ -142,6 +173,29 @@ describe("PR1 Real Stop provider abort boundary", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
     expect(init.signal?.aborted).toBe(true);
+  });
+
+  it("starts zero new paid/provider calls after the Stop signal is already observed", async () => {
+    const searchText = vi.fn();
+    const fetchSource = vi.fn();
+    const toolbox = {
+      searchText,
+      fetchSource,
+      searchImages: vi.fn(),
+      fetchImage: vi.fn(),
+    } as unknown as ResearchToolbox;
+    const executor = new KieGroundedResearchScoutExecutor(toolbox);
+    const controller = new AbortController();
+    controller.abort(new Error("user_stop"));
+
+    await expect(executor.execute({
+      jobId: "scout-job-stop-test",
+      context: scoutContext(),
+      signal: controller.signal,
+    })).rejects.toThrow("user_stop");
+
+    expect(searchText).not.toHaveBeenCalled();
+    expect(fetchSource).not.toHaveBeenCalled();
   });
 
   it("constructs KIE search and Safe Fetch per Scout execution with the worker AbortSignal", () => {
