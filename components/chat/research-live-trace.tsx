@@ -133,7 +133,9 @@ export function ResearchLiveTrace({
   const materialUpdateRef = useRef(onMaterialUpdate);
   const refreshTimerRef = useRef<number | null>(null);
 
-  materialUpdateRef.current = onMaterialUpdate;
+  useEffect(() => {
+    materialUpdateRef.current = onMaterialUpdate;
+  }, [onMaterialUpdate]);
 
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 1_000);
