@@ -90,24 +90,24 @@ function stageLabel(stage: string | null): string {
     objective_ready: "Цель принята",
     concept_generation_pending: "Генерация концептов",
     human_concept_approval_pending: "Нужно ваше решение по идеям игр",
-    concept_revision_pending: "Переработка / замена концептов по вашему feedback",
+    concept_revision_pending: "Переработка или замена концептов по вашему комментарию",
     pre_evaluation_pending: "Предварительная оценка утверждённых концептов",
-    planning_moments_pending: "Планирование gameplay-моментов",
+    planning_moments_pending: "Планирование игровых моментов",
     shot_planning_pending: "Планирование кадра",
-    reference_image_generation_pending: "Подготовка reference-изображений",
-    reference_image_waiting: "Генерация reference-изображений",
-    human_reference_approval_pending: "Нужно ваше решение по reference",
-    reference_revision_pending: "Перегенерация reference по вашему feedback",
-    video_generation_pending: "Reference утверждён — видео разблокировано",
-    video_generation_waiting: "Генерация gameplay-видео",
-    human_video_approval_pending: "Нужно ваше решение по gameplay-видео",
-    video_revision_pending: "Перегенерация gameplay-видео по вашему feedback",
-    asset_graph_pending: "Фиксация lineage и AssetGraph",
-    assembly_pending: "Сборка вертикального prototype",
-    prototype_finalization_pending: "Финализация prototype",
-    completed: "Prototype готов",
-    reference_rejected_no_video: "Reference отклонён — видео не создаётся",
-    video_rejected_no_prototype: "Gameplay-видео отклонены — prototype не собирается",
+    reference_image_generation_pending: "Подготовка референс-изображений",
+    reference_image_waiting: "Генерация референс-изображений",
+    human_reference_approval_pending: "Нужно ваше решение по референс-изображению",
+    reference_revision_pending: "Перегенерация референса по вашему комментарию",
+    video_generation_pending: "Референс утверждён — видео разблокировано",
+    video_generation_waiting: "Генерация игрового видео",
+    human_video_approval_pending: "Нужно ваше решение по игровому видео",
+    video_revision_pending: "Перегенерация игрового видео по вашему комментарию",
+    asset_graph_pending: "Фиксация графа ассетов",
+    assembly_pending: "Сборка прототипа",
+    prototype_finalization_pending: "Финализация прототипа",
+    completed: "Прототип готов",
+    reference_rejected_no_video: "Референс отклонён — видео не создаётся",
+    video_rejected_no_prototype: "Игровые видео отклонены — прототип не собирается",
   };
   return stage ? labels[stage] ?? stage : "—";
 }
@@ -131,7 +131,7 @@ export function DiscoveryPageClient({ initialBatches }: { initialBatches: Discov
       ]);
       const payload = await detailResponse.json();
       if (!detailResponse.ok || !payload?.ok) {
-        throw new Error(payload?.error?.message ?? "Не удалось загрузить batch");
+        throw new Error(payload?.error?.message ?? "Не удалось загрузить запуск");
       }
 
       let conceptReviews: Array<Record<string, unknown>> = [];
@@ -145,7 +145,7 @@ export function DiscoveryPageClient({ initialBatches }: { initialBatches: Discov
       setDetail({ ...(payload.data as Omit<BatchDetail, "conceptReviews">), conceptReviews });
       setError(null);
     } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : "Не удалось загрузить batch");
+      setError(loadError instanceof Error ? loadError.message : "Не удалось загрузить запуск");
     } finally {
       if (!quiet) setLoading(false);
     }
@@ -220,7 +220,7 @@ export function DiscoveryPageClient({ initialBatches }: { initialBatches: Discov
     if (!selectedId) return;
     const feedback = feedbackByConceptRun[input.conceptRunId]?.trim() ?? "";
     if (input.decision !== "approve" && !feedback) {
-      setError("Для исправления или отклонения идеи напишите причину. Она станет negative/positive memory завода.");
+      setError("Для исправления или отклонения идеи напишите причину. Она сохранится как положительный или отрицательный опыт завода.");
       return;
     }
 
@@ -306,7 +306,7 @@ export function DiscoveryPageClient({ initialBatches }: { initialBatches: Discov
             <h1 className="text-2xl font-semibold text-foreground">Поиск игры</h1>
           </div>
           <p className="mt-1 max-w-3xl text-sm text-muted-foreground">
-            Концепт → ваше решение → gameplay-момент → reference → ваше решение → gameplay-видео → ваше решение → prototype.
+            Концепт → ваше решение → игровой момент → референс → ваше решение → игровое видео → ваше решение → прототип.
           </p>
         </div>
         {selectedId && (
@@ -321,9 +321,9 @@ export function DiscoveryPageClient({ initialBatches }: { initialBatches: Discov
         <div className="flex items-start gap-3">
           <ShieldCheck className="mt-0.5 h-5 w-5 shrink-0 text-accent" />
           <div>
-            <p className="text-sm font-medium text-foreground">Human approval gates активны для идей, картинок и видео</p>
+            <p className="text-sm font-medium text-foreground">Проверки человеком активны для идей, изображений и видео</p>
             <p className="mt-1 text-xs leading-5 text-muted-foreground">
-              Сначала вы утверждаете саму игру. «Исправить» создаёт новую версию той же идеи по вашему feedback. «Отклонить и заменить» полностью убирает идею из активного набора и требует механически нового концепта, а не рескина. Только после approval завод может перейти к gameplay-моментам и генерации медиа.
+              Сначала вы утверждаете саму игру. «Исправить» создаёт новую версию той же идеи по вашему комментарию. В текущем контуре «Отклонить» убирает идею из активного набора и запрашивает механически новый концепт, а не простой рескин. Только после вашего утверждения завод может перейти к игровым моментам и генерации медиа.
             </p>
           </div>
         </div>
@@ -333,7 +333,7 @@ export function DiscoveryPageClient({ initialBatches }: { initialBatches: Discov
 
       <div className="grid min-h-0 gap-5 lg:grid-cols-[280px_minmax(0,1fr)]">
         <aside className="rounded-xl border border-border bg-surface/70 p-3">
-          <p className="px-2 pb-2 text-xs font-semibold uppercase tracking-wider text-muted">Discovery batches</p>
+          <p className="px-2 pb-2 text-xs font-semibold uppercase tracking-wider text-muted">Запуски поиска игры</p>
           {batches.length === 0 ? (
             <p className="px-2 py-6 text-sm text-muted-foreground">Запусков пока нет.</p>
           ) : (
@@ -359,14 +359,14 @@ export function DiscoveryPageClient({ initialBatches }: { initialBatches: Discov
         <section className="min-w-0 space-y-4">
           {!detail ? (
             <div className="rounded-xl border border-border bg-surface/60 p-8 text-center text-sm text-muted-foreground">
-              {loading ? "Загружаем discovery batch…" : "Выберите discovery batch."}
+              {loading ? "Загружаем запуск…" : "Выберите запуск."}
             </div>
           ) : (
             <>
               <div className="rounded-xl border border-border bg-surface/70 p-4">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div>
-                    <h2 className="text-lg font-semibold text-foreground">{str(detail.root.title) || "Discovery batch"}</h2>
+                    <h2 className="text-lg font-semibold text-foreground">{str(detail.root.title) || "Запуск поиска игры"}</h2>
                     <p className="mt-1 text-sm text-muted-foreground">{stageLabel(currentStage)}</p>
                   </div>
                   <Badge>{progress}%</Badge>
@@ -418,17 +418,17 @@ export function DiscoveryPageClient({ initialBatches }: { initialBatches: Discov
                         <div className="min-w-0">
                           <h3 className="text-base font-semibold text-foreground">{str(concept.oneSentencePitch) || conceptId}</h3>
                           {str(concept.coopDependency) && (
-                            <p className="mt-2 text-sm leading-6 text-muted-foreground"><span className="font-medium text-foreground">Co-op dependency:</span> {str(concept.coopDependency)}</p>
+                            <p className="mt-2 text-sm leading-6 text-muted-foreground"><span className="font-medium text-foreground">Почему нужен совместный режим:</span> {str(concept.coopDependency)}</p>
                           )}
                         </div>
                         {prototypeReady ? (
-                          <Badge variant="success">prototype ready</Badge>
+                          <Badge variant="success">прототип готов</Badge>
                         ) : Boolean(evaluation.coOpDependency) ? (
                           <Badge variant={preEvalPassed ? "success" : "warning"}>
-                            pre-eval {preEvalPassed ? "pass" : "check"}
+                            предварительная оценка: {preEvalPassed ? "пройдена" : "нужна проверка"}
                           </Badge>
                         ) : conceptReview?.decision === "approve" ? (
-                          <Badge variant="success">human-approved concept</Badge>
+                          <Badge variant="success">концепт утверждён вами</Badge>
                         ) : null}
                       </div>
                     </div>
@@ -446,7 +446,7 @@ export function DiscoveryPageClient({ initialBatches }: { initialBatches: Discov
                     {Boolean(moment.momentId) && (
                       <div className="grid gap-3 border-b border-border p-4 md:grid-cols-2">
                         <div>
-                          <p className="text-[11px] font-semibold uppercase tracking-wider text-muted">Gameplay moment</p>
+                          <p className="text-[11px] font-semibold uppercase tracking-wider text-muted">Игровой момент</p>
                           <p className="mt-1 text-sm leading-6 text-foreground">{str(moment.hypothesis)}</p>
                         </div>
                         <div>
@@ -463,26 +463,26 @@ export function DiscoveryPageClient({ initialBatches }: { initialBatches: Discov
                     <div className="p-4">
                       {!generationId ? (
                         <p className="text-sm text-muted-foreground">
-                          {conceptGateActive ? "Media generation заблокирована до утверждения идеи." : "Reference ещё не поставлен в очередь."}
+                          {conceptGateActive ? "Генерация медиа заблокирована до утверждения идеи." : "Референс ещё не поставлен в очередь."}
                         </p>
                       ) : !imageUrl ? (
                         <div className="rounded-lg border border-dashed border-border p-6 text-center">
                           <RefreshCw className={cn("mx-auto h-5 w-5 text-muted", generation?.status !== "failed" && "animate-spin")} />
                           <p className="mt-2 text-sm text-muted-foreground">
-                            {generation?.status === "failed" ? "Reference generation завершилась ошибкой." : "Генерируется gameplay reference…"}
+                            {generation?.status === "failed" ? "Генерация референса завершилась ошибкой." : "Генерируется игровой референс…"}
                           </p>
                         </div>
                       ) : (
                         <div className="grid gap-4 xl:grid-cols-[minmax(0,420px)_minmax(0,1fr)]">
                           <div className="overflow-hidden rounded-xl border border-border bg-black/20">
                             {/* eslint-disable-next-line @next/next/no-img-element */}
-                            <img src={imageUrl} alt={`Gameplay reference ${conceptId}`} className="aspect-[9/16] w-full object-contain" />
+                            <img src={imageUrl} alt={`Игровой референс ${conceptId}`} className="aspect-[9/16] w-full object-contain" />
                           </div>
                           <div className="space-y-3">
                             <div className="flex items-center justify-between gap-3">
                               <div>
-                                <p className="text-sm font-medium text-foreground">Ваше решение по reference</p>
-                                <p className="mt-0.5 text-xs text-muted-foreground">ИИ не бракует картинку. Только ваше approve разблокирует видео.</p>
+                                <p className="text-sm font-medium text-foreground">Ваше решение по референсу</p>
+                                <p className="mt-0.5 text-xs text-muted-foreground">ИИ не бракует изображение. Только ваше утверждение разблокирует видео.</p>
                               </div>
                               <Badge variant={review?.decision === "approve" ? "success" : review?.decision === "reject" ? "danger" : review?.decision === "revise" ? "warning" : "secondary"}>
                                 {decisionLabel(review?.decision)}
@@ -492,7 +492,7 @@ export function DiscoveryPageClient({ initialBatches }: { initialBatches: Discov
                             <textarea
                               value={feedbackByGeneration[generationId] ?? str(review?.raw_feedback) ?? ""}
                               onChange={(event) => setFeedbackByGeneration((current) => ({ ...current, [generationId]: event.target.value }))}
-                              placeholder="Почему вы принимаете картинку или что нужно изменить? Комментарий сохранится как опыт завода."
+                              placeholder="Почему вы принимаете изображение или что нужно изменить? Комментарий сохранится как опыт завода."
                               className="min-h-28 w-full resize-y rounded-lg border border-border bg-background/60 px-3 py-2 text-sm text-foreground outline-none transition-colors placeholder:text-muted focus:border-accent"
                             />
 
@@ -510,7 +510,7 @@ export function DiscoveryPageClient({ initialBatches }: { initialBatches: Discov
 
                             {Boolean(review?.structured_feedback) && (
                               <div className="rounded-lg border border-border bg-background/40 p-3">
-                                <p className="text-[11px] font-semibold uppercase tracking-wider text-muted">Память из feedback</p>
+                                <p className="text-[11px] font-semibold uppercase tracking-wider text-muted">Память из комментария</p>
                                 <p className="mt-1 text-xs leading-5 text-muted-foreground">{str(object(review?.structured_feedback).summary)}</p>
                               </div>
                             )}
@@ -525,7 +525,7 @@ export function DiscoveryPageClient({ initialBatches }: { initialBatches: Discov
                           <div className="rounded-lg border border-dashed border-border p-6 text-center">
                             <RefreshCw className={cn("mx-auto h-5 w-5 text-muted", videoGeneration?.status !== "failed" && "animate-spin")} />
                             <p className="mt-2 text-sm text-muted-foreground">
-                              {videoGeneration?.status === "failed" ? "Gameplay-видео завершилось ошибкой провайдера." : "Генерируется gameplay-видео…"}
+                              {videoGeneration?.status === "failed" ? "Игровое видео завершилось ошибкой провайдера." : "Генерируется игровое видео…"}
                             </p>
                           </div>
                         ) : (
@@ -536,8 +536,8 @@ export function DiscoveryPageClient({ initialBatches }: { initialBatches: Discov
                             <div className="space-y-3">
                               <div className="flex items-center justify-between gap-3">
                                 <div>
-                                  <p className="text-sm font-medium text-foreground">Ваше решение по gameplay-видео</p>
-                                  <p className="mt-0.5 text-xs text-muted-foreground">ИИ не может забраковать это видео. Prototype собирается только из видео, которые утвердили вы.</p>
+                                  <p className="text-sm font-medium text-foreground">Ваше решение по игровому видео</p>
+                                  <p className="mt-0.5 text-xs text-muted-foreground">ИИ не может забраковать это видео. Прототип собирается только из видео, которые утвердили вы.</p>
                                 </div>
                                 <Badge variant={videoReview?.decision === "approve" ? "success" : videoReview?.decision === "reject" ? "danger" : videoReview?.decision === "revise" ? "warning" : "secondary"}>
                                   {decisionLabel(videoReview?.decision)}
@@ -547,7 +547,7 @@ export function DiscoveryPageClient({ initialBatches }: { initialBatches: Discov
                               <textarea
                                 value={feedbackByGeneration[videoGenerationId] ?? str(videoReview?.raw_feedback) ?? ""}
                                 onChange={(event) => setFeedbackByGeneration((current) => ({ ...current, [videoGenerationId]: event.target.value }))}
-                                placeholder="Почему видео хорошее или что нужно исправить? Например: движение камеры, действие игроков, физика, читаемость co-op."
+                                placeholder="Почему видео хорошее или что нужно исправить? Например: движение камеры, действие игроков, физика, читаемость совместной игры."
                                 className="min-h-28 w-full resize-y rounded-lg border border-border bg-background/60 px-3 py-2 text-sm text-foreground outline-none transition-colors placeholder:text-muted focus:border-accent"
                               />
 
@@ -565,7 +565,7 @@ export function DiscoveryPageClient({ initialBatches }: { initialBatches: Discov
 
                               {Boolean(videoReview?.structured_feedback) && (
                                 <div className="rounded-lg border border-border bg-background/40 p-3">
-                                  <p className="text-[11px] font-semibold uppercase tracking-wider text-muted">Память из video feedback</p>
+                                  <p className="text-[11px] font-semibold uppercase tracking-wider text-muted">Память из комментария к видео</p>
                                   <p className="mt-1 text-xs leading-5 text-muted-foreground">{str(object(videoReview?.structured_feedback).summary)}</p>
                                 </div>
                               )}
@@ -579,15 +579,15 @@ export function DiscoveryPageClient({ initialBatches }: { initialBatches: Discov
                       <div className="border-t border-border bg-background/20 p-4">
                         <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
                           <div>
-                            <p className="text-sm font-semibold text-foreground">Готовый gameplay prototype</p>
+                            <p className="text-sm font-semibold text-foreground">Готовый игровой прототип</p>
                             <p className="mt-1 text-xs text-muted-foreground">
-                              Детерминированная FFmpeg-сборка только из human-approved gameplay-видео; durable-копия хранится в Google Drive.
+                              Детерминированная FFmpeg-сборка только из игровых видео, утверждённых человеком; надёжная копия хранится в Google Drive.
                             </p>
                           </div>
                           <div className="flex flex-wrap gap-2">
                             {prototypeWidth && prototypeHeight && <Badge variant="secondary">{prototypeWidth}×{prototypeHeight}</Badge>}
-                            {prototypeFps && <Badge variant="secondary">{Math.round(prototypeFps)} fps</Badge>}
-                            {prototypeDuration && <Badge variant="secondary">{prototypeDuration.toFixed(1)} s</Badge>}
+                            {prototypeFps && <Badge variant="secondary">{Math.round(prototypeFps)} кадр/с</Badge>}
+                            {prototypeDuration && <Badge variant="secondary">{prototypeDuration.toFixed(1)} сек</Badge>}
                           </div>
                         </div>
                         <div className="max-w-[420px] overflow-hidden rounded-xl border border-border bg-black">

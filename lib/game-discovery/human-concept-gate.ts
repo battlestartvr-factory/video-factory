@@ -36,7 +36,7 @@ export interface HumanConceptGateResult {
 }
 
 const conceptEnvelopeSchema = z.object({ concept: coopGameConceptSpecV1Schema }).strict();
-const MAX_REGENERATION_ATTEMPTS = 3;
+const MAX_FRESH_CYCLE_ATTEMPTS = 3;
 
 function stableHash(value: string): string {
   return createHash("sha256").update(value).digest("hex");
@@ -140,8 +140,8 @@ function jaccard(left: string, right: string): number {
 }
 
 /**
- * Reject means replacement, never a cosmetic reskin. A replacement must materially
- * change at least four of the five mechanism/social dimensions below.
+ * Used only as a guard when every active concept was rejected and the factory must
+ * start a fresh concept cycle. Ordinary Reject never calls this to create a replacement.
  */
 export function isMateriallyNewConcept(
   rejected: CoopGameConceptSpecV1,
@@ -161,15 +161,15 @@ export function isMateriallyNewConcept(
 function lineageConceptId(input: {
   candidateId: string;
   sourceId: string;
-  decision: "revise" | "reject";
+  action: "revise" | "new_cycle";
   feedback: string;
   attempt: number;
   occupied: Set<string>;
 }): string {
   const suffix = stableHash(
-    `${input.sourceId}:${input.decision}:${input.feedback}:${input.attempt}:${input.candidateId}`,
+    `${input.sourceId}:${input.action}:${input.feedback}:${input.attempt}:${input.candidateId}`,
   ).slice(0, 8);
-  const baseRaw = input.decision === "revise" ? input.sourceId : input.candidateId;
+  const baseRaw = input.action === "revise" ? input.sourceId : input.candidateId;
   const base = baseRaw
     .normalize("NFKC")
     .toLowerCase()
@@ -177,7 +177,7 @@ function lineageConceptId(input: {
     .replace(/-+/g, "-")
     .replace(/^-|-$/g, "")
     .slice(0, 140) || "concept";
-  const marker = input.decision === "revise" ? "rev" : "new";
+  const marker = input.action === "revise" ? "rev" : "new";
   let next = `${base}-${marker}-${suffix}`.slice(0, 160);
   if (input.occupied.has(next) || next === input.sourceId) {
     next = `${base.slice(0, 130)}-${marker}-${suffix}-${input.attempt}`.slice(0, 160);
@@ -189,6 +189,7 @@ function withLineage(input: {
   candidate: CoopGameConceptSpecV1;
   source: CoopGameConceptSpecV1;
   review: HumanConceptReviewState;
+  action: "revise" | "new_cycle";
   attempt: number;
   occupied: Set<string>;
 }): CoopGameConceptSpecV1 {
@@ -196,7 +197,7 @@ function withLineage(input: {
   const conceptId = lineageConceptId({
     candidateId: input.candidate.conceptId,
     sourceId: input.source.conceptId,
-    decision: input.review.decision === "reject" ? "reject" : "revise",
+    action: input.action,
     feedback,
     attempt: input.attempt,
     occupied: input.occupied,
@@ -207,7 +208,7 @@ function withLineage(input: {
     metadata: {
       ...(input.candidate.metadata ?? {}),
       humanReviewLineage: {
-        action: input.review.decision === "reject" ? "replace" : "revise",
+        action: input.action,
         sourceConceptId: input.source.conceptId,
         sourceConceptRunId: input.review.conceptRunId,
         sourceReviewId: input.review.reviewId ?? null,
@@ -225,18 +226,17 @@ function revisionPrompt(input: {
   return `Revise ONE existing PC/Steam friends co-op game concept according to authoritative human feedback. This is a REVISION, not a replacement: preserve the recognizable game idea and its strongest uncriticized design decisions, while changing exactly what the human asked to change. Do not continue to gameplay planning.\n\nDISCOVERY OBJECTIVE:\n${JSON.stringify(input.objective, null, 2)}\n\nCURRENT CONCEPT:\n${JSON.stringify(input.concept, null, 2)}\n\nHUMAN FEEDBACK — AUTHORITATIVE:\n${input.feedback}\n\nRules:\n- Preserve the core identity unless the feedback explicitly asks to alter part of it.\n- Make requested mechanic, co-op, game-design, setting, art or readability changes concrete.\n- Do not merely explain changes; return the complete revised concept.\n- Keep the game buildable and mechanically necessary for 2–4 friends.\n- Use a fresh conceptId because this is a new immutable version.\n\n${schemaInstructions()}`;
 }
 
-function replacementPrompt(input: {
+function freshCyclePrompt(input: {
   objective: DiscoveryObjectiveSpecV1;
-  rejected: CoopGameConceptSpecV1;
-  feedback: string;
-  approved: CoopGameConceptSpecV1[];
+  rejected: Array<{ concept: CoopGameConceptSpecV1; review: HumanConceptReviewState }>;
   history: CoopGameConceptSpecV1[];
+  alreadyGenerated: CoopGameConceptSpecV1[];
   priorFailure?: CoopGameConceptSpecV1;
 }): string {
-  return `Create ONE fundamentally new PC/Steam friends co-op game concept to replace a HUMAN-REJECTED candidate. REJECT MEANS REPLACE, NOT REVISE. The rejected concept is negative-space evidence and must not be repaired, reskinned or cosmetically transformed.\n\nDISCOVERY OBJECTIVE:\n${JSON.stringify(input.objective, null, 2)}\n\nHUMAN-REJECTED CONCEPT — DO NOT REVIVE:\n${JSON.stringify(compactConcept(input.rejected), null, 2)}\n\nWHY THE HUMAN REJECTED IT:\n${input.feedback}\n\nALREADY HUMAN-APPROVED / PRESERVED CONCEPTS — STAY DIVERSE FROM THESE:\n${JSON.stringify(input.approved.map(compactConcept), null, 2)}\n\nRECENT CONCEPT HISTORY — NEGATIVE SPACE:\n${JSON.stringify(input.history.slice(0, 30).map(compactConcept), null, 2)}\n${input.priorFailure ? `\nPREVIOUS REPLACEMENT ATTEMPT WAS STILL TOO SIMILAR AND IS ALSO FORBIDDEN:\n${JSON.stringify(compactConcept(input.priorFailure), null, 2)}\n` : ""}\nHARD REPLACEMENT CONTRACT:\n- Change the fundamental core mechanic.\n- Change the type of co-op dependency.\n- Change what players physically/systemically do moment to moment.\n- Change the characteristic failure signature / source of tension.\n- Change the main social moment produced between friends.\n- A new setting, art style, characters, props, theme, camera or lore is NOT enough.\n- Do not combine the rejected mechanic with superficial additions.\n- The result must still satisfy the discovery objective and be visually testable in fake gameplay.\n- Use a fresh conceptId unrelated to the rejected conceptId.\n\n${schemaInstructions()}`;
+  return `Create ONE concept for a completely NEW discovery cycle because the human rejected EVERY active concept. This is not a one-for-one replacement and you must not repair or reskin any rejected idea. Generate a fresh PC/Steam friends co-op game hypothesis that still satisfies the original discovery objective.\n\nDISCOVERY OBJECTIVE:\n${JSON.stringify(input.objective, null, 2)}\n\nALL REJECTED CONCEPTS AND HUMAN REASONS — USE ONLY AS NEGATIVE SPACE:\n${JSON.stringify(input.rejected.map(({ concept, review }) => ({ concept: compactConcept(concept), feedback: review.rawFeedback ?? "" })), null, 2)}\n\nOTHER RECENT HISTORY — ALSO AVOID COSMETIC REPEATS:\n${JSON.stringify(input.history.slice(0, 30).map(compactConcept), null, 2)}\n\nALREADY GENERATED IN THIS FRESH CYCLE — STAY DIVERSE FROM THESE:\n${JSON.stringify(input.alreadyGenerated.map(compactConcept), null, 2)}\n${input.priorFailure ? `\nPREVIOUS ATTEMPT WAS TOO CLOSE TO REJECTED SPACE:\n${JSON.stringify(compactConcept(input.priorFailure), null, 2)}\n` : ""}\nRules:\n- Invent a new fundamental core mechanic and co-op dependency, not a theme swap.\n- Change what players do moment to moment and how failure/social tension is produced.\n- Keep the idea visually readable in a short fake-gameplay experiment and buildable as a small PC prototype.\n- Do not copy rejected concepts, recent history, characters, branding or level layouts.\n- Use a fresh conceptId.\n\n${schemaInstructions()}`;
 }
 
-const SYSTEM_PROMPT = `You are the Human Concept Gate designer inside an AI Co-op Game Discovery Factory. Human decisions are authoritative. For revise, faithfully improve the same concept. For reject, treat the old concept as forbidden negative space and invent a mechanically different game. Return typed design data, not prose commentary.`;
+const SYSTEM_PROMPT = `You are the Human Concept Gate designer inside an AI Co-op Game Discovery Factory. Human decisions are authoritative. Revise means improve the same idea. Reject normally means drop the idea with no replacement. Only when the workflow explicitly says every active concept was rejected may you generate a fresh discovery cycle. Return typed design data, not prose commentary.`;
 
 async function generateOne(input: {
   llm: HumanConceptGateLlm;
@@ -270,93 +270,128 @@ export async function applyHumanConceptReviews(input: {
   signal?: AbortSignal;
 }): Promise<HumanConceptGateResult> {
   const reviewByConceptId = new Map(input.reviews.map((review) => [review.conceptId, review]));
-  const approved = input.activeConcepts.filter(
-    (concept) => reviewByConceptId.get(concept.conceptId)?.decision === "approve",
-  );
-  const nextConcepts: CoopGameConceptSpecV1[] = [...approved];
-  const regeneratedConcepts: CoopGameConceptSpecV1[] = [];
-  const occupied = new Set(input.history.map((concept) => concept.conceptId));
-  input.activeConcepts.forEach((concept) => occupied.add(concept.conceptId));
   const model = input.model ?? "claude-sonnet-5";
   const rawResponseHashes: string[] = [];
   const usage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+  const regeneratedConcepts: CoopGameConceptSpecV1[] = [];
+  const occupied = new Set(input.history.map((concept) => concept.conceptId));
+  input.activeConcepts.forEach((concept) => occupied.add(concept.conceptId));
   let attempts = 0;
 
+  const allRejected = input.activeConcepts.length > 0 && input.activeConcepts.every(
+    (concept) => reviewByConceptId.get(concept.conceptId)?.decision === "reject",
+  );
+
+  if (allRejected) {
+    const rejected = input.activeConcepts.map((concept) => {
+      const review = reviewByConceptId.get(concept.conceptId);
+      if (!review || review.decision !== "reject") {
+        throw new Error(`HUMAN_CONCEPT_REVIEW_MISSING:${concept.conceptId}`);
+      }
+      if (!review.rawFeedback?.trim()) {
+        throw new Error(`HUMAN_CONCEPT_FEEDBACK_REQUIRED:${concept.conceptId}`);
+      }
+      return { concept, review };
+    });
+
+    for (let index = 0; index < rejected.length; index += 1) {
+      const source = rejected[index]!;
+      let accepted: CoopGameConceptSpecV1 | null = null;
+      let priorFailure: CoopGameConceptSpecV1 | undefined;
+
+      for (let attempt = 1; attempt <= MAX_FRESH_CYCLE_ATTEMPTS; attempt += 1) {
+        attempts += 1;
+        const candidate = await generateOne({
+          llm: input.llm,
+          model,
+          prompt: freshCyclePrompt({
+            objective: input.objective,
+            rejected,
+            history: input.history,
+            alreadyGenerated: regeneratedConcepts,
+            priorFailure,
+          }),
+          signal: input.signal,
+          hashes: rawResponseHashes,
+          usage,
+        });
+        const fresh = withLineage({
+          candidate,
+          source: source.concept,
+          review: source.review,
+          action: "new_cycle",
+          attempt,
+          occupied,
+        });
+        if (isMateriallyNewConcept(source.concept, fresh)) {
+          accepted = fresh;
+          break;
+        }
+        priorFailure = fresh;
+      }
+
+      if (!accepted) {
+        throw new Error(`HUMAN_CONCEPT_FRESH_CYCLE_TOO_SIMILAR:${source.concept.conceptId}`);
+      }
+      occupied.add(accepted.conceptId);
+      regeneratedConcepts.push(accepted);
+    }
+
+    return {
+      activeConcepts: regeneratedConcepts,
+      regeneratedConcepts,
+      model,
+      rawResponseHashes,
+      attempts,
+      usage,
+    };
+  }
+
+  const nextConcepts: CoopGameConceptSpecV1[] = [];
   for (const source of input.activeConcepts) {
     const review = reviewByConceptId.get(source.conceptId);
-    if (!review || review.decision === "approve") continue;
-    const feedback = review.rawFeedback?.trim() ?? "";
-    if (!feedback) throw new Error(`HUMAN_CONCEPT_FEEDBACK_REQUIRED:${source.conceptId}`);
+    if (!review) throw new Error(`HUMAN_CONCEPT_REVIEW_MISSING:${source.conceptId}`);
 
-    if (review.decision === "revise") {
-      attempts += 1;
-      const candidate = await generateOne({
-        llm: input.llm,
-        model,
-        prompt: revisionPrompt({ objective: input.objective, concept: source, feedback }),
-        signal: input.signal,
-        hashes: rawResponseHashes,
-        usage,
-      });
-      const revised = withLineage({ candidate, source, review, attempt: attempts, occupied });
-      occupied.add(revised.conceptId);
-      regeneratedConcepts.push(revised);
-      nextConcepts.push(revised);
+    if (review.decision === "approve") {
+      nextConcepts.push(source);
       continue;
     }
 
-    let acceptedReplacement: CoopGameConceptSpecV1 | null = null;
-    let priorFailure: CoopGameConceptSpecV1 | undefined;
-    for (let attempt = 1; attempt <= MAX_REGENERATION_ATTEMPTS; attempt += 1) {
-      attempts += 1;
-      const candidate = await generateOne({
-        llm: input.llm,
-        model,
-        prompt: replacementPrompt({
-          objective: input.objective,
-          rejected: source,
-          feedback,
-          approved: [...approved, ...regeneratedConcepts],
-          history: input.history,
-          priorFailure,
-        }),
-        signal: input.signal,
-        hashes: rawResponseHashes,
-        usage,
-      });
-      const replacement = withLineage({ candidate, source, review, attempt, occupied });
-      if (isMateriallyNewConcept(source, replacement)) {
-        acceptedReplacement = replacement;
-        break;
-      }
-      priorFailure = replacement;
+    if (review.decision === "reject") {
+      // Reject is intentionally terminal for this card. No paid replacement call is made.
+      continue;
     }
 
-    if (!acceptedReplacement) {
-      throw new Error(`HUMAN_CONCEPT_REPLACEMENT_TOO_SIMILAR:${source.conceptId}`);
-    }
-    occupied.add(acceptedReplacement.conceptId);
-    regeneratedConcepts.push(acceptedReplacement);
-    nextConcepts.push(acceptedReplacement);
+    const feedback = review.rawFeedback?.trim() ?? "";
+    if (!feedback) throw new Error(`HUMAN_CONCEPT_FEEDBACK_REQUIRED:${source.conceptId}`);
+    attempts += 1;
+    const candidate = await generateOne({
+      llm: input.llm,
+      model,
+      prompt: revisionPrompt({ objective: input.objective, concept: source, feedback }),
+      signal: input.signal,
+      hashes: rawResponseHashes,
+      usage,
+    });
+    const revised = withLineage({
+      candidate,
+      source,
+      review,
+      action: "revise",
+      attempt: attempts,
+      occupied,
+    });
+    occupied.add(revised.conceptId);
+    regeneratedConcepts.push(revised);
+    nextConcepts.push(revised);
   }
 
-  const sourceOrder = new Map(input.activeConcepts.map((concept, index) => [concept.conceptId, index]));
-  const ordered = nextConcepts.sort((left, right) => {
-    const leftLineage = (left.metadata?.humanReviewLineage ?? {}) as Record<string, unknown>;
-    const rightLineage = (right.metadata?.humanReviewLineage ?? {}) as Record<string, unknown>;
-    const leftSource = typeof leftLineage.sourceConceptId === "string" ? leftLineage.sourceConceptId : left.conceptId;
-    const rightSource = typeof rightLineage.sourceConceptId === "string" ? rightLineage.sourceConceptId : right.conceptId;
-    return (sourceOrder.get(leftSource) ?? Number.MAX_SAFE_INTEGER) - (sourceOrder.get(rightSource) ?? Number.MAX_SAFE_INTEGER);
-  });
-
-  if (ordered.length !== input.activeConcepts.length) {
-    throw new Error(
-      `HUMAN_CONCEPT_GATE_CARDINALITY_MISMATCH:${ordered.length}:${input.activeConcepts.length}`,
-    );
+  if (!nextConcepts.length) {
+    throw new Error("HUMAN_CONCEPT_GATE_EMPTY_WITHOUT_ALL_REJECTED");
   }
 
   return {
-    activeConcepts: ordered,
+    activeConcepts: nextConcepts,
     regeneratedConcepts,
     model,
     rawResponseHashes,

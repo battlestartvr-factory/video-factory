@@ -39,9 +39,9 @@ describe("Stage 4 human media approval contract", () => {
       expect(ui).toContain("video-reviews");
       expect(ui).toContain("human_video_approval_pending");
     }
-    expect(discoveryUi).toContain("Ваше решение по gameplay-видео");
+    expect(discoveryUi).toContain("Ваше решение по игровому видео");
     expect(discoveryUi).toContain('media: "video"');
-    expect(chatUi).toContain("Gameplay-видео готовы");
+    expect(chatUi).toContain("Игровые видео готовы");
     expect(chatUi).toContain("ИИ не может забраковать видео");
   });
 

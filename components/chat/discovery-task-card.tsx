@@ -120,24 +120,24 @@ function stageLabel(stage: string | null): string {
     objective_ready: "Цель принята",
     concept_generation_pending: "Генерация концептов",
     pre_evaluation_pending: "Предварительная оценка",
-    planning_moments_pending: "Планирование gameplay-моментов",
-    shot_planning_pending: "Планирование gameplay-кадров",
-    reference_image_generation_pending: "Подготовка reference-изображений",
-    reference_image_waiting: "Генерация reference-изображений",
-    human_reference_approval_pending: "Нужно ваше решение по reference",
-    reference_revision_pending: "Перегенерация reference по вашему feedback",
-    video_generation_pending: "Reference утверждён — видео разблокировано",
-    video_generation_waiting: "Генерация gameplay-видео",
-    human_video_approval_pending: "Нужно ваше решение по gameplay-видео",
-    video_revision_pending: "Перегенерация gameplay-видео по вашему feedback",
-    asset_graph_pending: "Фиксация AssetGraph",
-    assembly_pending: "Сборка 16:9 gameplay master и 9:16 social edit",
-    prototype_finalization_pending: "Финализация prototype",
-    completed: "Prototype готов",
-    reference_rejected_no_video: "Reference отклонён — видео не создаётся",
-    video_rejected_no_prototype: "Gameplay-видео отклонены — prototype не собирается",
+    planning_moments_pending: "Планирование игровых моментов",
+    shot_planning_pending: "Планирование игровых кадров",
+    reference_image_generation_pending: "Подготовка референс-изображений",
+    reference_image_waiting: "Генерация референс-изображений",
+    human_reference_approval_pending: "Нужно ваше решение по референс-изображению",
+    reference_revision_pending: "Перегенерация референса по вашему комментарию",
+    video_generation_pending: "Референс утверждён — видео разблокировано",
+    video_generation_waiting: "Генерация игрового видео",
+    human_video_approval_pending: "Нужно ваше решение по игровому видео",
+    video_revision_pending: "Перегенерация игрового видео по вашему комментарию",
+    asset_graph_pending: "Фиксация графа ассетов",
+    assembly_pending: "Сборка игрового мастера 16:9 и вертикальной версии 9:16",
+    prototype_finalization_pending: "Финализация прототипа",
+    completed: "Прототип готов",
+    reference_rejected_no_video: "Референс отклонён — видео не создаётся",
+    video_rejected_no_prototype: "Игровые видео отклонены — прототип не собирается",
   };
-  return stage ? labels[stage] ?? stage : "Запуск discovery";
+  return stage ? labels[stage] ?? stage : "Запуск поиска игры";
 }
 
 function latestReview(reviews: Array<Record<string, unknown>>, generationId: string) {
@@ -196,12 +196,12 @@ export function DiscoveryTaskCard({ task, runId }: DiscoveryTaskCardProps) {
       const response = await fetch(`/api/discovery/batches/${runId}`, { cache: "no-store" });
       const payload = await response.json().catch(() => null);
       if (!response.ok || !payload?.ok) {
-        throw new Error(payload?.error?.message ?? "Не удалось обновить discovery");
+        throw new Error(payload?.error?.message ?? "Не удалось обновить поиск игры");
       }
       setDetail(payload.data as BatchDetail);
       setError(null);
     } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : "Не удалось обновить discovery");
+      setError(loadError instanceof Error ? loadError.message : "Не удалось обновить поиск игры");
     } finally {
       if (!quiet) setLoading(false);
     }
@@ -372,12 +372,12 @@ export function DiscoveryTaskCard({ task, runId }: DiscoveryTaskCardProps) {
       <div className="border-t border-border bg-surface/40 p-4">
         <div className="mb-3">
           <p className="text-sm font-medium text-foreground">
-            {isVideo ? "Gameplay-видео готовы" : "Reference images готовы"}
+            {isVideo ? "Игровые видео готовы" : "Референс-изображения готовы"}
           </p>
           <p className="mt-1 text-xs leading-5 text-muted-foreground">
             {isVideo
-              ? "ИИ не может забраковать видео. Только вы решаете: утвердить, исправить или отклонить. Prototype собирается только из утверждённых вами видео."
-              : "ИИ не бракует картинку. Утвердите, попросите правку или отклоните прямо здесь. Gameplay-видео не запускается без вашего решения."}
+              ? "ИИ не может забраковать видео. Только вы решаете: утвердить, исправить или отклонить. Прототип собирается только из утверждённых вами видео."
+              : "ИИ не бракует изображение. Утвердите, попросите правку или отклоните прямо здесь. Игровое видео не запускается без вашего решения."}
           </p>
         </div>
 
@@ -437,7 +437,7 @@ export function DiscoveryTaskCard({ task, runId }: DiscoveryTaskCardProps) {
                       placeholder={
                         isVideo
                           ? "Почему видео хорошее или что нужно исправить? Комментарий сохранится как опыт завода."
-                          : "Почему картинка хорошая или что нужно исправить? Комментарий сохранится как опыт завода."
+                          : "Почему изображение хорошее или что нужно исправить? Комментарий сохранится как опыт завода."
                       }
                       rows={3}
                       disabled={itemSubmitting}
@@ -468,7 +468,7 @@ export function DiscoveryTaskCard({ task, runId }: DiscoveryTaskCardProps) {
   const providerError = str(jobError.message);
   const status = statusIcon(jobStatus, currentStage);
   const StatusIcon = status.Icon;
-  const title = str(task.settings?.title) ?? "Поиск новой co-op игры";
+  const title = str(task.settings?.title) ?? "Поиск новой совместной игры";
   const isHumanGate = Boolean(currentStage && HUMAN_GATES.has(currentStage));
 
   return (
@@ -528,9 +528,9 @@ export function DiscoveryTaskCard({ task, runId }: DiscoveryTaskCardProps) {
       {jobStatus === "completed" && prototypes.length > 0 && (
         <div className="border-t border-border bg-surface/40 p-4">
           <div className="mb-3">
-            <p className="text-sm font-medium text-foreground">Gameplay prototype готов</p>
+            <p className="text-sm font-medium text-foreground">Игровой прототип готов</p>
             <p className="mt-1 text-xs leading-5 text-muted-foreground">
-              Сохраняются два файла: исходный widescreen gameplay master без social-crop и отдельный 9:16 монтаж для TikTok/Shorts.
+              Сохраняются два файла: исходный игровой мастер 16:9 без вертикальной обрезки и отдельная версия 9:16 для TikTok/Shorts.
             </p>
           </div>
 
@@ -554,8 +554,8 @@ export function DiscoveryTaskCard({ task, runId }: DiscoveryTaskCardProps) {
               return (
                 <div key={item.conceptRunId} className="rounded-lg border border-border bg-surface/70 p-3">
                   <div>
-                    <p className="text-xs font-semibold text-foreground">Gameplay master · 16:9</p>
-                    <p className="mt-1 text-[11px] text-muted-foreground">Полный игровой кадр для оценки gameplay до монтажа.</p>
+                    <p className="text-xs font-semibold text-foreground">Игровой мастер · 16:9</p>
+                    <p className="mt-1 text-[11px] text-muted-foreground">Полный игровой кадр для оценки до монтажа.</p>
                   </div>
                   {item.masterVideoUrl ? (
                     <div className="mt-2 aspect-video w-full overflow-hidden rounded-lg border border-border bg-black">
@@ -564,7 +564,7 @@ export function DiscoveryTaskCard({ task, runId }: DiscoveryTaskCardProps) {
                       </video>
                     </div>
                   ) : (
-                    <p className="mt-2 text-xs text-muted-foreground">Landscape master недоступен для старого prototype.</p>
+                    <p className="mt-2 text-xs text-muted-foreground">Мастер 16:9 недоступен для старого прототипа.</p>
                   )}
                   <div className="mt-2">
                     {masterMetadata.length > 0 && <p className="text-[11px] text-muted-foreground">{masterMetadata.join(" · ")}</p>}
@@ -572,20 +572,20 @@ export function DiscoveryTaskCard({ task, runId }: DiscoveryTaskCardProps) {
                     <div className="mt-2 flex flex-wrap gap-2 text-xs">
                       {item.masterDownloadUrl && (
                         <a href={item.masterDownloadUrl} className="rounded-md border border-border px-2.5 py-1.5 text-foreground transition hover:bg-surface-elevated">
-                          Скачать gameplay master 16:9
+                          Скачать игровой мастер 16:9
                         </a>
                       )}
                       {item.masterDriveWebUrl && (
                         <a href={item.masterDriveWebUrl} target="_blank" rel="noreferrer" className="rounded-md border border-border px-2.5 py-1.5 text-muted-foreground transition hover:bg-surface-elevated hover:text-foreground">
-                          Master в Google Drive
+                          Мастер в Google Drive
                         </a>
                       )}
                     </div>
                   </div>
 
                   <div className="mt-5 border-t border-border pt-4">
-                    <p className="text-xs font-semibold text-foreground">Social edit · 9:16</p>
-                    <p className="mt-1 text-[11px] text-muted-foreground">Полный 16:9 gameplay остаётся в центре; фон заполняется размытой копией без обрезания игрового evidence.</p>
+                    <p className="text-xs font-semibold text-foreground">Вертикальная версия · 9:16</p>
+                    <p className="mt-1 text-[11px] text-muted-foreground">Полный кадр 16:9 остаётся в центре; фон заполняется размытой копией без обрезания важного игрового действия.</p>
                     <div className="mx-auto mt-2 aspect-[9/16] max-h-[70vh] w-full max-w-[360px] overflow-hidden rounded-lg border border-border bg-black">
                       <video controls playsInline preload="metadata" src={item.socialVideoUrl} className="h-full w-full bg-black object-contain">
                         Ваш браузер не поддерживает встроенное видео.
@@ -597,14 +597,14 @@ export function DiscoveryTaskCard({ task, runId }: DiscoveryTaskCardProps) {
                     </div>
                     <div className="mt-2 flex flex-wrap gap-2 text-xs">
                       <a href={item.socialDownloadUrl} className="rounded-md border border-border px-2.5 py-1.5 text-foreground transition hover:bg-surface-elevated">
-                        Скачать social edit 9:16
+                        Скачать вертикальную версию 9:16
                       </a>
                       <a href={item.socialVideoUrl} target="_blank" rel="noreferrer" className="rounded-md border border-border px-2.5 py-1.5 text-foreground transition hover:bg-surface-elevated">
                         Открыть отдельно
                       </a>
                       {item.socialDriveWebUrl && (
                         <a href={item.socialDriveWebUrl} target="_blank" rel="noreferrer" className="rounded-md border border-border px-2.5 py-1.5 text-muted-foreground transition hover:bg-surface-elevated hover:text-foreground">
-                          Social edit в Google Drive
+                          Вертикальная версия в Google Drive
                         </a>
                       )}
                     </div>

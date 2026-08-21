@@ -7,10 +7,10 @@ describe("real chat dual gameplay artifacts", () => {
       readFile("components/chat/discovery-task-card.tsx", "utf8"),
       readFile("app/api/discovery/batches/[runId]/prototypes/[conceptRunId]/route.ts", "utf8"),
     ]);
-    expect(card).toContain("Gameplay master · 16:9");
-    expect(card).toContain("Social edit · 9:16");
-    expect(card).toContain("Скачать gameplay master 16:9");
-    expect(card).toContain("Скачать social edit 9:16");
+    expect(card).toContain("Игровой мастер · 16:9");
+    expect(card).toContain("Вертикальная версия · 9:16");
+    expect(card).toContain("Скачать игровой мастер 16:9");
+    expect(card).toContain("Скачать вертикальную версию 9:16");
     expect(route).toContain('url.searchParams.get("variant") === "master"');
     expect(route).toContain("assembly.landscapeMaster");
   });

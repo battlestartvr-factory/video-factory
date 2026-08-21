@@ -1,5 +1,6 @@
 import "server-only";
 
+import { canonicalizeHumanFeedback } from "@/lib/i18n/human-feedback";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { getGameDiscoveryBatch } from "./service";
 
@@ -56,32 +57,39 @@ export async function recordGameplayConceptReview(input: {
     throw new Error("FEEDBACK_REQUIRED");
   }
 
+  const canonical = rawFeedback ? await canonicalizeHumanFeedback(rawFeedback) : null;
+  const canonicalSummary = canonical?.canonicalEnglish ||
+    (input.decision === "approve"
+      ? "Concept approved by human without additional changes."
+      : "Human concept review recorded.");
+
   const structuredFeedback: Record<string, unknown> = {
     schema: "gameplay_concept_feedback",
     version: 1,
     decision: input.decision,
-    summary:
-      rawFeedback ||
-      (input.decision === "approve"
-        ? "Concept approved by human without additional changes."
-        : "Human concept review recorded."),
+    summary: canonicalSummary,
+    originalLocale: canonical?.originalLocale ?? null,
+    originalText: canonical?.originalText ?? null,
+    canonicalEnglish: canonical?.canonicalEnglish ?? canonicalSummary,
+    translation: canonical
+      ? {
+          translated: canonical.translated,
+          model: canonical.translationModel,
+          usage: canonical.translationUsage,
+          fallback: canonical.translationFallback,
+        }
+      : null,
     intent:
       input.decision === "approve"
         ? "preserve_and_continue"
         : input.decision === "revise"
           ? "revise_same_concept"
-          : "replace_with_fundamentally_new_concept",
-    replacementContract:
+          : "drop_concept",
+    regenerationPolicy:
       input.decision === "reject"
         ? {
-            reskinForbidden: true,
-            mustChange: [
-              "core_mechanic",
-              "coop_dependency",
-              "player_actions",
-              "failure_signature",
-              "social_moment",
-            ],
+            regenerateOnlyWhenAllActiveConceptsRejected: true,
+            freshCycleUsesRejectedConceptsAsNegativeSpace: true,
           }
         : null,
   };
