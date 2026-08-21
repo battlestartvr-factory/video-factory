@@ -1,7 +1,11 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { SharedSourcePoolResearchScoutExecutor, sanitizeSharedPoolEvidenceClaim } from "@/lib/research-intelligence/shared-source-pool-scout";
+import {
+  SharedSourcePoolResearchScoutExecutor,
+  sanitizeSharedPoolEvidenceClaim,
+  type SharedPoolRoleAnalyzer,
+} from "@/lib/research-intelligence/shared-source-pool-scout";
 import type { ResearchScoutJobContext } from "@/lib/research-intelligence/scout-runtime";
 import type { ResearchScoutRoleV1 } from "@/lib/research-intelligence/schemas";
 import { sharedResearchSourcePoolV1Schema } from "@/lib/research-intelligence/shared-source-pool";
@@ -63,7 +67,11 @@ function pool() {
           extractedText: "Players in community reviews praise the chaotic fun with friends, but repeated waiting and unfair random failures become frustrating. The physics mechanic makes teammates coordinate movement and rescue each other after mistakes.",
           relevanceScore: 0.95,
           reusedFromCache: false,
-          metadata: { domain: "example.com", page_image_candidate_count: 2 },
+          metadata: {
+            domain: "example.com",
+            page_image_candidate_count: 2,
+            research_source_categories: ["player_voice", "mechanics", "contrarian"],
+          },
         },
         groundedClaims: [
           "Players repeatedly praise chaotic co-op moments with friends when failures remain recoverable.",
@@ -81,7 +89,11 @@ function pool() {
           extractedText: "The existing Steam competitor uses an arena camera, exaggerated abilities, grapple movement and spectator-style presentation. Its gameplay screenshots keep teammates and interactive arena objects visible.",
           relevanceScore: 0.9,
           reusedFromCache: false,
-          metadata: { domain: "store.example.com", page_image_candidate_count: 3 },
+          metadata: {
+            domain: "store.example.com",
+            page_image_candidate_count: 3,
+            research_source_categories: ["competitor", "mechanics", "gameplay_visual", "contrarian"],
+          },
         },
         groundedClaims: [
           "An existing Steam competitor already combines arena play with exaggerated movement abilities, weakening a broad novelty claim.",
@@ -92,9 +104,106 @@ function pool() {
   });
 }
 
+function analyzer(): SharedPoolRoleAnalyzer {
+  return {
+    async analyze(input) {
+      const items = (() => {
+        switch (input.role) {
+          case "market_competitor":
+            return [
+              {
+                sourceRef: "pool-source-2",
+                evidenceType: "market_pattern",
+                claim: "An existing arena co-op competitor already combines exaggerated movement abilities with a spectator-friendly presentation.",
+                confidence: 0.9,
+              },
+              {
+                sourceRef: "pool-source-2",
+                evidenceType: "saturation_signal",
+                claim: "Arena co-op built around exaggerated movement is established enough that a broad novelty claim needs a more specific differentiator.",
+                confidence: 0.84,
+              },
+            ];
+          case "mechanics":
+            return [
+              {
+                sourceRef: "pool-source-1",
+                evidenceType: "mechanic_pattern",
+                claim: "The physics loop makes teammates coordinate movement and rescue each other after mistakes.",
+                confidence: 0.92,
+              },
+              {
+                sourceRef: "pool-source-2",
+                evidenceType: "mechanic_pattern",
+                claim: "Grapple movement and exaggerated abilities create a readable interaction system for arena co-op play.",
+                confidence: 0.86,
+              },
+            ];
+          case "player_voice":
+            return [
+              {
+                sourceRef: "pool-source-1",
+                evidenceType: "player_love",
+                claim: "Players praise chaotic co-op moments when a mistake stays recoverable and can become a shared rescue story.",
+                confidence: 0.91,
+              },
+              {
+                sourceRef: "pool-source-1",
+                evidenceType: "player_pain",
+                claim: "Players become frustrated by repeated waiting and random failures that feel unfair rather than recoverable.",
+                confidence: 0.89,
+              },
+            ];
+          case "gameplay_visual":
+            return [
+              {
+                sourceRef: "pool-source-2",
+                evidenceType: "gameplay_reference_pattern",
+                claim: "Arena camera framing keeps teammates and interactive objects visible during cooperative play.",
+                confidence: 0.9,
+              },
+              {
+                sourceRef: "pool-source-2",
+                evidenceType: "visual_reference_pattern",
+                claim: "Gameplay screenshots emphasize readable teammate spacing and nearby interactive arena objects rather than isolated character poses.",
+                confidence: 0.86,
+              },
+            ];
+          case "white_space_contrarian":
+            return [
+              {
+                sourceRef: "pool-source-2",
+                evidenceType: "counterexample",
+                claim: "An existing competitor is a direct counterexample to the idea that arena co-op plus exaggerated movement is novel by itself.",
+                confidence: 0.9,
+              },
+              {
+                sourceRef: "pool-source-1",
+                evidenceType: "white_space",
+                claim: "A stronger opportunity is to make recovery and rescue the central dependency loop instead of treating chaos alone as the differentiator.",
+                confidence: 0.78,
+              },
+            ];
+        }
+      })();
+
+      return {
+        value: {
+          summary: `${input.role} analysis completed from the shared verified source pool.`,
+          items,
+          warnings: [],
+        },
+        model: "test-role-analyzer",
+        usage: { totalTokenCount: 100 },
+        rawText: "{}",
+      };
+    },
+  };
+}
+
 describe("shared verified research source pool", () => {
   it("rejects URL/ledger fragments that previously leaked into evidence", () => {
-    expect(sanitizeSharedPoolEvidenceClaim('"). 2. https://vertexaisearch.cloud.google.com/grounding-api-redirect/foo')).toBeNull();
+    expect(sanitizeSharedPoolEvidenceClaim('\"). 2. https://vertexaisearch.cloud.google.com/grounding-api-redirect/foo')).toBeNull();
     expect(sanitizeSharedPoolEvidenceClaim("SOURCE||https://example.com|claim")).toBeNull();
     expect(sanitizeSharedPoolEvidenceClaim("The physics mechanic requires teammates to coordinate movement and rescue each other after mistakes.")).toContain("physics mechanic");
   });
@@ -102,7 +211,12 @@ describe("shared verified research source pool", () => {
   it("lets all five Scouts analyze one pool without another search call", async () => {
     for (const role of roles) {
       const progress = vi.fn();
-      const executor = new SharedSourcePoolResearchScoutExecutor(pool(), progress);
+      const executor = new SharedSourcePoolResearchScoutExecutor(
+        pool(),
+        progress,
+        () => new Date("2026-08-21T07:00:00.000Z"),
+        analyzer(),
+      );
       const jobId = role === "market_competitor" ? "job-owner" : `job-${role}`;
       const result = await executor.execute({
         jobId,
@@ -116,6 +230,7 @@ describe("shared verified research source pool", () => {
       expect(result.report.evidenceIds.length).toBeGreaterThan(0);
       expect(result.evidenceBundle?.evidence.every((item) => !/https?:\/\//i.test(item.claim))).toBe(true);
       expect(progress).toHaveBeenCalledWith(expect.objectContaining({ eventType: "research.source_pool.reused" }));
+      expect(progress).toHaveBeenCalledWith(expect.objectContaining({ eventType: "research.scout.role_analysis_completed" }));
       if (jobId === "job-owner") {
         expect(result.usage?.provider_calls).toBe(1);
         expect(result.usage?.shared_source_pool_acquisition_owner).toBe(true);
@@ -123,16 +238,20 @@ describe("shared verified research source pool", () => {
         expect(result.usage?.provider_calls).toBe(0);
         expect(result.usage?.shared_source_pool_reused).toBe(true);
       }
+      expect(result.usage?.role_analysis_provider_calls).toBe(1);
     }
   });
 
-  it("keeps shared acquisition to one searchText invocation so KIE cannot exceed two paid calls", () => {
+  it("keeps the global shared-source acquisition cap at two paid search calls", () => {
     const source = readFileSync(
       join(process.cwd(), "lib/research-intelligence/shared-source-pool.ts"),
       "utf8",
     );
-    expect(source.match(/searchProvider\.searchText\(/g) ?? []).toHaveLength(1);
     expect(source).toContain("const MAX_KIE_PROVIDER_CALLS = 2");
-    expect(source).not.toContain("recoveryAcquisitionQuery");
+    expect(source).toContain("primaryProvider.searchText");
+    expect(source).toContain("recoveryProvider.searchText");
+    expect(source).toContain("primaryCalls === 1");
+    expect(source).toContain("allowProvenanceRecovery: false");
+    expect(source).toContain("primaryCalls + recoveryCalls > MAX_KIE_PROVIDER_CALLS");
   });
 });
