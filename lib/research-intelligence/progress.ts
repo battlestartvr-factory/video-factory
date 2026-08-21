@@ -1,6 +1,8 @@
 export interface ResearchScoutProgressEvent {
   eventType:
     | "research.scout.started"
+    | "research.scout.role_analysis_started"
+    | "research.scout.role_analysis_completed"
     | "research.search.started"
     | "research.search.completed"
     | "research.source.fetch_started"
