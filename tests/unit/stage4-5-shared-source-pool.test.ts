@@ -1,0 +1,126 @@
+import { describe, expect, it, vi } from "vitest";
+import { SharedSourcePoolResearchScoutExecutor, sanitizeSharedPoolEvidenceClaim } from "@/lib/research-intelligence/shared-source-pool-scout";
+import type { ResearchScoutJobContext } from "@/lib/research-intelligence/scout-runtime";
+import type { ResearchScoutRoleV1 } from "@/lib/research-intelligence/schemas";
+import { sharedResearchSourcePoolV1Schema } from "@/lib/research-intelligence/shared-source-pool";
+
+const roles: ResearchScoutRoleV1[] = [
+  "market_competitor",
+  "mechanics",
+  "player_voice",
+  "gameplay_visual",
+  "white_space_contrarian",
+];
+
+function context(role: ResearchScoutRoleV1): ResearchScoutJobContext {
+  return {
+    researchRunId: "run-1",
+    scoutRole: role,
+    assignment: {
+      role,
+      mandate: `Analyze ${role} evidence from the verified shared source pool.`,
+      queryAngles: ["co-op evidence"],
+      freshness: "mixed",
+      sourcePreferences: [],
+      forbiddenOverlap: [],
+      imageSearchRequired: role === "gameplay_visual",
+      budget: {
+        maxSearchQueries: 4,
+        maxFetchedSources: 6,
+        maxEvidenceItems: 6,
+        maxImageCandidates: role === "gameplay_visual" ? 5 : 0,
+        maxModelCalls: 1,
+      },
+    },
+    creativeRunId: `creative-${role}`,
+    rootFactoryJobId: "root-job",
+    rootCreativeRunId: "root-run",
+    objectiveId: "objective-1",
+    existingReport: null,
+  };
+}
+
+function pool() {
+  return sharedResearchSourcePoolV1Schema.parse({
+    schema: "shared_research_source_pool",
+    version: 1,
+    researchRunId: "run-1",
+    acquisitionOwnerJobId: "job-owner",
+    query: "Broad co-op research across all five council dimensions.",
+    generatedAt: "2026-08-21T07:00:00.000Z",
+    usage: { provider_calls: 1, search_calls: 1, search_ms: 1200 },
+    sources: [
+      {
+        source: {
+          sourceRef: "pool-source-1",
+          canonicalUrl: "https://example.com/game-review",
+          urlSha256: "a".repeat(64),
+          sourceType: "web_page",
+          title: "Co-op game review",
+          observedAt: "2026-08-21T07:00:00.000Z",
+          extractedText: "Players in community reviews praise the chaotic fun with friends, but repeated waiting and unfair random failures become frustrating. The physics mechanic makes teammates coordinate movement and rescue each other after mistakes.",
+          relevanceScore: 0.95,
+          reusedFromCache: false,
+          metadata: { domain: "example.com", page_image_candidate_count: 2 },
+        },
+        groundedClaims: [
+          "Players repeatedly praise chaotic co-op moments with friends when failures remain recoverable.",
+          "The physics mechanic requires teammates to coordinate movement and rescue each other after mistakes.",
+        ],
+      },
+      {
+        source: {
+          sourceRef: "pool-source-2",
+          canonicalUrl: "https://store.example.com/competitor",
+          urlSha256: "b".repeat(64),
+          sourceType: "web_page",
+          title: "Existing arena co-op competitor",
+          observedAt: "2026-08-21T07:00:00.000Z",
+          extractedText: "The existing Steam competitor uses an arena camera, exaggerated abilities, grapple movement and spectator-style presentation. Its gameplay screenshots keep teammates and interactive arena objects visible.",
+          relevanceScore: 0.9,
+          reusedFromCache: false,
+          metadata: { domain: "store.example.com", page_image_candidate_count: 3 },
+        },
+        groundedClaims: [
+          "An existing Steam competitor already combines arena play with exaggerated movement abilities, weakening a broad novelty claim.",
+          "Gameplay screenshots keep teammates and interactive arena objects visible in the camera framing.",
+        ],
+      },
+    ],
+  });
+}
+
+describe("shared verified research source pool", () => {
+  it("rejects URL/ledger fragments that previously leaked into evidence", () => {
+    expect(sanitizeSharedPoolEvidenceClaim('"). 2. https://vertexaisearch.cloud.google.com/grounding-api-redirect/foo')).toBeNull();
+    expect(sanitizeSharedPoolEvidenceClaim("SOURCE||https://example.com|claim")).toBeNull();
+    expect(sanitizeSharedPoolEvidenceClaim("The physics mechanic requires teammates to coordinate movement and rescue each other after mistakes.")).toContain("physics mechanic");
+  });
+
+  it("lets all five Scouts analyze one pool without another search call", async () => {
+    for (const role of roles) {
+      const progress = vi.fn();
+      const executor = new SharedSourcePoolResearchScoutExecutor(pool(), progress);
+      const jobId = role === "market_competitor" ? "job-owner" : `job-${role}`;
+      const result = await executor.execute({
+        jobId,
+        context: context(role),
+        signal: new AbortController().signal,
+      });
+
+      expect(result.report.scoutRole).toBe(role);
+      expect(result.report.queriesExecuted).toBe(0);
+      expect(result.report.sourceIds.length).toBeGreaterThan(0);
+      expect(result.report.evidenceIds.length).toBeGreaterThan(0);
+      expect(result.evidenceBundle?.evidence.every((item) => !/https?:\/\//i.test(item.claim))).toBe(true);
+      expect(progress).toHaveBeenCalledWith(expect.objectContaining({ eventType: "research.source_pool.reused" }));
+      if (jobId === "job-owner") {
+        expect(result.usage?.provider_calls).toBe(1);
+        expect(result.usage?.shared_source_pool_acquisition_owner).toBe(true);
+      } else {
+        expect(result.usage?.provider_calls).toBe(0);
+        expect(result.usage?.shared_source_pool_reused).toBe(true);
+      }
+    }
+  });
+});
