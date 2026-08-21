@@ -72,6 +72,29 @@ function domainInstruction(input: SearchOptions): string {
   ].filter(Boolean).join(" ");
 }
 
+function sourceReliabilityInstruction(query: string): string {
+  const normalized = query.toLowerCase();
+  const instructions = [
+    "Production Safe Fetch only accepts direct public pages. Never return vertexaisearch.cloud.google.com grounding redirect URLs.",
+  ];
+
+  if (/player_voice|player-authored|player authored|community discussion|user review/.test(normalized)) {
+    instructions.push(
+      "For player-authored evidence, Reddit is NOT usable by production Safe Fetch because it returns HTTP 403. Do not return reddit.com URLs.",
+      "Prefer direct Steam Community review/discussion pages first (steamcommunity.com/app/<id>/reviews or /discussions), then other normal public forums that are readable without login or anti-bot challenges.",
+      "Return at least two distinct Safe-Fetchable player-authored pages when possible; do not substitute press reviews, YouTube reviews, store ratings, or editorial summaries.",
+    );
+  }
+
+  if (/gameplay_visual|gameplay visual|gameplay footage|real gameplay|camera\/readability/.test(normalized)) {
+    instructions.push(
+      "For gameplay evidence, prefer direct YouTube watch URLs, Steam Community videos/screenshots, or official pages with real in-game footage/screenshots. Avoid search-result pages and key-art-only marketing pages.",
+    );
+  }
+
+  return instructions.join("\n");
+}
+
 function buildPrompt(input: TextSearchRequest, mode: GroundedRequestMode): string {
   const maxResults = mode === "provenance_recovery"
     ? Math.min(4, boundedMaxResults(input.maxResults))
@@ -85,6 +108,7 @@ function buildPrompt(input: TextSearchRequest, mode: GroundedRequestMode): strin
     "Prefer independent source domains and different evidence purposes. Two URLs that resolve to the same page or repeat the same fact are not diverse.",
     "Player sentiment requires actual player/review/community evidence; a store rating alone is not a player-voice substitute. Gameplay/visual evidence must describe or show real play, not only key art or marketing copy.",
     "Never invent, shorten, truncate, or guess a URL. Never return Google grounding redirect URLs when a direct final URL is available. Omit any source whose direct final URL cannot be verified.",
+    sourceReliabilityInstruction(input.query),
     freshnessInstruction(input.freshness),
     domainInstruction(input),
   ].filter(Boolean).join("\n");
@@ -282,6 +306,7 @@ export class SharedPoolKieSearchProvider {
 
     for (const chunk of grounded.chunks) {
       const domain = domainFromUrl(chunk.url);
+      if (domain === "vertexaisearch.cloud.google.com") continue;
       if (!isDomainAllowed(domain, input.domainAllowlist, input.domainDenylist)) continue;
       results.push({
         title: chunk.title.slice(0, 500),

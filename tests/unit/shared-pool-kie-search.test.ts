@@ -27,6 +27,34 @@ describe("shared-pool KIE search", () => {
     expect(JSON.stringify(body)).toContain("SOURCE|");
   });
 
+  it("steers player-voice recovery away from production-blocked Reddit and toward Safe-Fetchable community pages", () => {
+    const body = buildSharedPoolKieRequestBody({
+      query: "Targeted recovery for player_voice. Need PLAYER-AUTHORED community discussion and user reviews.",
+      maxResults: 4,
+      freshness: "mixed",
+    });
+    const serialized = JSON.stringify(body);
+
+    expect(serialized).toContain("Reddit is NOT usable by production Safe Fetch");
+    expect(serialized).toContain("Do not return reddit.com URLs");
+    expect(serialized).toContain("Steam Community review/discussion pages first");
+    expect(serialized).toContain("at least two distinct Safe-Fetchable player-authored pages");
+    expect(serialized).toContain("Never return vertexaisearch.cloud.google.com");
+  });
+
+  it("requests direct readable gameplay sources for gameplay-visual recovery", () => {
+    const body = buildSharedPoolKieRequestBody({
+      query: "Targeted gameplay_visual recovery for real gameplay footage and camera readability.",
+      maxResults: 4,
+      freshness: "mixed",
+    });
+    const serialized = JSON.stringify(body);
+
+    expect(serialized).toContain("direct YouTube watch URLs");
+    expect(serialized).toContain("Steam Community videos/screenshots");
+    expect(serialized).toContain("Avoid search-result pages and key-art-only marketing pages");
+  });
+
   it("fails after one paid call on thinking-only/empty-visible output and preserves diagnostics", async () => {
     const fetchMock = vi.fn(async () => new Response(
       JSON.stringify({
