@@ -51,7 +51,7 @@ describe("Stage 4.5 PR2 safe page fetch", () => {
     });
   });
 
-  it("fails closed on declared responses above the page size budget", async () => {
+  it("does not discard a text page solely because declared content-length exceeds the page budget", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue(
@@ -65,9 +65,11 @@ describe("Stage 4.5 PR2 safe page fetch", () => {
       ),
     );
     const provider = createWebFetchProvider(publicLookup);
-    await expect(provider.fetchPage("https://example.com/large")).rejects.toMatchObject({
-      code: "WEB_FETCH_TOO_LARGE",
-    });
+    const document = await provider.fetchPage("https://example.com/large");
+
+    expect(document.text).toBe("small");
+    expect(document.byteLength).toBe(5);
+    expect(document.truncated).toBe(false);
   });
 
   it("removes active HTML containers, hashes normalized evidence, and sends no secrets/cookies", async () => {

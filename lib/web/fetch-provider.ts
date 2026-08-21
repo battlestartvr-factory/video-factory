@@ -41,11 +41,20 @@ function requestSignal(signal?: AbortSignal): AbortSignal {
   return signal ? AbortSignal.any([signal, timeout]) : timeout;
 }
 
-async function readBoundedResponseBytes(response: Response, maxBytes: number): Promise<Uint8Array> {
+interface BoundedResponseBytes {
+  bytes: Uint8Array;
+  truncated: boolean;
+}
+
+async function readBoundedResponseBytes(
+  response: Response,
+  maxBytes: number,
+  allowTruncate = false,
+): Promise<BoundedResponseBytes> {
   const contentLength = response.headers.get("content-length");
   if (contentLength) {
     const declared = Number.parseInt(contentLength, 10);
-    if (Number.isFinite(declared) && declared > maxBytes) {
+    if (Number.isFinite(declared) && declared > maxBytes && !allowTruncate) {
       throw new WebToolError("WEB_FETCH_TOO_LARGE", "Response exceeds size limit");
     }
   }
@@ -53,25 +62,43 @@ async function readBoundedResponseBytes(response: Response, maxBytes: number): P
   if (!response.body) {
     const bytes = new Uint8Array(await response.arrayBuffer());
     if (bytes.byteLength > maxBytes) {
-      throw new WebToolError("WEB_FETCH_TOO_LARGE", "Response exceeds size limit");
+      if (!allowTruncate) throw new WebToolError("WEB_FETCH_TOO_LARGE", "Response exceeds size limit");
+      return { bytes: bytes.slice(0, maxBytes), truncated: true };
     }
-    return bytes;
+    return { bytes, truncated: false };
   }
 
   const reader = response.body.getReader();
   const chunks: Uint8Array[] = [];
   let total = 0;
+  let truncated = false;
   try {
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
       if (!value) continue;
-      total += value.byteLength;
-      if (total > maxBytes) {
-        await reader.cancel("size limit exceeded");
-        throw new WebToolError("WEB_FETCH_TOO_LARGE", "Response exceeds size limit");
+      const remaining = maxBytes - total;
+      if (value.byteLength > remaining) {
+        if (!allowTruncate) {
+          await reader.cancel("size limit exceeded");
+          throw new WebToolError("WEB_FETCH_TOO_LARGE", "Response exceeds size limit");
+        }
+        if (remaining > 0) chunks.push(value.slice(0, remaining));
+        total = maxBytes;
+        truncated = true;
+        await reader.cancel("bounded research page prefix collected");
+        break;
       }
       chunks.push(value);
+      total += value.byteLength;
+      if (total === maxBytes) {
+        const declared = Number.parseInt(contentLength ?? "", 10);
+        if (allowTruncate && Number.isFinite(declared) && declared > maxBytes) {
+          truncated = true;
+          await reader.cancel("bounded research page prefix collected");
+          break;
+        }
+      }
     }
   } finally {
     reader.releaseLock();
@@ -83,7 +110,7 @@ async function readBoundedResponseBytes(response: Response, maxBytes: number): P
     output.set(chunk, offset);
     offset += chunk.byteLength;
   }
-  return output;
+  return { bytes: output, truncated };
 }
 
 async function fetchFollowingSafeRedirects(
@@ -132,8 +159,11 @@ async function fetchPage(url: string, lookup?: DnsLookupFn, signal?: AbortSignal
     throw new WebToolError("WEB_FETCH_UNSUPPORTED_MIME", `Unsupported page content type: ${contentType || "unknown"}`);
   }
 
-  const bytes = await readBoundedResponseBytes(response, CONTENT_LIMITS.maxWebFetchBytes);
-  const raw = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
+  // Text/HTML sources are useful even when the full document is huge. Keep the
+  // existing hard byte budget, but retain only the safe prefix instead of dropping
+  // the entire source. Binary/image fetches remain fail-closed below.
+  const bounded = await readBoundedResponseBytes(response, CONTENT_LIMITS.maxWebFetchBytes, true);
+  const raw = new TextDecoder("utf-8", { fatal: false }).decode(bounded.bytes);
   const isHtml = contentType.includes("html") || (!contentType && /<html|<!doctype/i.test(raw));
   const safeHtml = isHtml ? stripActiveHtmlContainers(raw) : raw;
   const extracted = isHtml ? htmlToText(safeHtml) : safeHtml.replace(/\s+/g, " ").trim();
@@ -152,7 +182,8 @@ async function fetchPage(url: string, lookup?: DnsLookupFn, signal?: AbortSignal
     observedAt: now,
     fetchedAt: now,
     contentType: contentType || (isHtml ? "text/html" : "text/plain"),
-    byteLength: bytes.byteLength,
+    byteLength: bounded.bytes.byteLength,
+    truncated: bounded.truncated,
     urlSha256: urlSha256(canonicalUrl),
     contentSha256: textContentSha256(extracted),
     imageCandidates,
@@ -176,7 +207,8 @@ async function fetchImage(url: string, lookup?: DnsLookupFn, signal?: AbortSigna
     );
   }
 
-  const bytes = await readBoundedResponseBytes(response, CONTENT_LIMITS.maxWebImageBytes);
+  const bounded = await readBoundedResponseBytes(response, CONTENT_LIMITS.maxWebImageBytes, false);
+  const bytes = bounded.bytes;
   const sniffedMime = sniffImageMime(bytes);
   if (!sniffedMime || sniffedMime !== declaredMime) {
     throw new WebToolError("WEB_FETCH_INVALID_IMAGE", "Image bytes do not match the declared image MIME type");

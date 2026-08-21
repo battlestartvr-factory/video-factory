@@ -54,6 +54,8 @@ export interface WebDocument {
   fetchedAt?: string;
   contentType?: string;
   byteLength?: number;
+  /** True when an oversized text/HTML response was safely capped at the configured byte boundary. */
+  truncated?: boolean;
   urlSha256?: string;
   contentSha256?: string;
   /** Bounded candidates extracted from the already-safe fetched HTML. Never treated as generated assets. */
