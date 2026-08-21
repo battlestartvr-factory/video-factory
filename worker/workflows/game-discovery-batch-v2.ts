@@ -1,5 +1,6 @@
 import { DurableWorkflowError } from "../../lib/orchestrator/retry";
 import { ConceptCouncilCuratorService } from "../../lib/research-intelligence/concept-curator";
+import { evaluateResearchEarlyFinalizeEligibility } from "../../lib/research-intelligence/early-finalize";
 import { ResearchDirector } from "../../lib/research-intelligence/scout-runtime";
 import { ResearchSynthesisService } from "../../lib/research-intelligence/synthesis";
 import {
@@ -15,6 +16,12 @@ const FAN_IN_POLL_MS = 5_000;
 
 function nextAt(delayMs = FAN_IN_POLL_MS): string {
   return new Date(Date.now() + delayMs).toISOString();
+}
+
+function record(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
 }
 
 function creativeRunId(context: WorkflowTickContext): string {
@@ -220,13 +227,34 @@ export const gameDiscoveryBatchV2: WorkflowTickHandler = async (context) => {
     }
     const runId = researchRunId(context);
     const status = await services.researchScouts.getFanoutStatus(runId);
+    const eligibility = evaluateResearchEarlyFinalizeEligibility(status);
+    const existingEarlyFinalize = record(context.state.research_early_finalize);
+    const earlyFinalizeRequested = existingEarlyFinalize.requested === true;
+    const earlyFinalize = {
+      eligible: !earlyFinalizeRequested && eligibility.eligible,
+      requested: earlyFinalizeRequested,
+      requested_at:
+        typeof existingEarlyFinalize.requested_at === "string"
+          ? existingEarlyFinalize.requested_at
+          : null,
+      finalization: earlyFinalizeRequested ? "early_finalized" : "full",
+      completed_scouts: eligibility.completedScouts,
+      pending_scouts: eligibility.pendingScouts,
+      evidence_count: eligibility.evidenceCount,
+      covered_roles: eligibility.coveredRoles,
+      missing_critical_roles: eligibility.missingCriticalRoles,
+    };
+
     if (!status.allTerminal) {
       return {
         status: "waiting",
         currentStage: "waiting_research_scouts",
         progress: Math.min(28, 8 + status.terminalCount * 4),
         nextActionAt: nextAt(),
-        state: context.state,
+        state: {
+          ...context.state,
+          research_early_finalize: earlyFinalize,
+        },
         stateReason: `research_scouts_terminal:${status.terminalCount}/5`,
         eventType: "research.scouts_waiting",
         eventPayload: {
@@ -235,6 +263,9 @@ export const gameDiscoveryBatchV2: WorkflowTickHandler = async (context) => {
           completed_count: status.completedCount,
           failed_count: status.failedCount,
           cancelled_count: status.cancelledCount,
+          early_finalize_eligible: earlyFinalize.eligible,
+          early_finalize_evidence_count: eligibility.evidenceCount,
+          early_finalize_covered_roles: eligibility.coveredRoles,
         },
         enqueueReason: "research_fan_in_poll",
         creativeRunId: rootCreativeRunId,
@@ -276,13 +307,18 @@ export const gameDiscoveryBatchV2: WorkflowTickHandler = async (context) => {
         research_scout_terminal_count: status.terminalCount,
         research_scout_completed_count: status.completedCount,
         research_scout_failed_count: status.failedCount,
+        research_early_finalize: earlyFinalize,
       },
-      stateReason: "research_scout_fan_in_complete",
+      stateReason: earlyFinalizeRequested
+        ? "research_scout_fan_in_early_finalized"
+        : "research_scout_fan_in_complete",
       eventType: "research.scouts_completed",
       eventPayload: {
         research_run_id: runId,
         completed_count: status.completedCount,
         failed_count: status.failedCount,
+        cancelled_count: status.cancelledCount,
+        finalization: earlyFinalize.finalization,
       },
       enqueueReason: "research_synthesis",
       creativeRunId: rootCreativeRunId,
@@ -302,7 +338,13 @@ export const gameDiscoveryBatchV2: WorkflowTickHandler = async (context) => {
       services.researchIntelligence,
       services.researchSynthesizerExecutor,
     );
-    const result = await synthesis.run({ researchRunId: runId, signal: context.signal });
+    const earlyFinalizeRequested = record(context.state.research_early_finalize).requested === true;
+    const finalization = earlyFinalizeRequested ? "early_finalized" as const : "full" as const;
+    const result = await synthesis.run({
+      researchRunId: runId,
+      signal: context.signal,
+      finalization,
+    });
     const coverage = researchCoverageSummary(result.pack);
     if (!coverage.useful) {
       const details = {
@@ -338,6 +380,7 @@ export const gameDiscoveryBatchV2: WorkflowTickHandler = async (context) => {
         evidence_pack_id: result.pack.packId,
         research_coverage: "sufficient",
         research_coverage_summary: coverage,
+        research_finalization: result.pack.finalization ?? finalization,
       },
       stateReason: result.reusedFromPersistence ? "evidence_pack_reconciled" : "evidence_pack_ready",
       eventType: "research.evidence_pack_ready",
@@ -347,6 +390,7 @@ export const gameDiscoveryBatchV2: WorkflowTickHandler = async (context) => {
         reused_from_persistence: result.reusedFromPersistence,
         total_evidence: coverage.totalEvidence,
         covered_scout_roles: coverage.coveredScoutRoles,
+        finalization: result.pack.finalization ?? finalization,
       },
       enqueueReason: "concept_council_fanout",
       creativeRunId: rootCreativeRunId,
