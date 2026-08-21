@@ -28,21 +28,21 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      - name: Diagnose unit-test shard 2 of 4
+      - name: Diagnose complete unit suite
         shell: bash
         run: |
           set +e
-          pnpm exec vitest run --shard=2/4 --reporter=verbose 2>&1 | tee vitest-shard2.log
-          printf '%s\n' "${PIPESTATUS[0]}" > vitest-shard2.status
+          pnpm test -- --reporter=verbose 2>&1 | tee vitest-full.log
+          printf '%s\n' "${PIPESTATUS[0]}" > vitest-full.status
           exit 0
 
-      - name: Upload shard 2 diagnostics
+      - name: Upload full test diagnostics
         uses: actions/upload-artifact@v4
         with:
-          name: vitest-shard2-log
+          name: vitest-full-log
           path: |
-            vitest-shard2.log
-            vitest-shard2.status
+            vitest-full.log
+            vitest-full.status
 
-      - name: Assert shard 2 passed
-        run: test "$(cat vitest-shard2.status)" = "0"
+      - name: Assert unit suite passed
+        run: test "$(cat vitest-full.status)" = "0"
