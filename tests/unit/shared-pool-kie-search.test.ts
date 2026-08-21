@@ -22,7 +22,7 @@ describe("shared-pool KIE search", () => {
       includeThoughts: false,
       thinkingLevel: "low",
     });
-    expect(JSON.stringify(body)).toContain("source acquisition, not analysis");
+    expect(JSON.stringify(body)).toContain("source acquisition, not design analysis");
     expect(JSON.stringify(body)).toContain("DIVERSITY IS REQUIRED");
     expect(JSON.stringify(body)).toContain("SOURCE|");
   });
