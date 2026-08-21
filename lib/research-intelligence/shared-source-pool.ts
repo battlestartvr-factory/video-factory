@@ -33,9 +33,22 @@ export const sharedResearchSourcePoolV1Schema = z.object({
 export type SharedResearchSourcePoolItemV1 = z.infer<typeof sharedResearchSourcePoolItemV1Schema>;
 export type SharedResearchSourcePoolV1 = z.infer<typeof sharedResearchSourcePoolV1Schema>;
 
+type SourceCoverageCategory =
+  | "competitor"
+  | "mechanics"
+  | "player_voice"
+  | "gameplay_visual"
+  | "contrarian";
+
 const SAFE_FETCH_CONCURRENCY = 3;
 const MAX_POOL_SOURCES = 10;
 const MAX_KIE_PROVIDER_CALLS = 2;
+const REQUIRED_COVERAGE: SourceCoverageCategory[] = [
+  "competitor",
+  "mechanics",
+  "player_voice",
+  "gameplay_visual",
+];
 
 function metadataArray(value: unknown): string[] {
   return Array.isArray(value)
@@ -55,13 +68,50 @@ function providerCallCount(results: SearchResult[]): number {
   return Number.isFinite(value) && value >= 1 ? Math.trunc(value) : 1;
 }
 
+function mergeUsage(
+  primary: Record<string, unknown>,
+  recovery?: Record<string, unknown>,
+): Record<string, unknown> {
+  if (!recovery) return { ...primary };
+  const merged: Record<string, unknown> = { ...primary };
+  for (const [key, value] of Object.entries(recovery)) {
+    if (typeof value === "number" && typeof merged[key] === "number") {
+      merged[key] = Number(merged[key]) + value;
+    } else if (!(key in merged)) {
+      merged[key] = value;
+    } else {
+      merged[`coverage_recovery_${key}`] = value;
+    }
+  }
+  return merged;
+}
+
 function broadAcquisitionQuery(plan: ResearchPlanSpecV1): string {
   return [
-    "PC/Steam co-op discovery source acquisition.",
+    "PC/Steam friends co-op discovery source acquisition.",
     `Objective: ${plan.researchQuestion}`,
-    "Need diverse direct evidence across five categories: competitor/saturation; mechanics/dependency; repeated player love/pain; real gameplay/camera/visual grammar; contrarian counterexamples/white space.",
-    "Prefer direct publisher/developer/store/review/community pages. Player sentiment claims require review/community evidence. Avoid search-result pages, tracking wrappers, key-art-only pages, and unverifiable summaries.",
+    "Build a diverse evidence library, not a list of store pages.",
+    "Target mix: roughly 2 official/store/developer competitor sources; 2 mechanics/developer/interview/manual sources; 2 player-review/community/forum sources; 2 real-gameplay/video/screenshot or detailed gameplay sources; and 1-2 critical comparison/counterexample sources when available.",
+    "Player sentiment must come from actual reviews/community discussion, not merely aggregate store ratings. Real gameplay evidence must describe or show play rather than key art.",
+    "Prefer direct publisher/developer/store/review/community/video pages. Avoid search-result pages, tracking wrappers, duplicated URLs, key-art-only pages, and unverifiable summaries.",
     "Acquire sources only. Do not generate concepts or perform the five specialist analyses.",
+  ].join("\n");
+}
+
+function coverageRecoveryQuery(plan: ResearchPlanSpecV1, missing: SourceCoverageCategory[]): string {
+  const instructions: Record<SourceCoverageCategory, string> = {
+    competitor: "direct competitor/store/developer context",
+    mechanics: "mechanics, dependency, physics, controls, developer explanation or detailed gameplay systems",
+    player_voice: "actual player reviews, community/forum discussion, recurring love/pain signals",
+    gameplay_visual: "real gameplay footage/screenshots/camera/readability or detailed gameplay descriptions",
+    contrarian: "critical review, comparison, counterexample, saturation or novelty-challenging evidence",
+  };
+  return [
+    "Targeted PC/Steam co-op research coverage recovery. Acquire sources only.",
+    `Objective: ${plan.researchQuestion}`,
+    `The existing verified pool is missing these evidence families: ${missing.join(", ")}.`,
+    ...missing.map((category) => `Need ${category}: ${instructions[category]}.`),
+    "Do not return generic store pages unless they directly fill a missing category. Prefer different domains and direct final URLs.",
   ].join("\n");
 }
 
@@ -73,8 +123,21 @@ function groundedClaims(result: SearchResult): string[] {
     .filter((value): value is string => Boolean(value));
 }
 
+function normalizedUrl(value: string): string {
+  try {
+    const parsed = new URL(value);
+    parsed.hash = "";
+    const ignored = ["snr", "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content"];
+    for (const key of ignored) parsed.searchParams.delete(key);
+    parsed.pathname = parsed.pathname.replace(/\/+$/, "") || "/";
+    return parsed.toString().replace(/\/$/, "").toLowerCase();
+  } catch {
+    return value.trim().toLowerCase();
+  }
+}
+
 function sourceKey(result: SearchResult): string {
-  return (result.canonicalUrl ?? result.url).trim().toLowerCase();
+  return normalizedUrl(result.canonicalUrl ?? result.url);
 }
 
 function dedupeResults(results: SearchResult[]): SearchResult[] {
@@ -85,6 +148,73 @@ function dedupeResults(results: SearchResult[]): SearchResult[] {
     seen.add(key);
     return true;
   });
+}
+
+function sourceCoverageCategories(input: {
+  title?: string;
+  domain?: string;
+  url?: string;
+  text?: string;
+}): SourceCoverageCategory[] {
+  const value = [input.title, input.domain, input.url, input.text].filter(Boolean).join(" ").toLowerCase();
+  const categories = new Set<SourceCoverageCategory>();
+  if (/steam|itch\.io|epicgames|gog|store|developer|publisher|official|game\b/.test(value)) {
+    categories.add("competitor");
+  }
+  if (/mechanic|physics|grapple|movement|ability|abilities|control|interaction|system|design|developer|interview|manual|guide|co-?op|teamwork/.test(value)) {
+    categories.add("mechanics");
+  }
+  if (/reddit|steamcommunity|community|forum|review|reviews|player|players|user review|discussion|feedback|frustrat|boring|fun|love|hate/.test(value)) {
+    categories.add("player_voice");
+  }
+  if (/youtube|youtu\.be|twitch|gameplay|walkthrough|playthrough|screenshot|camera|footage|match|arena|trailer.*gameplay/.test(value)) {
+    categories.add("gameplay_visual");
+  }
+  if (/comparison|versus|\bvs\b|critical|critique|counterexample|similar|alternative|review|analysis|saturation|derivative|clone|novel/.test(value)) {
+    categories.add("contrarian");
+  }
+  return [...categories];
+}
+
+function coverageOfResults(results: SearchResult[]): Set<SourceCoverageCategory> {
+  const coverage = new Set<SourceCoverageCategory>();
+  for (const result of results) {
+    for (const category of sourceCoverageCategories({
+      title: result.title,
+      domain: result.domain,
+      url: result.canonicalUrl ?? result.url,
+      text: [result.snippet, ...metadataArray(result.providerMetadata?.groundedClaims)].filter(Boolean).join(" "),
+    })) coverage.add(category);
+  }
+  return coverage;
+}
+
+function missingCoverage(coverage: Set<SourceCoverageCategory>): SourceCoverageCategory[] {
+  return REQUIRED_COVERAGE.filter((category) => !coverage.has(category));
+}
+
+function titleTokens(value: string): string[] {
+  const stop = new Set(["on", "steam", "official", "site", "game", "the", "a", "an", "community", "hub"]);
+  return value
+    .normalize("NFKC")
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .trim()
+    .split(/\s+/)
+    .filter((token) => token.length >= 2 && !stop.has(token));
+}
+
+function hasClearTitleMismatch(expected: string, actual: string): boolean {
+  const expectedTokens = [...new Set(titleTokens(expected))];
+  const actualTokens = new Set(titleTokens(actual));
+  if (expectedTokens.length < 2 || actualTokens.size < 2) return false;
+  const overlap = expectedTokens.filter((token) => actualTokens.has(token)).length;
+  return overlap / expectedTokens.length < 0.5;
+}
+
+function isGenericSearchTitle(value: string): boolean {
+  const title = value.trim().toLowerCase();
+  return !title || /^(?:www\.)?[\w.-]+\.(?:com|net|org|io|gg)$/.test(title);
 }
 
 export interface SharedSourcePoolProgressEvent {
@@ -105,7 +235,7 @@ export async function acquireSharedResearchSourcePool(input: {
   const plan = researchPlanSpecV1Schema.parse(input.plan);
   const generatedAt = new Date().toISOString();
   const fetchProvider = createWebFetchProvider(undefined, input.signal);
-  const searchProvider = createSharedPoolKieSearchProvider(input.signal);
+  const primaryProvider = createSharedPoolKieSearchProvider(input.signal);
   const query = broadAcquisitionQuery(plan);
   const maxPoolSources = Math.max(1, Math.min(MAX_POOL_SOURCES, plan.budget.maxTotalFetchedSources));
 
@@ -117,35 +247,95 @@ export async function acquireSharedResearchSourcePool(input: {
   if (input.signal.aborted) throw input.signal.reason ?? new Error("Shared source acquisition aborted");
 
   const searchStartedAt = Date.now();
-  // Exactly one provider-level searchText invocation is permitted for the shared
-  // pool. Its dedicated KIE provider may spend one additional internal provenance
-  // recovery call, so the whole Research Run remains hard-capped at <= 2 paid
-  // KIE calls. No outer recovery search is allowed here.
-  const primaryResults = await searchProvider.searchText({
+  const primaryResults = await primaryProvider.searchText({
     query,
     maxResults: maxPoolSources,
     freshness: plan.freshness,
   });
-  const providerCalls = providerCallCount(primaryResults);
-  if (providerCalls > MAX_KIE_PROVIDER_CALLS) {
+  const primaryCalls = providerCallCount(primaryResults);
+  if (primaryCalls > MAX_KIE_PROVIDER_CALLS) {
     const error = new Error(
-      `Shared research source acquisition exceeded the hard KIE call cap (${providerCalls} > ${MAX_KIE_PROVIDER_CALLS})`,
+      `Shared research source acquisition exceeded the hard KIE call cap (${primaryCalls} > ${MAX_KIE_PROVIDER_CALLS})`,
     ) as Error & { code?: string };
     error.code = "RESEARCH_SHARED_SOURCE_POOL_PROVIDER_CALL_CAP_EXCEEDED";
     throw error;
   }
-  const allResults = dedupeResults(primaryResults);
-  const searchMs = Math.max(0, Date.now() - searchStartedAt);
 
+  let combinedResults = dedupeResults(primaryResults);
+  const primaryCoverage = coverageOfResults(combinedResults);
+  const primaryMissing = missingCoverage(primaryCoverage);
+  let coverageRecoveryUsed = false;
+  let recoveryUsage: Record<string, unknown> | undefined;
+  let recoveryCalls = 0;
+
+  // Spend the second and final global web-search slot only when it can improve evidence
+  // diversity. If the primary call already used provenance recovery, quality recovery is
+  // skipped so the hard <=2 paid-search invariant remains structural.
+  if (primaryMissing.length > 0 && primaryCalls === 1 && combinedResults.length < maxPoolSources + 4) {
+    coverageRecoveryUsed = true;
+    await input.reportProgress?.({
+      eventType: "research.source_pool.coverage_recovery_started",
+      key: "source_pool_coverage_recovery_started",
+      payload: { missing_categories: primaryMissing, provider_calls_so_far: primaryCalls },
+    });
+    try {
+      const recoveryProvider = createSharedPoolKieSearchProvider(input.signal, { allowProvenanceRecovery: false });
+      const recoveryResults = await recoveryProvider.searchText({
+        query: coverageRecoveryQuery(plan, primaryMissing),
+        maxResults: Math.min(6, Math.max(3, primaryMissing.length * 2)),
+        freshness: plan.freshness,
+      });
+      recoveryCalls = providerCallCount(recoveryResults);
+      if (recoveryCalls !== 1) {
+        throw new Error(`Coverage recovery must consume exactly one provider call, got ${recoveryCalls}`);
+      }
+      recoveryUsage = providerUsage(recoveryResults);
+      combinedResults = dedupeResults([...combinedResults, ...recoveryResults]);
+      await input.reportProgress?.({
+        eventType: "research.source_pool.coverage_recovery_completed",
+        key: "source_pool_coverage_recovery_completed",
+        payload: {
+          result_count: recoveryResults.length,
+          missing_categories_before: primaryMissing,
+          coverage_after: [...coverageOfResults(combinedResults)],
+          total_provider_calls: primaryCalls + recoveryCalls,
+        },
+      });
+    } catch (error) {
+      // A diversity recovery failure must not erase a usable primary acquisition. We
+      // preserve the failure in trace and let the final verified coverage gate decide.
+      await input.reportProgress?.({
+        eventType: "research.source_pool.coverage_recovery_failed",
+        key: "source_pool_coverage_recovery_failed",
+        payload: {
+          missing_categories: primaryMissing,
+          error: (error instanceof Error ? error.message : String(error)).slice(0, 500),
+        },
+      });
+    }
+  }
+
+  const totalProviderCalls = primaryCalls + recoveryCalls;
+  if (totalProviderCalls > MAX_KIE_PROVIDER_CALLS) {
+    const error = new Error(
+      `Shared research source acquisition exceeded the hard KIE call cap (${totalProviderCalls} > ${MAX_KIE_PROVIDER_CALLS})`,
+    ) as Error & { code?: string };
+    error.code = "RESEARCH_SHARED_SOURCE_POOL_PROVIDER_CALL_CAP_EXCEEDED";
+    throw error;
+  }
+
+  const searchMs = Math.max(0, Date.now() - searchStartedAt);
   await input.reportProgress?.({
     eventType: "research.source_pool.search_completed",
     key: "source_pool_search_completed",
     payload: {
-      result_count: allResults.length,
-      provider_calls: providerCalls,
+      result_count: combinedResults.length,
+      provider_calls: totalProviderCalls,
       provider_call_cap: MAX_KIE_PROVIDER_CALLS,
+      coverage_recovery_used: coverageRecoveryUsed,
+      coverage_before_fetch: [...coverageOfResults(combinedResults)],
       search_ms: searchMs,
-      results: allResults.slice(0, maxPoolSources).map((result) => ({
+      results: combinedResults.slice(0, 14).map((result) => ({
         title: result.title.slice(0, 300),
         url: (result.canonicalUrl ?? result.url).slice(0, 2_000),
         domain: result.domain,
@@ -153,13 +343,13 @@ export async function acquireSharedResearchSourcePool(input: {
     },
   });
 
-  if (allResults.length === 0) {
+  if (combinedResults.length === 0) {
     const error = new Error("Shared KIE source acquisition returned no grounded direct URLs") as Error & { code?: string };
     error.code = "RESEARCH_SHARED_SOURCE_POOL_NO_GROUNDED_SOURCES";
     throw error;
   }
 
-  const selected = allResults.slice(0, maxPoolSources);
+  const selected = combinedResults.slice(0, Math.min(combinedResults.length, maxPoolSources + 4));
   const outcomes: Array<SharedResearchSourcePoolItemV1 | null> = new Array(selected.length).fill(null);
   let cursor = 0;
   const fetchStartedAt = Date.now();
@@ -174,6 +364,33 @@ export async function acquireSharedResearchSourcePool(input: {
       try {
         const document = await fetchProvider.fetchPage(rawUrl);
         const canonicalUrl = document.canonicalUrl ?? document.url;
+        if (
+          !isGenericSearchTitle(result.title) &&
+          document.title &&
+          hasClearTitleMismatch(result.title, document.title)
+        ) {
+          await input.reportProgress?.({
+            eventType: "research.source_pool.source_rejected",
+            key: `source_pool_source_${index}_identity_mismatch`,
+            payload: {
+              source_index: index,
+              search_title: result.title.slice(0, 300),
+              fetched_title: document.title.slice(0, 300),
+              url: canonicalUrl.slice(0, 2_000),
+              reason: "source_identity_mismatch",
+            },
+          });
+          return;
+        }
+        const categories = sourceCoverageCategories({
+          title: document.title || result.title,
+          domain: document.domain,
+          url: canonicalUrl,
+          text: [
+            ...groundedClaims(result),
+            document.text.slice(0, 8_000),
+          ].join(" "),
+        });
         const source: ResearchSourceCandidateV1 = researchSourceCandidateV1Schema.parse({
           sourceRef: `pool-source-${index + 1}`,
           canonicalUrl,
@@ -185,7 +402,7 @@ export async function acquireSharedResearchSourcePool(input: {
           ...(document.fetchedAt ? { fetchedAt: document.fetchedAt } : {}),
           ...(document.contentSha256 ? { contentSha256: document.contentSha256 } : {}),
           extractedText: document.text.slice(0, 30_000),
-          relevanceScore: Math.max(0.5, 0.96 - index * 0.04),
+          relevanceScore: Math.max(0.5, 0.96 - index * 0.025),
           reusedFromCache: false,
           metadata: {
             domain: document.domain,
@@ -193,21 +410,12 @@ export async function acquireSharedResearchSourcePool(input: {
             shared_source_pool: true,
             content_truncated: document.truncated === true,
             page_image_candidate_count: document.imageCandidates?.length ?? 0,
+            research_source_categories: categories,
+            source_identity_verified: true,
             provider_metadata: result.providerMetadata ?? {},
           },
         });
         outcomes[index] = { source, groundedClaims: groundedClaims(result) };
-        await input.reportProgress?.({
-          eventType: "research.source_pool.source_accepted",
-          key: `source_pool_source_${index}_accepted`,
-          payload: {
-            source_index: index,
-            title: source.title?.slice(0, 300) ?? result.title.slice(0, 300),
-            url: source.canonicalUrl.slice(0, 2_000),
-            grounded_claim_count: outcomes[index]!.groundedClaims.length,
-            content_truncated: document.truncated === true,
-          },
-        });
       } catch (error) {
         if (input.signal.aborted) throw input.signal.reason ?? error;
         await input.reportProgress?.({
@@ -225,7 +433,43 @@ export async function acquireSharedResearchSourcePool(input: {
   };
 
   await Promise.all(Array.from({ length: Math.min(SAFE_FETCH_CONCURRENCY, selected.length) }, () => worker()));
-  const sources = outcomes.filter((item): item is SharedResearchSourcePoolItemV1 => Boolean(item));
+
+  const canonicalSeen = new Set<string>();
+  const contentSeen = new Set<string>();
+  const sources: SharedResearchSourcePoolItemV1[] = [];
+  for (const item of outcomes) {
+    if (!item) continue;
+    const canonicalKey = normalizedUrl(item.source.canonicalUrl);
+    const contentKey = item.source.contentSha256?.toLowerCase();
+    if (canonicalSeen.has(canonicalKey) || (contentKey && contentSeen.has(contentKey))) {
+      await input.reportProgress?.({
+        eventType: "research.source_pool.source_rejected",
+        key: `source_pool_source_${item.source.sourceRef}_duplicate`,
+        payload: {
+          source_ref: item.source.sourceRef,
+          url: item.source.canonicalUrl.slice(0, 2_000),
+          reason: "canonical_or_content_duplicate",
+        },
+      });
+      continue;
+    }
+    canonicalSeen.add(canonicalKey);
+    if (contentKey) contentSeen.add(contentKey);
+    sources.push(item);
+    await input.reportProgress?.({
+      eventType: "research.source_pool.source_accepted",
+      key: `source_pool_${item.source.sourceRef}_accepted`,
+      payload: {
+        source_ref: item.source.sourceRef,
+        title: item.source.title?.slice(0, 300) ?? "",
+        url: item.source.canonicalUrl.slice(0, 2_000),
+        grounded_claim_count: item.groundedClaims.length,
+        categories: metadataArray(item.source.metadata.research_source_categories),
+        content_truncated: item.source.metadata.content_truncated === true,
+      },
+    });
+    if (sources.length >= maxPoolSources) break;
+  }
   const safeFetchMs = Math.max(0, Date.now() - fetchStartedAt);
 
   if (sources.length === 0) {
@@ -234,15 +478,42 @@ export async function acquireSharedResearchSourcePool(input: {
     throw error;
   }
 
+  const verifiedCoverage = new Set<SourceCoverageCategory>();
+  for (const item of sources) {
+    for (const category of metadataArray(item.source.metadata.research_source_categories)) {
+      if (["competitor", "mechanics", "player_voice", "gameplay_visual", "contrarian"].includes(category)) {
+        verifiedCoverage.add(category as SourceCoverageCategory);
+      }
+    }
+  }
+  const stillMissing = missingCoverage(verifiedCoverage);
+  if (stillMissing.length > 0) {
+    const error = new Error(
+      `Verified shared source pool lacks required research coverage: ${stillMissing.join(", ")}`,
+    ) as Error & { code?: string; usage?: Record<string, unknown> };
+    error.code = "RESEARCH_SHARED_SOURCE_POOL_COVERAGE_INSUFFICIENT";
+    error.usage = {
+      ...mergeUsage(providerUsage(primaryResults), recoveryUsage),
+      provider_calls: totalProviderCalls,
+      coverage_recovery_used: coverageRecoveryUsed,
+      verified_coverage: [...verifiedCoverage],
+      missing_coverage: stillMissing,
+      safely_fetched_sources: sources.length,
+    };
+    throw error;
+  }
+
   const usage = {
-    ...providerUsage(primaryResults),
-    provider_calls: providerCalls,
-    search_calls: providerCalls,
+    ...mergeUsage(providerUsage(primaryResults), recoveryUsage),
+    provider_calls: totalProviderCalls,
+    search_calls: totalProviderCalls,
     provider_call_cap: MAX_KIE_PROVIDER_CALLS,
     search_provider: "kie_gemini_google_search_shared_pool",
     search_ms: searchMs,
     safe_fetch_ms: safeFetchMs,
     safely_fetched_sources: sources.length,
+    coverage_recovery_used: coverageRecoveryUsed,
+    verified_coverage: [...verifiedCoverage],
   };
 
   await input.reportProgress?.({
@@ -250,10 +521,12 @@ export async function acquireSharedResearchSourcePool(input: {
     key: "source_pool_ready",
     payload: {
       source_count: sources.length,
-      provider_calls: providerCalls,
+      provider_calls: totalProviderCalls,
       provider_call_cap: MAX_KIE_PROVIDER_CALLS,
       search_ms: searchMs,
       safe_fetch_ms: safeFetchMs,
+      coverage_recovery_used: coverageRecoveryUsed,
+      verified_coverage: [...verifiedCoverage],
     },
   });
 
