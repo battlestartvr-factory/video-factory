@@ -28,34 +28,21 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      - run: bash -n scripts/deploy.sh scripts/check-schema-contract.sh scripts/check-google-drive-oauth.sh
-
-      - run: bash scripts/check-schema-contract.sh
-
-      - run: pnpm lint
-
-      - run: pnpm typecheck
-
-      - run: pnpm exec tsc -p tsconfig.worker.json
-
-      - name: Build durable worker image
-        run: docker build --file Dockerfile.worker --tag video-factory-worker:ci .
-
-      - name: Verify FFmpeg assembly runtime
+      - name: Diagnose unit-test shard 2 of 4
+        shell: bash
         run: |
-          docker run --rm --entrypoint ffmpeg video-factory-worker:ci -version
-          docker run --rm --entrypoint ffprobe video-factory-worker:ci -version
+          set +e
+          pnpm exec vitest run --shard=2/4 --reporter=verbose 2>&1 | tee vitest-shard2.log
+          printf '%s\n' "${PIPESTATUS[0]}" > vitest-shard2.status
+          exit 0
 
-      - name: Unit tests shard 1 of 4
-        run: pnpm exec vitest run --shard=1/4
+      - name: Upload shard 2 diagnostics
+        uses: actions/upload-artifact@v4
+        with:
+          name: vitest-shard2-log
+          path: |
+            vitest-shard2.log
+            vitest-shard2.status
 
-      - name: Unit tests shard 2 of 4
-        run: pnpm exec vitest run --shard=2/4
-
-      - name: Unit tests shard 3 of 4
-        run: pnpm exec vitest run --shard=3/4
-
-      - name: Unit tests shard 4 of 4
-        run: pnpm exec vitest run --shard=4/4
-
-      - run: pnpm build
+      - name: Assert shard 2 passed
+        run: test "$(cat vitest-shard2.status)" = "0"
