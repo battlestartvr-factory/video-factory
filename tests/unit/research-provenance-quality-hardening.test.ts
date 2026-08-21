@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   KieGeminiGroundedSearchProvider,
-  parseKieGroundedPayloads,
   type SearchResult,
 } from "../../lib/web";
+import { parseKieGroundedPayloads } from "../../lib/web/kie-grounded-search";
 import {
   KieGroundedResearchScoutExecutor,
   sanitizeGroundedEvidenceClaim,
