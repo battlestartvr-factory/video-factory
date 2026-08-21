@@ -27,6 +27,16 @@ function decisionLabel(decision: unknown): string {
   return "Ждёт решения";
 }
 
+function buildabilityLevel(value: unknown): string {
+  if (value === "low") return "низкая";
+  if (value === "medium") return "средняя";
+  if (value === "high") return "высокая";
+  if (value === "none") return "нет";
+  if (value === "light") return "лёгкая";
+  if (value === "heavy") return "высокая";
+  return str(value) ?? "—";
+}
+
 function Section({ title, value }: { title: string; value: unknown }) {
   const text = str(value);
   if (!text) return null;
@@ -65,9 +75,9 @@ export function ConceptReviewPanel({
     <div className="space-y-4 border-b border-border bg-background/10 p-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <p className="text-sm font-semibold text-foreground">Human Concept Gate</p>
+          <p className="text-sm font-semibold text-foreground">Проверка концепции человеком</p>
           <p className="mt-1 text-xs leading-5 text-muted-foreground">
-            Сначала утвердите саму игру. До этого gameplay-моменты, картинки и видео не запускаются.
+            Сначала утвердите саму игру. До этого игровые моменты, изображения и видео не запускаются.
           </p>
         </div>
         <Badge
@@ -86,20 +96,20 @@ export function ConceptReviewPanel({
       </div>
 
       <div className="grid gap-4 rounded-xl border border-border bg-background/30 p-4 md:grid-cols-2">
-        <Section title="Core mechanic" value={concept.coreMechanic} />
-        <Section title="Почему нужен co-op" value={concept.coopDependency} />
-        <Section title="Gameplay hook" value={concept.gameplayHook} />
-        <Section title="Failure / tension" value={concept.failureMode} />
-        <Section title="Social moment" value={concept.socialMoment} />
-        <Section title="Spectacle" value={concept.spectacle} />
-        <Section title="Setting" value={concept.setting} />
-        <Section title="Art direction" value={concept.artDirection} />
-        <Section title="Camera" value={concept.camera} />
-        <Section title="Readability" value={concept.readability} />
+        <Section title="Основная механика" value={concept.coreMechanic} />
+        <Section title="Почему нужен совместный режим" value={concept.coopDependency} />
+        <Section title="Главная игровая фишка" value={concept.gameplayHook} />
+        <Section title="Провал / напряжение" value={concept.failureMode} />
+        <Section title="Социальный момент" value={concept.socialMoment} />
+        <Section title="Зрелищность" value={concept.spectacle} />
+        <Section title="Место действия" value={concept.setting} />
+        <Section title="Художественное направление" value={concept.artDirection} />
+        <Section title="Камера" value={concept.camera} />
+        <Section title="Читаемость" value={concept.readability} />
 
         {interactionModel.length > 0 && (
           <div>
-            <p className="text-[11px] font-semibold uppercase tracking-wider text-muted">Interaction model</p>
+            <p className="text-[11px] font-semibold uppercase tracking-wider text-muted">Модель взаимодействия</p>
             <div className="mt-2 flex flex-wrap gap-1.5">
               {interactionModel.map((item) => (
                 <Badge key={item} variant="secondary">{item}</Badge>
@@ -138,9 +148,9 @@ export function ConceptReviewPanel({
 
         {Object.keys(buildability).length > 0 && (
           <div>
-            <p className="text-[11px] font-semibold uppercase tracking-wider text-muted">Buildability</p>
+            <p className="text-[11px] font-semibold uppercase tracking-wider text-muted">Сложность реализации</p>
             <p className="mt-1 text-sm leading-6 text-muted-foreground">
-              networking: {str(buildability.networking) ?? "—"}; physics: {str(buildability.physics) ?? "—"}; content: {str(buildability.contentBurden) ?? "—"}; NPC AI: {str(buildability.npcAiDependency) ?? "—"}.
+              Сеть: {buildabilityLevel(buildability.networking)}; физика: {buildabilityLevel(buildability.physics)}; объём контента: {buildabilityLevel(buildability.contentBurden)}; зависимость от ИИ NPC: {buildabilityLevel(buildability.npcAiDependency)}.
             </p>
             {array(buildability.mainRisks).length > 0 && (
               <p className="mt-1 text-xs leading-5 text-muted-foreground">
@@ -154,7 +164,7 @@ export function ConceptReviewPanel({
       <textarea
         value={feedback}
         onChange={(event) => onFeedback(event.target.value)}
-        placeholder="Что нравится или что нужно поменять в механике, co-op, геймдизайне, сеттинге или арте? Для Исправить / Отклонить комментарий обязателен."
+        placeholder="Что нравится или что нужно поменять в механике, совместной игре, геймдизайне, сеттинге или визуальном стиле? Для «Исправить» / «Отклонить» комментарий обязателен. Можно писать по-русски."
         disabled={!gateActive}
         className="min-h-28 w-full resize-y rounded-lg border border-border bg-background/60 px-3 py-2 text-sm text-foreground outline-none transition-colors placeholder:text-muted focus:border-accent disabled:cursor-not-allowed disabled:opacity-60"
       />
@@ -173,7 +183,7 @@ export function ConceptReviewPanel({
 
       {decision === "reject" && (
         <p className="text-xs leading-5 text-muted-foreground">
-          При отклонении эта идея удаляется из активного набора. Завод обязан создать механически новую игру, а не рескин старой; отклонённая версия остаётся только как negative memory.
+          При отклонении эта идея удаляется из активного набора. Завод обязан создать механически новую игру, а не перекрасить старую; отклонённая версия остаётся только как отрицательная память.
         </p>
       )}
     </div>
