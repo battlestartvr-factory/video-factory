@@ -49,7 +49,6 @@ function status(items: ResearchScoutFanoutItem[]): ResearchScoutFanoutStatus {
     failedCount: items.filter((entry) => entry.jobStatus === "failed").length,
     cancelledCount: items.filter((entry) => entry.jobStatus === "cancelled").length,
     allTerminal: items.length === 5 && terminal.length === 5,
-    earlyFinalized: false,
     items,
   };
 }
