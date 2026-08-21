@@ -1,7 +1,7 @@
 "use client";
 
-import { useState, useRef, useCallback } from "react";
-import { ArrowUp, Paperclip, Plus, X } from "lucide-react";
+import { useState, useRef, useCallback, useEffect } from "react";
+import { ArrowUp, Loader2, Paperclip, Plus, Square, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { getAcceptString } from "@/lib/attachments/mime";
@@ -19,6 +19,9 @@ interface ChatComposerProps {
     content: string,
     options: { modelId?: string; reasoningLevel?: string; files: File[] },
   ) => Promise<boolean> | boolean;
+  onStop?: () => Promise<void> | void;
+  stopActive?: boolean;
+  stopPending?: boolean;
   disabled?: boolean;
   chatId?: string;
   defaultModelId?: string;
@@ -27,8 +30,42 @@ interface ChatComposerProps {
   autoFocus?: boolean;
 }
 
+const TERMINAL_FACTORY_STATUSES = new Set(["completed", "failed", "cancelled"]);
+
+function object(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+function array(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : [];
+}
+
+function latestDiscoveryV2RunId(payload: unknown): string | null {
+  const data = object(object(payload).data);
+  const messages = array(data.messages);
+  for (let messageIndex = messages.length - 1; messageIndex >= 0; messageIndex -= 1) {
+    const message = object(messages[messageIndex]);
+    if (message.role !== "assistant") continue;
+    const metadata = object(message.metadata);
+    const tasks = array(metadata.tasks).length ? array(metadata.tasks) : metadata.task ? [metadata.task] : [];
+    for (let taskIndex = tasks.length - 1; taskIndex >= 0; taskIndex -= 1) {
+      const task = object(tasks[taskIndex]);
+      if (task.action !== "game_discovery") continue;
+      const settings = object(task.settings);
+      if (Number(settings.workflowVersion ?? 1) !== 2) continue;
+      return typeof settings.runId === "string" && settings.runId ? settings.runId : null;
+    }
+  }
+  return null;
+}
+
 export function ChatComposer({
   onSend,
+  onStop,
+  stopActive = false,
+  stopPending = false,
   disabled,
   chatId,
   defaultModelId = DEFAULT_LLM_MODEL,
@@ -39,10 +76,55 @@ export function ChatComposer({
   const [files, setFiles] = useState<PendingFile[]>([]);
   const [dragOver, setDragOver] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [autoStopRunId, setAutoStopRunId] = useState<string | null>(null);
+  const [autoStopPending, setAutoStopPending] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const isHero = variant === "hero";
+  const effectiveStopActive = stopActive || Boolean(autoStopRunId);
+  const effectiveStopPending = stopPending || autoStopPending;
   const effectiveDisabled = disabled || submitting;
+  const inputDisabled = effectiveDisabled || effectiveStopActive;
+
+  useEffect(() => {
+    if (!chatId || stopActive) return;
+
+    let cancelled = false;
+    let inFlight = false;
+
+    const inspect = async () => {
+      if (inFlight || cancelled) return;
+      inFlight = true;
+      try {
+        const messagesResponse = await fetch(`/api/chats/${chatId}/messages?limit=50`, { cache: "no-store" });
+        if (!messagesResponse.ok) return;
+        const messagesPayload = await messagesResponse.json().catch(() => null);
+        const runId = latestDiscoveryV2RunId(messagesPayload);
+        if (!runId) {
+          if (!cancelled) setAutoStopRunId(null);
+          return;
+        }
+
+        const batchResponse = await fetch(`/api/discovery/batches/${runId}`, { cache: "no-store" });
+        if (!batchResponse.ok) return;
+        const batchPayload = await batchResponse.json().catch(() => null);
+        const status = object(object(object(batchPayload).data).factoryJob).status;
+        if (cancelled) return;
+        setAutoStopRunId(
+          typeof status === "string" && !TERMINAL_FACTORY_STATUSES.has(status) ? runId : null,
+        );
+      } finally {
+        inFlight = false;
+      }
+    };
+
+    void inspect();
+    const timer = window.setInterval(() => void inspect(), autoStopRunId ? 1_500 : 4_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [autoStopRunId, chatId, stopActive]);
 
   const addFiles = useCallback((newFiles: FileList | File[]) => {
     const arr = Array.from(newFiles);
@@ -58,7 +140,7 @@ export function ChatComposer({
 
   const handleSend = async () => {
     const trimmed = content.trim();
-    if (effectiveDisabled || (!trimmed && files.length === 0)) return;
+    if (effectiveDisabled || effectiveStopActive || (!trimmed && files.length === 0)) return;
 
     setSubmitting(true);
     try {
@@ -76,6 +158,29 @@ export function ChatComposer({
       if (textareaRef.current) textareaRef.current.style.height = "auto";
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  const handleStop = async () => {
+    if (effectiveStopPending) return;
+    if (onStop && stopActive) {
+      await onStop();
+      return;
+    }
+    if (!autoStopRunId) return;
+
+    setAutoStopPending(true);
+    try {
+      const response = await fetch(`/api/discovery/batches/${autoStopRunId}/cancel`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reason: "chat_stop_button" }),
+      });
+      const payload = await response.json().catch(() => null);
+      if (!response.ok || !payload?.ok) return;
+      setAutoStopRunId(null);
+    } finally {
+      setAutoStopPending(false);
     }
   };
 
@@ -116,7 +221,7 @@ export function ChatComposer({
                   type="button"
                   onClick={() => setFiles((prev) => prev.filter((x) => x.id !== f.id))}
                   className="text-muted-foreground hover:text-foreground"
-                  disabled={effectiveDisabled}
+                  disabled={inputDisabled}
                 >
                   <X className="h-3 w-3" />
                 </button>
@@ -138,7 +243,7 @@ export function ChatComposer({
           onDrop={(e) => {
             e.preventDefault();
             setDragOver(false);
-            if (!effectiveDisabled && e.dataTransfer.files.length) addFiles(e.dataTransfer.files);
+            if (!inputDisabled && e.dataTransfer.files.length) addFiles(e.dataTransfer.files);
           }}
         >
           <textarea
@@ -146,10 +251,10 @@ export function ChatComposer({
             value={content}
             onChange={handleInput}
             onKeyDown={handleKeyDown}
-            placeholder={isHero ? "Спросите что угодно" : "Напишите сообщение…"}
+            placeholder={effectiveStopActive ? "Процесс выполняется — нажмите Stop, чтобы остановить" : isHero ? "Спросите что угодно" : "Напишите сообщение…"}
             rows={isHero ? 2 : 1}
             autoFocus={autoFocus}
-            disabled={effectiveDisabled}
+            disabled={inputDisabled}
             className={cn(
               "chat-composer-textarea w-full resize-none bg-transparent text-foreground placeholder:text-muted focus:outline-none focus-visible:outline-none focus-visible:ring-0",
               isHero
@@ -171,7 +276,7 @@ export function ChatComposer({
                 className={cn("shrink-0", isHero ? "h-9 w-9 rounded-full" : "h-8 w-8")}
                 onClick={() => fileInputRef.current?.click()}
                 aria-label="Добавить файл"
-                disabled={effectiveDisabled}
+                disabled={inputDisabled}
               >
                 {isHero ? <Plus className="h-5 w-5" /> : <Paperclip className="h-4 w-4" />}
               </Button>
@@ -182,7 +287,7 @@ export function ChatComposer({
                 accept={getAcceptString()}
                 className="hidden"
                 onChange={(e) => e.target.files && addFiles(e.target.files)}
-                disabled={effectiveDisabled}
+                disabled={inputDisabled}
               />
               {chatId ? (
                 <ContextInspector
@@ -192,15 +297,33 @@ export function ChatComposer({
                 />
               ) : null}
             </div>
-            <Button
-              size="icon"
-              className={cn("shrink-0 rounded-full", isHero ? "h-9 w-9" : "h-8 w-8")}
-              disabled={effectiveDisabled || (!content.trim() && files.length === 0)}
-              onClick={() => void handleSend()}
-              aria-label="Отправить"
-            >
-              <ArrowUp className={isHero ? "h-5 w-5" : "h-4 w-4"} />
-            </Button>
+            {effectiveStopActive ? (
+              <Button
+                type="button"
+                size="icon"
+                className={cn("shrink-0 rounded-full", isHero ? "h-9 w-9" : "h-8 w-8")}
+                disabled={effectiveStopPending || (!onStop && !autoStopRunId)}
+                onClick={() => void handleStop()}
+                aria-label="Остановить"
+                title="Остановить текущий процесс"
+              >
+                {effectiveStopPending ? (
+                  <Loader2 className={cn("animate-spin", isHero ? "h-5 w-5" : "h-4 w-4")} />
+                ) : (
+                  <Square className={cn("fill-current", isHero ? "h-4 w-4" : "h-3.5 w-3.5")} />
+                )}
+              </Button>
+            ) : (
+              <Button
+                size="icon"
+                className={cn("shrink-0 rounded-full", isHero ? "h-9 w-9" : "h-8 w-8")}
+                disabled={effectiveDisabled || (!content.trim() && files.length === 0)}
+                onClick={() => void handleSend()}
+                aria-label="Отправить"
+              >
+                <ArrowUp className={isHero ? "h-5 w-5" : "h-4 w-4"} />
+              </Button>
+            )}
           </div>
         </div>
       </div>

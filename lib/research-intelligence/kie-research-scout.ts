@@ -190,6 +190,7 @@ export class KieGroundedResearchScoutExecutor implements ResearchScoutExecutor {
         });
         resultBySourceRef.set(sourceRef, result);
       } catch (error) {
+        if (input.signal.aborted) throw input.signal.reason ?? error;
         warnings.push(
           `Source fetch skipped: ${error instanceof Error ? error.message : String(error)}`.slice(0, 240),
         );
@@ -291,9 +292,14 @@ export class KieGroundedResearchScoutExecutor implements ResearchScoutExecutor {
 }
 
 export function createKieGroundedResearchScoutExecutor(): ResearchScoutExecutor {
-  const fetchProvider = createWebFetchProvider();
-  const searchProvider = createKieGeminiGroundedSearchProvider(fetchProvider);
-  return new KieGroundedResearchScoutExecutor(
-    createResearchToolbox({ searchProvider, fetchProvider }),
-  );
+  return {
+    async execute(input) {
+      const fetchProvider = createWebFetchProvider(undefined, input.signal);
+      const searchProvider = createKieGeminiGroundedSearchProvider(fetchProvider, input.signal);
+      const executor = new KieGroundedResearchScoutExecutor(
+        createResearchToolbox({ searchProvider, fetchProvider }),
+      );
+      return executor.execute(input);
+    },
+  };
 }
