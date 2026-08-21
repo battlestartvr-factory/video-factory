@@ -23,8 +23,9 @@ const scoutFactory = readFileSync(
 
 const publicLookup = async () => [{ address: "93.184.216.34", family: 4 }];
 
-function abortableFetchMock() {
+function abortableFetchMock(onStart?: () => void) {
   return vi.fn((_url: string | URL | Request, init?: RequestInit) => {
+    onStart?.();
     const signal = init?.signal;
     return new Promise<Response>((_resolve, reject) => {
       if (signal?.aborted) {
@@ -125,16 +126,22 @@ describe("PR1 Real Stop provider abort boundary", () => {
 
   it("aborts an in-flight Safe Fetch request and does not continue through redirects", async () => {
     const controller = new AbortController();
-    const fetchMock = abortableFetchMock();
+    let markFetchStarted!: () => void;
+    const fetchStarted = new Promise<void>((resolve) => {
+      markFetchStarted = resolve;
+    });
+    const fetchMock = abortableFetchMock(markFetchStarted);
     vi.stubGlobal("fetch", fetchMock);
     const provider = createWebFetchProvider(publicLookup, controller.signal);
 
     const pending = provider.fetchPage("https://example.com/game");
-    await Promise.resolve();
+    await fetchStarted;
     controller.abort(new Error("user_stop"));
 
     await expect(pending).rejects.toThrow("user_stop");
     expect(fetchMock).toHaveBeenCalledTimes(1);
+    const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    expect(init.signal?.aborted).toBe(true);
   });
 
   it("constructs KIE search and Safe Fetch per Scout execution with the worker AbortSignal", () => {
