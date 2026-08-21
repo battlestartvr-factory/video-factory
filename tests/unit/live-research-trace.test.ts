@@ -86,15 +86,15 @@ describe("PR2 live research UI", () => {
     expect(composer).toContain("game-discovery-v2-activity");
   });
 
-  it("surfaces Scouts, search, sources, evidence, elapsed and last activity", () => {
-    expect(traceUi).toContain("Live Research Trace");
-    expect(traceUi).toContain("elapsed");
-    expect(traceUi).toContain("last activity");
+  it("surfaces Scouts, search, sources, evidence, elapsed and last activity in the Russian UI", () => {
+    expect(traceUi).toContain("Ход исследования");
+    expect(traceUi).toContain("прошло");
+    expect(traceUi).toContain("последняя активность");
     expect(traceUi).toContain("research.search.started");
     expect(traceUi).toContain("research.source.accepted");
     expect(traceUi).toContain("research.evidence.persisted");
-    expect(traceUi).toContain("Live sources");
-    expect(traceUi).toContain("Live evidence");
+    expect(traceUi).toContain("Источники ·");
+    expect(traceUi).toContain("Доказательства ·");
   });
 });
 
