@@ -81,6 +81,7 @@ jobs:
           git fetch origin '+refs/heads/*:refs/remotes/origin/*' --quiet
           git cat-file -e "${DEPLOY_COMMIT}^{commit}" || fail "candidate commit unavailable"
           git cat-file -e "${DEPLOY_COMMIT}:scripts/deploy.sh" || fail "candidate deploy script unavailable"
+          git cat-file -e "${DEPLOY_COMMIT}:scripts/check-google-drive-oauth.sh" || fail "candidate Drive OAuth check unavailable"
           ok "candidate commit ${DEPLOY_COMMIT} is available"
           ok "current server commit $(git rev-parse HEAD)"
 
@@ -106,6 +107,13 @@ jobs:
           [[ -n "${GOOGLE_DRIVE_REFRESH_TOKEN:-}" ]] || fail "GOOGLE_DRIVE_REFRESH_TOKEN missing"
           ok "Google Drive owner OAuth credentials configured; runtime auth mode will be oauth_user"
           ok "Google Drive archive root configured"
+
+          tmp_drive_check="$(mktemp)"
+          trap 'rm -f "$tmp_drive_check"' EXIT
+          git show "${DEPLOY_COMMIT}:scripts/check-google-drive-oauth.sh" > "$tmp_drive_check"
+          chmod 700 "$tmp_drive_check"
+          "$tmp_drive_check"
+          ok "Google Drive owner OAuth and archive-root read verified"
 
           [[ "$APP_URL" == https://* ]] || fail "APP_URL must use public HTTPS"
           [[ "$APP_URL" != *localhost* && "$APP_URL" != *127.0.0.1* ]] || fail "APP_URL cannot be localhost"

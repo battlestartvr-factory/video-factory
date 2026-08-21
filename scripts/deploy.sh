@@ -123,6 +123,9 @@ log "Database schema contract matches application: $EXPECTED_SCHEMA_VERSION"
 export GOOGLE_DRIVE_AUTH_MODE=oauth_user
 log "Google Drive auth mode: oauth_user (owner credentials)"
 
+log "Verifying live Google Drive owner OAuth before service restart"
+bash scripts/check-google-drive-oauth.sh
+
 log "Building Docker images"
 docker compose -f "$COMPOSE_FILE" build --pull
 
