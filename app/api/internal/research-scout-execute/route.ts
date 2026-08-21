@@ -95,13 +95,14 @@ export async function POST(request: Request) {
       { status: 400 },
     );
   }
-  if (parsed.data.context.assignment.role !== parsed.data.context.scoutRole) {
+  const input = parsed.data;
+  if (input.context.assignment.role !== input.context.scoutRole) {
     return NextResponse.json(
       { ok: false, code: "RESEARCH_SCOUT_ROLE_MISMATCH", message: "Scout role and assignment role differ" },
       { status: 400 },
     );
   }
-  if (parsed.data.context.existingReport) {
+  if (input.context.existingReport) {
     return NextResponse.json(
       {
         ok: false,
@@ -117,12 +118,12 @@ export async function POST(request: Request) {
   const reportProgress = async (event: ResearchScoutProgressEvent) => {
     const { error } = await service.rpc("research_record_progress_event", {
       payload: {
-        root_factory_job_id: parsed.data.context.rootFactoryJobId,
-        job_id: parsed.data.jobId,
-        research_run_id: parsed.data.context.researchRunId,
-        scout_role: parsed.data.context.scoutRole,
+        root_factory_job_id: input.context.rootFactoryJobId,
+        job_id: input.jobId,
+        research_run_id: input.context.researchRunId,
+        scout_role: input.context.scoutRole,
         event_type: event.eventType,
-        dedupe_key: `scout:${parsed.data.jobId}:${executionId}:${event.key}`,
+        dedupe_key: `scout:${input.jobId}:${executionId}:${event.key}`,
         payload: {
           ...event.payload,
           execution_id: executionId,
@@ -139,7 +140,7 @@ export async function POST(request: Request) {
     }
     console.warn("research.progress_persist_failed", {
       event_type: event.eventType,
-      scout_role: parsed.data.context.scoutRole,
+      scout_role: input.context.scoutRole,
       error: error.message.slice(0, 1_000),
     });
   };
@@ -147,16 +148,16 @@ export async function POST(request: Request) {
   const reportPoolProgress = async (event: { eventType: string; key: string; payload?: Record<string, unknown> }) => {
     const { error } = await service.rpc("research_record_progress_event", {
       payload: {
-        root_factory_job_id: parsed.data.context.rootFactoryJobId,
-        job_id: parsed.data.jobId,
-        research_run_id: parsed.data.context.researchRunId,
+        root_factory_job_id: input.context.rootFactoryJobId,
+        job_id: input.jobId,
+        research_run_id: input.context.researchRunId,
         scout_role: null,
         event_type: event.eventType,
-        dedupe_key: `source_pool:${parsed.data.context.researchRunId}:${executionId}:${event.key}`,
+        dedupe_key: `source_pool:${input.context.researchRunId}:${executionId}:${event.key}`,
         payload: {
           ...(event.payload ?? {}),
           execution_id: executionId,
-          acquisition_owner_job_id: parsed.data.jobId,
+          acquisition_owner_job_id: input.jobId,
         },
       },
     });
@@ -174,7 +175,7 @@ export async function POST(request: Request) {
 
   async function getPool(): Promise<Record<string, unknown>> {
     const { data, error } = await service.rpc("research_get_shared_source_pool", {
-      p_research_run_id: parsed.data.context.researchRunId,
+      p_research_run_id: input.context.researchRunId,
     });
     if (error) throw new Error(`Failed to read shared source pool: ${error.message}`);
     return object(data);
@@ -204,8 +205,8 @@ export async function POST(request: Request) {
   try {
     const leaseResult = await service.rpc("research_acquire_shared_source_pool", {
       payload: {
-        research_run_id: parsed.data.context.researchRunId,
-        job_id: parsed.data.jobId,
+        research_run_id: input.context.researchRunId,
+        job_id: input.jobId,
       },
     });
     if (leaseResult.error) throw new Error(`Failed to acquire shared source pool lease: ${leaseResult.error.message}`);
@@ -218,22 +219,22 @@ export async function POST(request: Request) {
       const planResult = await service
         .from("research_runs")
         .select("plan")
-        .eq("id", parsed.data.context.researchRunId)
+        .eq("id", input.context.researchRunId)
         .single();
       if (planResult.error) throw new Error(`Failed to load research plan: ${planResult.error.message}`);
       const plan = researchPlanSpecV1Schema.parse(planResult.data?.plan);
       try {
         pool = await acquireSharedResearchSourcePool({
-          researchRunId: parsed.data.context.researchRunId,
-          ownerJobId: parsed.data.jobId,
+          researchRunId: input.context.researchRunId,
+          ownerJobId: input.jobId,
           plan,
           signal: request.signal,
           reportProgress: reportPoolProgress,
         });
         const complete = await service.rpc("research_complete_shared_source_pool", {
           payload: {
-            research_run_id: parsed.data.context.researchRunId,
-            job_id: parsed.data.jobId,
+            research_run_id: input.context.researchRunId,
+            job_id: input.jobId,
             pool,
             usage: pool.usage,
           },
@@ -245,8 +246,8 @@ export async function POST(request: Request) {
         const message = typeof value.message === "string" ? value.message : String(error);
         await service.rpc("research_fail_shared_source_pool", {
           payload: {
-            research_run_id: parsed.data.context.researchRunId,
-            job_id: parsed.data.jobId,
+            research_run_id: input.context.researchRunId,
+            job_id: input.jobId,
             error: { code, message: message.slice(0, 2_000) },
             usage: object(value.usage),
           },
@@ -266,8 +267,8 @@ export async function POST(request: Request) {
 
     const executor = new SharedSourcePoolResearchScoutExecutor(pool, reportProgress);
     const result = await executor.execute({
-      jobId: parsed.data.jobId,
-      context: parsed.data.context,
+      jobId: input.jobId,
+      context: input.context,
       signal: request.signal,
     });
     return NextResponse.json(
