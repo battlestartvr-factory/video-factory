@@ -12,7 +12,11 @@ import type {
   ResearchScoutFanoutStatus,
 } from "../../lib/research-intelligence/scout-runtime";
 
-const migration = readFileSync(
+const scopedMigration = readFileSync(
+  join(process.cwd(), "supabase/migrations/20260821090500_research_early_finalize.sql"),
+  "utf8",
+);
+const requestMigration = readFileSync(
   join(process.cwd(), "supabase/migrations/20260821100000_research_early_finalize.sql"),
   "utf8",
 );
@@ -164,16 +168,23 @@ describe("PR4 Research early-finalize eligibility", () => {
 });
 
 describe("PR4 durable Answer now contract", () => {
-  it("cancels only unfinished Scout jobs and keeps the root alive for immediate synthesis", () => {
-    expect(migration).toContain("orchestrator_request_research_early_finalize");
-    expect(migration).toContain("v_root.current_stage <> 'waiting_research_scouts'");
-    expect(migration).toContain("(v_early->>'eligible')::BOOLEAN");
-    expect(migration).toContain("public.research_scout_assignments AS rsa");
-    expect(migration).toContain("cancel_reason = COALESCE(fj.cancel_reason, 'research_early_finalize')");
-    expect(migration).toContain("state = jsonb_set(v_state, '{research_early_finalize}', v_early, true)");
-    expect(migration).toContain("next_action_at = NOW()");
-    expect(migration).toContain("'research.early_finalize_requested'");
-    expect(migration).toMatch(/GRANT EXECUTE ON FUNCTION public\.orchestrator_request_research_early_finalize[\s\S]*TO service_role/);
+  it("revalidates coverage in the database, cancels/fences only unfinished Scouts, and keeps the root alive", () => {
+    expect(requestMigration).toContain("orchestrator_request_research_early_finalize");
+    expect(requestMigration).toContain("v_root.current_stage <> 'waiting_research_scouts'");
+    expect(requestMigration).toContain("(v_early->>'eligible')::BOOLEAN");
+    expect(requestMigration).toContain("public.research_early_finalize_scout_fanout(v_research_run_id)");
+    expect(requestMigration).toContain("state = jsonb_set(v_state, '{research_early_finalize}', v_early, true)");
+    expect(requestMigration).toContain("next_action_at = NOW()");
+    expect(requestMigration).toContain("'research.early_finalize_requested'");
+    expect(requestMigration).toMatch(/GRANT EXECUTE ON FUNCTION public\.orchestrator_request_research_early_finalize[\s\S]*TO service_role/);
+
+    expect(scopedMigration).toContain("research_early_finalize_scout_fanout");
+    expect(scopedMigration).toContain("cancel_reason = COALESCE(fj.cancel_reason, 'research_early_finalized')");
+    expect(scopedMigration).toContain("UPDATE public.factory_job_stages AS stage");
+    expect(scopedMigration).toContain("UPDATE public.provider_tasks AS task");
+    expect(scopedMigration).toContain("'finalization', 'early_finalized'");
+    expect(scopedMigration).toContain("research_early_finalize_evidence_guard");
+    expect(scopedMigration).toContain("RESEARCH_EARLY_FINALIZED: late Scout report rejected");
   });
 
   it("propagates eligibility into durable workflow state and marks synthesis output", () => {
