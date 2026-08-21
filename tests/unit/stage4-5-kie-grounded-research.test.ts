@@ -63,7 +63,7 @@ function groundedPayload() {
 }
 
 function mockKieResponse(payload: unknown = groundedPayload()) {
-  const fetchMock = vi.fn().mockResolvedValue(
+  const fetchMock = vi.fn().mockImplementation(async () =>
     new Response(JSON.stringify(payload), {
       status: 200,
       headers: { "content-type": "application/json" },
@@ -207,8 +207,8 @@ describe("KIE Gemini Google Search grounding contract", () => {
     expect(body.tools).toEqual([{ googleSearch: {} }]);
   });
 
-  it("fails closed when KIE returns prose without Google grounding source URLs", async () => {
-    mockKieResponse({ candidates: [{ content: { parts: [{ text: "Ungrounded answer" }] } }] });
+  it("fails closed after one bounded recovery when KIE returns prose without grounding URLs", async () => {
+    const fetchMock = mockKieResponse({ candidates: [{ content: { parts: [{ text: "Ungrounded answer" }] } }] });
     const provider = new KieGeminiGroundedSearchProvider(
       "https://api.kie.ai",
       "test-key",
@@ -219,6 +219,7 @@ describe("KIE Gemini Google Search grounding contract", () => {
     await expect(provider.searchText({ query: "co-op games" })).rejects.toMatchObject({
       code: "WEB_SEARCH_GROUNDING_MISSING",
     });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 });
 
