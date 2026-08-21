@@ -105,6 +105,24 @@ function modelName(envName: string, fallback = "gemini-3-6-flash"): string {
   return (process.env[envName] ?? "").trim() || fallback;
 }
 
+function objectiveUsesRussian(objective: ReturnType<typeof discoveryObjectiveSpecV1Schema.parse>): boolean {
+  const metadata = object(objective.metadata);
+  const requested = text(metadata.responseLocale ?? metadata.response_locale ?? metadata.locale)?.toLowerCase();
+  if (requested === "ru" || requested === "ru-ru" || requested === "russian") return true;
+  return /[А-Яа-яЁё]/u.test(`${objective.title}\n${objective.searchIntent}`);
+}
+
+function humanLanguageInstruction(objective: ReturnType<typeof discoveryObjectiveSpecV1Schema.parse>): string {
+  if (!objectiveUsesRussian(objective)) {
+    return "Write human-facing concept text in the same language as the user's OBJECTIVE. Keep JSON keys, schema names, IDs, and required enum values exactly as specified.";
+  }
+  return "The user-facing language is Russian. Write ALL human-facing concept strings in natural Russian: pitches, mechanics, co-op rationale, roles/responsibilities, interaction labels, failure/social beats, setting, art direction, camera/readability, novelty-axis text, risks, MVP read, reference influence prose, whatIsNew, analog prose, and co-op rationale. Keep JSON keys, schema names, IDs and required enum values (low|medium|high, none|light|heavy) in English exactly as specified.";
+}
+
+function briefFidelityInstruction(): string {
+  return "OBJECTIVE is the authoritative product brief. Research is evidence for strengthening that brief, not permission to replace the user's game fantasy with an unrelated game. Preserve explicit fantasy anchors from OBJECTIVE: named character/archetype, setting, core activity or game mode, signature powers/gadgets, comedic/social tone, and explicitly requested audiovisual beats. Invent mechanics inside those anchors. Do not replace playground chase/tag with an unrelated ruin, archive, courier, construction, or abstract puzzle merely because research suggests a white space. Only change an explicit anchor when the OBJECTIVE itself invites changes and the alternative is clearly stronger; otherwise preserve it.";
+}
+
 function roleInstruction(role: ConceptCouncilDesignerRoleV1): string {
   switch (role) {
     case "mechanics_explorer":
@@ -280,7 +298,9 @@ export class KieProductionConceptDesigner implements ConceptCouncilDesignerExecu
     const prompt = [
       `You are Concept Council Designer role: ${role}.`,
       roleInstruction(role),
-      "Create exactly 4 substantially different PC/Steam friends co-op concept drafts. Co-op must be mechanically necessary; another setting/art style does not make the same mechanic new.",
+      briefFidelityInstruction(),
+      humanLanguageInstruction(objective),
+      "Create exactly 4 substantially different PC/Steam friends co-op concept drafts that strengthen the same user fantasy. Co-op must be mechanically necessary; another setting/art style does not make the same mechanic new.",
       "Use only evidenceId/sourceId values present in EVIDENCE_PACK. Every draft needs 3-5 supportingEvidenceIds and at least one closest analog with real sourceIds.",
       "Do not copy cited games. State what is new and what must not be copied.",
       "Return JSON only: {\"candidates\":[{\"concept\":{full CoopGameConcept fields},\"supportingEvidenceIds\":[...],\"closestAnalogs\":[{\"name\":\"...\",\"sourceIds\":[...],\"overlap\":\"...\",\"intentionalDifference\":\"...\"}],\"whatIsNew\":\"...\",\"whatMustNotCopy\":[\"...\"],\"coOpDependencyRationale\":\"...\",\"researchConfidence\":0.0}]}",
@@ -361,6 +381,7 @@ export class KieProductionConceptCurator implements ConceptCouncilCuratorExecuto
       "You are the final bounded Concept Curator for a PC/Steam friends co-op discovery batch.",
       "Rank the raw candidates for mechanical distinctness, necessary co-op dependency, research grounding, white-space value, instant readability, buildability, visual experimentability, and anti-copy distance.",
       "A near-duplicate core mechanic with another setting/art direction must rank below a mechanically new candidate. Do not invent candidates or evidence IDs.",
+      "The user OBJECTIVE remains authoritative. Prefer candidates that preserve its explicit fantasy anchors rather than replacing them with a research-inspired but unrelated game.",
       "Return JSON only: {\"rankedCandidateIds\":[\"existing-candidate-id\"],\"notes\":[{\"candidateId\":\"existing-id\",\"reason\":\"short reason\"}]}",
       `EVIDENCE_PACK=${JSON.stringify(compactEvidencePack(pack))}`,
       `CANDIDATES=${JSON.stringify(input.candidates.map((candidate) => ({
