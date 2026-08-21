@@ -33,7 +33,7 @@ export const sharedResearchSourcePoolV1Schema = z.object({
 export type SharedResearchSourcePoolItemV1 = z.infer<typeof sharedResearchSourcePoolItemV1Schema>;
 export type SharedResearchSourcePoolV1 = z.infer<typeof sharedResearchSourcePoolV1Schema>;
 
-type SourceCoverageCategory =
+export type SourceCoverageCategory =
   | "competitor"
   | "mechanics"
   | "player_voice"
@@ -49,6 +49,12 @@ const REQUIRED_COVERAGE: SourceCoverageCategory[] = [
   "player_voice",
   "gameplay_visual",
 ];
+
+function object(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
 
 function metadataArray(value: unknown): string[] {
   return Array.isArray(value)
@@ -123,7 +129,7 @@ function groundedClaims(result: SearchResult): string[] {
     .filter((value): value is string => Boolean(value));
 }
 
-function normalizedUrl(value: string): string {
+export function normalizeResearchSourceUrl(value: string): string {
   try {
     const parsed = new URL(value);
     parsed.hash = "";
@@ -137,7 +143,7 @@ function normalizedUrl(value: string): string {
 }
 
 function sourceKey(result: SearchResult): string {
-  return normalizedUrl(result.canonicalUrl ?? result.url);
+  return normalizeResearchSourceUrl(result.canonicalUrl ?? result.url);
 }
 
 function dedupeResults(results: SearchResult[]): SearchResult[] {
@@ -150,27 +156,54 @@ function dedupeResults(results: SearchResult[]): SearchResult[] {
   });
 }
 
-function sourceCoverageCategories(input: {
+function hostname(value?: string): string {
+  if (!value) return "";
+  try {
+    return new URL(value).hostname.toLowerCase();
+  } catch {
+    return value.toLowerCase();
+  }
+}
+
+export function sourceCoverageCategories(input: {
   title?: string;
   domain?: string;
   url?: string;
   text?: string;
 }): SourceCoverageCategory[] {
-  const value = [input.title, input.domain, input.url, input.text].filter(Boolean).join(" ").toLowerCase();
+  const domain = (input.domain || hostname(input.url)).toLowerCase();
+  const url = (input.url ?? "").toLowerCase();
+  const title = (input.title ?? "").toLowerCase();
+  const text = (input.text ?? "").toLowerCase();
+  const value = [title, domain, url, text].join(" ");
   const categories = new Set<SourceCoverageCategory>();
-  if (/steam|itch\.io|epicgames|gog|store|developer|publisher|official|game\b/.test(value)) {
+
+  const isStore = /(?:^|\.)(?:store\.steampowered\.com|epicgames\.com|gog\.com|itch\.io)$/.test(domain)
+    || /\/app\/|\/game\//.test(url) && /steam|epicgames|gog|itch\.io/.test(domain);
+  const isCommunity = /reddit\.com|steamcommunity\.com|resetera\.com|neogaf\.com|gamefaqs\.gamespot\.com|forums?\.|community\./.test(domain)
+    || /\/discussions?\b|\/reviews?\b|\/forum\b|\/community\b/.test(url);
+  const isReviewEditorial = /metacritic\.com|opencritic\.com|rockpapershotgun\.com|eurogamer\.|pcgamer\.|gamespot\.|ign\.|polygon\.|kotaku\./.test(domain)
+    || /\breview\b|\bcritique\b|\bcomparison\b/.test(title);
+  const isVideo = /youtube\.com|youtu\.be|twitch\.tv|vimeo\.com/.test(domain);
+  const explicitGameplay = /\bgameplay\b|\bwalkthrough\b|\bplaythrough\b|\bmatch footage\b|\bscreenshot\b|\bcamera\b/.test(`${title} ${url}`);
+
+  if (isStore || /developer|publisher|official|studio|game\b/.test(`${title} ${domain}`)) {
     categories.add("competitor");
   }
   if (/mechanic|physics|grapple|movement|ability|abilities|control|interaction|system|design|developer|interview|manual|guide|co-?op|teamwork/.test(value)) {
     categories.add("mechanics");
   }
-  if (/reddit|steamcommunity|community|forum|review|reviews|player|players|user review|discussion|feedback|frustrat|boring|fun|love|hate/.test(value)) {
+  // Aggregate ratings on a store page are not enough. Player voice requires an
+  // actual discussion/review source family or an explicit reviews/discussions URL.
+  if (isCommunity || isReviewEditorial || (!isStore && /user review|player feedback|community discussion|forum discussion/.test(value))) {
     categories.add("player_voice");
   }
-  if (/youtube|youtu\.be|twitch|gameplay|walkthrough|playthrough|screenshot|camera|footage|match|arena|trailer.*gameplay/.test(value)) {
+  // A store description saying "gameplay" is not a real visual reference. Require
+  // video/gameplay-specific destinations or explicit gameplay material outside a store.
+  if (isVideo || explicitGameplay || (!isStore && /gameplay footage|real gameplay|in-game screenshot|camera perspective/.test(value))) {
     categories.add("gameplay_visual");
   }
-  if (/comparison|versus|\bvs\b|critical|critique|counterexample|similar|alternative|review|analysis|saturation|derivative|clone|novel/.test(value)) {
+  if (isReviewEditorial || /comparison|versus|\bvs\b|critical|critique|counterexample|similar games|alternative|saturation|derivative|clone|novelty/.test(value)) {
     categories.add("contrarian");
   }
   return [...categories];
@@ -204,7 +237,7 @@ function titleTokens(value: string): string[] {
     .filter((token) => token.length >= 2 && !stop.has(token));
 }
 
-function hasClearTitleMismatch(expected: string, actual: string): boolean {
+export function hasClearResearchSourceTitleMismatch(expected: string, actual: string): boolean {
   const expectedTokens = [...new Set(titleTokens(expected))];
   const actualTokens = new Set(titleTokens(actual));
   if (expectedTokens.length < 2 || actualTokens.size < 2) return false;
@@ -268,10 +301,9 @@ export async function acquireSharedResearchSourcePool(input: {
   let recoveryUsage: Record<string, unknown> | undefined;
   let recoveryCalls = 0;
 
-  // Spend the second and final global web-search slot only when it can improve evidence
-  // diversity. If the primary call already used provenance recovery, quality recovery is
-  // skipped so the hard <=2 paid-search invariant remains structural.
-  if (primaryMissing.length > 0 && primaryCalls === 1 && combinedResults.length < maxPoolSources + 4) {
+  // The second global search slot is reserved for quality recovery when the primary
+  // call did not already consume it for provenance recovery.
+  if (primaryMissing.length > 0 && primaryCalls === 1) {
     coverageRecoveryUsed = true;
     await input.reportProgress?.({
       eventType: "research.source_pool.coverage_recovery_started",
@@ -302,13 +334,18 @@ export async function acquireSharedResearchSourcePool(input: {
         },
       });
     } catch (error) {
-      // A diversity recovery failure must not erase a usable primary acquisition. We
-      // preserve the failure in trace and let the final verified coverage gate decide.
+      // The network/provider boundary was attempted, so it consumes the final global
+      // slot even if the response was unusable. Preserve any provider usage attached
+      // to the failure rather than pretending the second paid call never happened.
+      recoveryCalls = 1;
+      recoveryUsage = object((error as { usage?: unknown }).usage);
       await input.reportProgress?.({
         eventType: "research.source_pool.coverage_recovery_failed",
         key: "source_pool_coverage_recovery_failed",
         payload: {
           missing_categories: primaryMissing,
+          total_provider_calls: primaryCalls + recoveryCalls,
+          usage: recoveryUsage,
           error: (error instanceof Error ? error.message : String(error)).slice(0, 500),
         },
       });
@@ -367,7 +404,7 @@ export async function acquireSharedResearchSourcePool(input: {
         if (
           !isGenericSearchTitle(result.title) &&
           document.title &&
-          hasClearTitleMismatch(result.title, document.title)
+          hasClearResearchSourceTitleMismatch(result.title, document.title)
         ) {
           await input.reportProgress?.({
             eventType: "research.source_pool.source_rejected",
@@ -380,16 +417,13 @@ export async function acquireSharedResearchSourcePool(input: {
               reason: "source_identity_mismatch",
             },
           });
-          return;
+          continue;
         }
         const categories = sourceCoverageCategories({
           title: document.title || result.title,
           domain: document.domain,
           url: canonicalUrl,
-          text: [
-            ...groundedClaims(result),
-            document.text.slice(0, 8_000),
-          ].join(" "),
+          text: [...groundedClaims(result), document.text.slice(0, 8_000)].join(" "),
         });
         const source: ResearchSourceCandidateV1 = researchSourceCandidateV1Schema.parse({
           sourceRef: `pool-source-${index + 1}`,
@@ -439,7 +473,7 @@ export async function acquireSharedResearchSourcePool(input: {
   const sources: SharedResearchSourcePoolItemV1[] = [];
   for (const item of outcomes) {
     if (!item) continue;
-    const canonicalKey = normalizedUrl(item.source.canonicalUrl);
+    const canonicalKey = normalizeResearchSourceUrl(item.source.canonicalUrl);
     const contentKey = item.source.contentSha256?.toLowerCase();
     if (canonicalSeen.has(canonicalKey) || (contentKey && contentSeen.has(contentKey))) {
       await input.reportProgress?.({
