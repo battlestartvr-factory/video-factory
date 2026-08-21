@@ -220,6 +220,7 @@ export const evidencePackSpecV1Schema = z
     selectedSourceIds: z.array(identifier).max(100),
     selectedImageReferenceIds: z.array(identifier).max(24),
     coverage: z.record(z.string(), z.number().int().min(0)),
+    finalization: z.enum(["full", "early_finalized"]).optional(),
     generatedAt: z.string().datetime({ offset: true }),
   })
   .strict();

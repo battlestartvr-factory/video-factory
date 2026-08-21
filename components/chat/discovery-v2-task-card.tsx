@@ -106,6 +106,7 @@ export function DiscoveryV2TaskCard({ task, runId }: DiscoveryV2TaskCardProps) {
   const [reviews, setReviews] = useState<Array<Record<string, unknown>>>([]);
   const [feedback, setFeedback] = useState<Record<string, string>>({});
   const [submitting, setSubmitting] = useState<string | null>(null);
+  const [earlyFinalizePending, setEarlyFinalizePending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
@@ -162,6 +163,14 @@ export function DiscoveryV2TaskCard({ task, runId }: DiscoveryV2TaskCardProps) {
   const currentStage = str(detail?.factoryJob?.current_stage);
   const progress = Math.max(0, Math.min(100, num(detail?.factoryJob?.progress) ?? task.progress ?? 0));
   const frontStageActive = !currentStage || V2_FRONT_STAGES.has(currentStage);
+  const durableState = object(detail?.factoryJob?.state);
+  const earlyFinalize = object(durableState.research_early_finalize);
+  const researchFinalization =
+    str(durableState.research_finalization) ?? str(earlyFinalize.finalization) ?? "full";
+  const canEarlyFinalize =
+    currentStage === "waiting_research_scouts" &&
+    earlyFinalize.eligible === true &&
+    earlyFinalize.requested !== true;
 
   const concepts = useMemo(() => {
     const rootOutputs = object(detail?.root?.outputs);
@@ -175,6 +184,25 @@ export function DiscoveryV2TaskCard({ task, runId }: DiscoveryV2TaskCardProps) {
       return [{ conceptRunId: runIdValue, conceptId, concept: Object.keys(concept).length ? concept : conceptById.get(conceptId) ?? {} }];
     });
   }, [detail]);
+
+  const requestEarlyFinalize = useCallback(async () => {
+    setEarlyFinalizePending(true);
+    setError(null);
+    try {
+      const response = await fetch(`/api/discovery/batches/${runId}/early-finalize`, {
+        method: "POST",
+      });
+      const payload = await response.json().catch(() => null);
+      if (!response.ok || !payload?.ok) {
+        throw new Error(payload?.error?.message ?? "Не удалось ответить сейчас");
+      }
+      await load();
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : "Не удалось ответить сейчас");
+    } finally {
+      setEarlyFinalizePending(false);
+    }
+  }, [load, runId]);
 
   const submitConceptDecision = useCallback(async (
     conceptRunId: string,
@@ -207,7 +235,11 @@ export function DiscoveryV2TaskCard({ task, runId }: DiscoveryV2TaskCardProps) {
     return (
       <div className="space-y-3">
         <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 px-4 py-3 text-xs text-muted-foreground">
-          <span className="font-semibold text-emerald-300">Stage 4.5 research завершён.</span>{" "}
+          <span className="font-semibold text-emerald-300">
+            {researchFinalization === "early_finalized"
+              ? "Stage 4.5 research завершён досрочно по достаточному coverage."
+              : "Stage 4.5 research завершён."}
+          </span>{" "}
           Дальше используется проверенный Stage 4 media pipeline. Human Gate 2/3 и 3/3 остаются обязательными.
         </div>
         <DiscoveryTaskCard task={task} runId={runId} />
@@ -232,9 +264,21 @@ export function DiscoveryV2TaskCard({ task, runId }: DiscoveryV2TaskCardProps) {
             </div>
             <p className="mt-1 text-xs text-muted-foreground">{stageLabel(currentStage)}</p>
           </div>
-          <Button size="sm" variant="ghost" onClick={() => void load()} aria-label="Обновить">
-            <RefreshCw className="h-4 w-4" />
-          </Button>
+          <div className="flex items-center gap-2">
+            {canEarlyFinalize && (
+              <Button
+                size="sm"
+                variant="secondary"
+                disabled={earlyFinalizePending}
+                onClick={() => void requestEarlyFinalize()}
+              >
+                {earlyFinalizePending ? "Формирую ответ…" : "Ответить сейчас"}
+              </Button>
+            )}
+            <Button size="sm" variant="ghost" onClick={() => void load()} aria-label="Обновить">
+              <RefreshCw className="h-4 w-4" />
+            </Button>
+          </div>
         </div>
         <div className="h-1.5 overflow-hidden rounded-full bg-muted">
           <div className="h-full rounded-full bg-violet-500 transition-all" style={{ width: `${progress}%` }} />
@@ -246,7 +290,18 @@ export function DiscoveryV2TaskCard({ task, runId }: DiscoveryV2TaskCardProps) {
           <span>Concept Designers: {designerDone}/3</span>
           <span>Raw candidates: {research?.rawCandidates.length ?? 0}</span>
         </div>
+        {canEarlyFinalize && (
+          <p className="text-[11px] text-violet-200">
+            Coverage уже достаточен: {String(earlyFinalize.completed_scouts ?? scoutDone)} Scouts · {String(earlyFinalize.evidence_count ?? research?.evidence.length ?? 0)} evidence. Можно остановить оставшийся research и перейти к Synthesizer.
+          </p>
+        )}
       </div>
+
+      {researchFinalization === "early_finalized" && (
+        <div className="border-b border-violet-500/20 bg-violet-500/5 px-4 py-3 text-xs text-violet-200">
+          Этот run помечен как early-finalized: оставшийся Scout research был отменён после достижения coverage threshold, а Evidence Pack сформирован из уже подтверждённых источников.
+        </div>
+      )}
 
       <ResearchLiveTrace
         runId={runId}

@@ -44,6 +44,7 @@ export interface ResearchSynthesizerExecutor {
 
 export interface ResearchSynthesisRepository {
   loadSynthesisInput(researchRunId: string): Promise<ResearchSynthesisInputV1>;
+  getFinalization?(researchRunId: string): Promise<"full" | "early_finalized">;
   persistEvidencePack(input: {
     researchRunId: string;
     inputHash: string;
@@ -192,6 +193,7 @@ export class ResearchSynthesisService {
   async run(input: {
     researchRunId: string;
     signal?: AbortSignal;
+    finalization?: "full" | "early_finalized";
   }): Promise<{
     pack: EvidencePackSpecV1;
     reusedFromPersistence: boolean;
@@ -211,8 +213,17 @@ export class ResearchSynthesisService {
       };
     }
 
+    const finalization = input.finalization ?? (
+      this.repository.getFinalization
+        ? await this.repository.getFinalization(input.researchRunId)
+        : "full"
+    );
     const execution = await this.executor.synthesize({ synthesisInput, signal: input.signal });
-    const pack = validateEvidencePackReferences(execution.pack, synthesisInput);
+    const markedPack = evidencePackSpecV1Schema.parse({
+      ...execution.pack,
+      finalization,
+    });
+    const pack = validateEvidencePackReferences(markedPack, synthesisInput);
     const persisted = await this.repository.persistEvidencePack({
       researchRunId: input.researchRunId,
       inputHash,
@@ -221,6 +232,7 @@ export class ResearchSynthesisService {
         provider: execution.provider ?? null,
         model: execution.model ?? null,
         usage: execution.usage ?? {},
+        finalization: pack.finalization ?? "full",
         raw_response_persisted_separately: execution.rawResponse !== undefined,
       },
     });

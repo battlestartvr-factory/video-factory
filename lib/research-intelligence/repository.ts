@@ -113,6 +113,15 @@ export class ResearchIntelligenceRepository implements ResearchSynthesisReposito
     };
   }
 
+  async getFinalization(researchRunId: string): Promise<"full" | "early_finalized"> {
+    const { data, error } = await this.client.rpc("research_get_run_finalization", {
+      p_research_run_id: researchRunId,
+    });
+    if (error) throw new Error(`Failed to load research finalization: ${error.message}`);
+    const row = requireRpcObject(data, "research finalization");
+    return row.finalization === "early_finalized" ? "early_finalized" : "full";
+  }
+
   async loadSynthesisInput(researchRunId: string): Promise<ResearchSynthesisInputV1> {
     const { data, error } = await this.client.rpc("research_get_synthesis_input", {
       p_research_run_id: researchRunId,
