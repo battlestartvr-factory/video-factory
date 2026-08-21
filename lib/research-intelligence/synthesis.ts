@@ -236,6 +236,17 @@ export class ResearchSynthesisService {
         ? await this.repository.getFinalization(input.researchRunId)
         : "full"
     );
+
+    // Money boundary: prove that the current durable evidence can satisfy the local
+    // Evidence Pack schema and reference contract before any production Synthesizer
+    // model call is allowed to start. The production executor can still reprioritize
+    // valid evidence, but a local schema mismatch can no longer burn a paid call first.
+    const preflight = await new MockResearchSynthesizer().synthesize({ synthesisInput });
+    validateEvidencePackReferences(
+      evidencePackSpecV1Schema.parse({ ...preflight.pack, finalization }),
+      synthesisInput,
+    );
+
     const execution = await this.executor.synthesize({ synthesisInput, signal: input.signal });
     const markedPack = evidencePackSpecV1Schema.parse({
       ...execution.pack,
