@@ -1,6 +1,5 @@
 import { z } from "zod";
 import {
-  createKieGeminiGroundedSearchProvider,
   createWebFetchProvider,
   urlSha256,
   type SearchResult,
@@ -11,6 +10,7 @@ import {
 } from "./evidence-bundle";
 import { sanitizeGroundedEvidenceClaim } from "./kie-research-scout";
 import { researchPlanSpecV1Schema, type ResearchPlanSpecV1 } from "./schemas";
+import { createSharedPoolKieSearchProvider } from "./shared-pool-kie-search";
 
 const poolClaimSchema = z.string().trim().min(1).max(4_000);
 
@@ -56,16 +56,12 @@ function providerCallCount(results: SearchResult[]): number {
 }
 
 function broadAcquisitionQuery(plan: ResearchPlanSpecV1): string {
-  const dimensions = plan.scoutAssignments.map((assignment) =>
-    `${assignment.role}: ${assignment.mandate} Angles: ${assignment.queryAngles.join("; ")}`,
-  );
   return [
-    "Build one diverse, source-backed research set for a PC/Steam co-op game discovery council.",
+    "PC/Steam co-op discovery source acquisition.",
     `Objective: ${plan.researchQuestion}`,
-    "Cover ALL five dimensions in one pass: competitors/saturation, mechanics/dependency, repeated player voice, real gameplay/visual grammar, and contrarian/white-space counterexamples.",
-    "Prefer direct canonical publisher/developer/store/review/community pages. Include player-review/community sources where player sentiment is claimed. Avoid search-result pages, tracking wrappers, key-art-only pages and unverifiable summaries.",
-    "Return enough distinct direct sources that the same verified pool can support five specialist analysts without additional web search.",
-    ...dimensions,
+    "Need diverse direct evidence across five categories: competitor/saturation; mechanics/dependency; repeated player love/pain; real gameplay/camera/visual grammar; contrarian counterexamples/white space.",
+    "Prefer direct publisher/developer/store/review/community pages. Player sentiment claims require review/community evidence. Avoid search-result pages, tracking wrappers, key-art-only pages, and unverifiable summaries.",
+    "Acquire sources only. Do not generate concepts or perform the five specialist analyses.",
   ].join("\n");
 }
 
@@ -109,24 +105,25 @@ export async function acquireSharedResearchSourcePool(input: {
   const plan = researchPlanSpecV1Schema.parse(input.plan);
   const generatedAt = new Date().toISOString();
   const fetchProvider = createWebFetchProvider(undefined, input.signal);
-  const searchProvider = createKieGeminiGroundedSearchProvider(fetchProvider, input.signal);
+  const searchProvider = createSharedPoolKieSearchProvider(input.signal);
   const query = broadAcquisitionQuery(plan);
+  const maxPoolSources = Math.max(1, Math.min(MAX_POOL_SOURCES, plan.budget.maxTotalFetchedSources));
 
   await input.reportProgress?.({
     eventType: "research.source_pool.search_started",
     key: "source_pool_search_started",
-    payload: { max_results: MAX_POOL_SOURCES, research_run_id: input.researchRunId },
+    payload: { max_results: maxPoolSources, research_run_id: input.researchRunId },
   });
   if (input.signal.aborted) throw input.signal.reason ?? new Error("Shared source acquisition aborted");
 
   const searchStartedAt = Date.now();
   // Exactly one provider-level searchText invocation is permitted for the shared
-  // pool. KIE's grounded provider may spend one additional internal provenance
+  // pool. Its dedicated KIE provider may spend one additional internal provenance
   // recovery call, so the whole Research Run remains hard-capped at <= 2 paid
   // KIE calls. No outer recovery search is allowed here.
   const primaryResults = await searchProvider.searchText({
     query,
-    maxResults: MAX_POOL_SOURCES,
+    maxResults: maxPoolSources,
     freshness: plan.freshness,
   });
   const providerCalls = providerCallCount(primaryResults);
@@ -148,7 +145,7 @@ export async function acquireSharedResearchSourcePool(input: {
       provider_calls: providerCalls,
       provider_call_cap: MAX_KIE_PROVIDER_CALLS,
       search_ms: searchMs,
-      results: allResults.slice(0, 10).map((result) => ({
+      results: allResults.slice(0, maxPoolSources).map((result) => ({
         title: result.title.slice(0, 300),
         url: (result.canonicalUrl ?? result.url).slice(0, 2_000),
         domain: result.domain,
@@ -162,7 +159,7 @@ export async function acquireSharedResearchSourcePool(input: {
     throw error;
   }
 
-  const selected = allResults.slice(0, MAX_POOL_SOURCES);
+  const selected = allResults.slice(0, maxPoolSources);
   const outcomes: Array<SharedResearchSourcePoolItemV1 | null> = new Array(selected.length).fill(null);
   let cursor = 0;
   const fetchStartedAt = Date.now();
@@ -242,7 +239,7 @@ export async function acquireSharedResearchSourcePool(input: {
     provider_calls: providerCalls,
     search_calls: providerCalls,
     provider_call_cap: MAX_KIE_PROVIDER_CALLS,
-    search_provider: "kie_gemini_google_search",
+    search_provider: "kie_gemini_google_search_shared_pool",
     search_ms: searchMs,
     safe_fetch_ms: safeFetchMs,
     safely_fetched_sources: sources.length,
