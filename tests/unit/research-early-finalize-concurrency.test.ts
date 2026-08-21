@@ -19,12 +19,18 @@ describe("PR4 early-finalize concurrency fences", () => {
     expect(evidenceFenceMigration).toContain("v_job_status = 'cancelled'");
   });
 
-  it("revokes any stale waiting-stage root lease before requeueing synthesis work", () => {
+  it("revokes a stale waiting-stage root lease and immediately publishes a replacement wake-up", () => {
+    expect(requestMigration).toContain("SET search_path = public, pgmq");
     expect(requestMigration).toContain("status = 'queued'");
     expect(requestMigration).toContain("lease_owner = NULL");
     expect(requestMigration).toContain("lease_token = NULL");
     expect(requestMigration).toContain("lease_expires_at = NULL");
     expect(requestMigration).toContain("last_heartbeat_at = NULL");
     expect(requestMigration).toContain("next_action_at = NOW()");
+    expect(requestMigration).toContain("FROM pgmq.send(");
+    expect(requestMigration).toContain("'core_orchestrator_v1'");
+    expect(requestMigration).toContain("'reason', 'research_early_finalize'");
+    expect(requestMigration).toContain("SET last_enqueued_at = NOW()");
+    expect(requestMigration).toContain("'job.enqueued'");
   });
 });
