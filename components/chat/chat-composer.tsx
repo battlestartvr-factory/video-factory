@@ -87,10 +87,7 @@ export function ChatComposer({
   const inputDisabled = effectiveDisabled || effectiveStopActive;
 
   useEffect(() => {
-    if (!chatId || stopActive) {
-      setAutoStopRunId(null);
-      return;
-    }
+    if (!chatId || stopActive) return;
 
     let cancelled = false;
     let inFlight = false;
@@ -180,9 +177,7 @@ export function ChatComposer({
         body: JSON.stringify({ reason: "chat_stop_button" }),
       });
       const payload = await response.json().catch(() => null);
-      if (!response.ok || !payload?.ok) {
-        throw new Error(payload?.error?.message ?? "Не удалось остановить процесс");
-      }
+      if (!response.ok || !payload?.ok) return;
       setAutoStopRunId(null);
     } finally {
       setAutoStopPending(false);
