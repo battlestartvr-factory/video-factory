@@ -3,7 +3,7 @@ import type { AgentTool } from "@/lib/agent/types";
 import { startGameDiscoverySchema } from "@/lib/agent/schemas";
 import { CONTENT_LIMITS } from "@/lib/agent/config";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
-import { createGameDiscoveryBatchV2 } from "@/lib/game-discovery/service-v2";
+import { createGameDiscoveryBatchV3 } from "@/lib/game-discovery/service-v3";
 import type { DiscoveryObjectiveSpecV1 } from "@/lib/game-discovery/schemas";
 import { defaultResearchPolicyV1 } from "@/lib/research-intelligence/schemas";
 import { processKnowledgeDocument } from "@/lib/knowledge/document-processor";
@@ -16,14 +16,14 @@ const LEGACY_EXTRACTED_TEXT_CAP = 50_000;
 
 function compactTitle(value: string): string {
   const cleaned = value.trim().replace(/\s+/g, " ");
-  if (!cleaned) return "Поиск новой co-op игры";
+  if (!cleaned) return "Поиск новой совместной игры";
   return cleaned.length <= 200 ? cleaned : `${cleaned.slice(0, 197)}…`;
 }
 
 function compactIntent(value: string): string {
   const cleaned = value.trim();
   if (!cleaned) {
-    return "Найти перспективную новую PC/Steam friends co-op игру с настоящей взаимозависимостью игроков, высокой gameplay readability и реалистичным indie scope.";
+    return "Найти перспективную новую PC/Steam игру для друзей с настоящей взаимозависимостью игроков, понятным игровым процессом и реалистичным indie/AA scope.";
   }
   return cleaned.length <= 4_000 ? cleaned : `${cleaned.slice(0, 3_997)}…`;
 }
@@ -37,7 +37,7 @@ function boundedBrief(value: string): string {
 export const startGameDiscoveryTool: AgentTool<typeof startGameDiscoverySchema._output> = {
   name: "start_game_discovery",
   description:
-    "Start the durable Stage 4.5 PC/Steam co-op Game Discovery Factory v2. Use this when the user asks the factory to discover new co-op game concepts, research current external evidence, stop at the Human Concept Gate, then generate reference images and gameplay video only after human approvals. Attached research documents are automatically included as source context; do not ask the user to re-upload or paste them.",
+    "Start the durable simplified PC/Steam co-op Game Discovery Factory. Use this when the user naturally asks to invent, explore or improve co-op game concepts. The factory does bounded web research, one strong synthesis pass into exactly three concepts, waits for human concept decisions, then creates gameplay reference images, Kling gameplay video and human approval gates before assembly. Attached research documents are included automatically; do not ask the user to re-upload or paste them.",
   inputSchema: startGameDiscoverySchema,
   risk: "safe",
   async handler(input, ctx) {
@@ -53,7 +53,7 @@ export const startGameDiscoveryTool: AgentTool<typeof startGameDiscoverySchema._
       .limit(MAX_RESEARCH_DOCUMENTS);
 
     if (currentAttachments.error) {
-      return { ok: false, code: "DISCOVERY_RESEARCH_LOAD_FAILED", error: "Не удалось загрузить приложенный research context." };
+      return { ok: false, code: "DISCOVERY_RESEARCH_LOAD_FAILED", error: "Не удалось загрузить приложенный исследовательский контекст." };
     }
 
     let attachmentRows = currentAttachments.data ?? [];
@@ -67,7 +67,7 @@ export const startGameDiscoveryTool: AgentTool<typeof startGameDiscoverySchema._
         .order("created_at", { ascending: false })
         .limit(MAX_RESEARCH_DOCUMENTS);
       if (recentAttachments.error) {
-        return { ok: false, code: "DISCOVERY_RESEARCH_LOAD_FAILED", error: "Не удалось восстановить research context из текущего чата." };
+        return { ok: false, code: "DISCOVERY_RESEARCH_LOAD_FAILED", error: "Не удалось восстановить исследовательский контекст из текущего чата." };
       }
       attachmentRows = recentAttachments.data ?? [];
       reusedPreviousResearch = attachmentRows.length > 0;
@@ -128,7 +128,7 @@ export const startGameDiscoveryTool: AgentTool<typeof startGameDiscoverySchema._
     }
 
     const userBrief = boundedBrief(effectiveUserMessage);
-    const title = compactTitle(input.title ?? "Поиск новой co-op игры");
+    const title = compactTitle(input.title ?? "Поиск новой совместной игры");
     const objective: DiscoveryObjectiveSpecV1 = {
       schema: "discovery_objective",
       version: 1,
@@ -138,26 +138,30 @@ export const startGameDiscoveryTool: AgentTool<typeof startGameDiscoverySchema._
       playerCount: { min: 2, max: 4 },
       platform: "pc_steam",
       desiredNovelty: input.desired_novelty ?? "explore",
-      conceptCount: input.concept_count ?? 6,
-      maxConceptsToPrototype: input.max_concepts_to_prototype ?? 2,
+      conceptCount: 3,
+      maxConceptsToPrototype: 3,
       constraints: { maxMvpMonths: 12, networkingComplexity: "medium", contentBurden: "medium", npcAiDependency: "allow_light" },
       metadata: {
-        source: "chat_stage4_5_discovery_v2",
+        source: "chat_game_discovery_v3",
         chatId: ctx.chatId,
         userMessageId: ctx.userMessageId,
         sourceUserMessageId: typeof sourceMessageId === "string" ? sourceMessageId : ctx.userMessageId,
         retryInstruction: reusedPreviousResearch ? ctx.userMessage : null,
         userBrief,
         researchDocuments,
-        workflowVersion: 2,
+        workflowVersion: 3,
+        gameplayDurationSec: 5,
+        strongConceptModel: "gpt-5-6-terra",
+        preferredImageModel: "gpt-image-2",
+        preferredVideoModel: "kling-3",
         humanGates: ["human_concept_approval_pending", "human_reference_approval_pending", "human_video_approval_pending"],
         externalWebResearchAllowed: true,
-        externalResearchProvider: "kie_gemini_google_search",
+        externalResearchProvider: "kie_gemini_google_search_shared_pool",
       },
     };
 
     try {
-      const result = await createGameDiscoveryBatchV2({
+      const result = await createGameDiscoveryBatchV3({
         requestId: ctx.requestId || randomUUID(),
         userId: ctx.userId,
         projectId: ctx.projectId,
@@ -172,7 +176,7 @@ export const startGameDiscoveryTool: AgentTool<typeof startGameDiscoverySchema._
           root_creative_run_id: runId,
           factory_job_id: result.factoryJobId,
           duplicate: result.duplicate,
-          workflow_version: 2,
+          workflow_version: 3,
           reused_previous_research: reusedPreviousResearch,
           research_documents: researchDocuments.map((document) => ({
             attachment_id: document.attachmentId,
@@ -191,19 +195,22 @@ export const startGameDiscoveryTool: AgentTool<typeof startGameDiscoverySchema._
           settings: {
             runId,
             title,
-            workflowVersion: 2,
-            researchProvider: "kie_gemini_google_search",
+            workflowVersion: 3,
+            researchProvider: "kie_gemini_google_search_shared_pool",
+            strongConceptModel: "gpt-5-6-terra",
+            conceptCount: 3,
+            gameplayDurationSec: 5,
             humanGates: ["concept", "reference_image", "video"],
           },
         },
         terminate: true,
         userContent:
-          `Запустил Game Discovery v2 «${title}». ` +
-          `${reusedPreviousResearch ? "Исходный brief и приложенный research восстановлены из этого чата. " : "Приложенные research-документы переданы как дополнительный context. "}` +
-          "Сначала завод проведёт внешний source-backed research и Concept Council. Затем прямо здесь появится Human Concept Gate; только после вашего approval начнётся media pipeline с отдельными Human Gate для reference и gameplay-видео.",
+          `Запустил поиск игры «${title}». ` +
+          `${reusedPreviousResearch ? "Исходный запрос и приложенные материалы восстановлены из этого чата. " : "Приложенные материалы переданы как дополнительный контекст. "}` +
+          "Сначала завод соберёт проверенные веб-источники, затем одна сильная модель проанализирует их вместе с вашим запросом и предложит ровно три разные идеи. После этого вы сможете утвердить, исправить или отклонить каждую; дальше пройдут только выбранные вами концепты. Проверка изображения и проверка видео человеком остаются обязательными.",
       };
     } catch (error) {
-      return { ok: false, code: "DISCOVERY_START_FAILED", error: error instanceof Error ? error.message : "Не удалось запустить Stage 4.5 Game Discovery v2" };
+      return { ok: false, code: "DISCOVERY_START_FAILED", error: error instanceof Error ? error.message : "Не удалось запустить поиск игровых концептов" };
     }
   },
 };
