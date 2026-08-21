@@ -19,6 +19,10 @@ interface GroundedAttempt {
   diagnostics: Record<string, unknown>;
 }
 
+export interface SharedPoolKieSearchProviderOptions {
+  allowProvenanceRecovery?: boolean;
+}
+
 function object(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown>
@@ -73,12 +77,14 @@ function buildPrompt(input: TextSearchRequest, mode: GroundedRequestMode): strin
     ? Math.min(4, boundedMaxResults(input.maxResults))
     : boundedMaxResults(input.maxResults);
   return [
-    "Use Google Search grounding. This is source acquisition, not analysis.",
+    "Use Google Search grounding. This is source acquisition, not design analysis.",
     `Research query: ${input.query.trim()}`,
     `Return at most ${maxResults} verified direct source lines and nothing else.`,
     "Each line must be exactly: SOURCE|<direct final https URL>|<short title>|<one short factual claim supported by that source>.",
-    "Prefer a diverse set across store/developer/primary pages, mechanics evidence, player/review/community evidence, real gameplay evidence, and counterexamples when relevant.",
-    "Never invent, shorten, truncate, or guess a URL. Never return Google grounding redirect URLs. Omit any source whose direct final URL cannot be verified.",
+    "DIVERSITY IS REQUIRED: do not fill the set with store pages. When the query needs broad discovery, aim to include evidence from multiple source families: official/store/developer; mechanics or developer documentation/interviews; player reviews/community discussion; real gameplay/video/screenshots or gameplay descriptions; critical/comparison/counterexample material.",
+    "Prefer independent source domains and different evidence purposes. Two URLs that resolve to the same page or repeat the same fact are not diverse.",
+    "Player sentiment requires actual player/review/community evidence; a store rating alone is not a player-voice substitute. Gameplay/visual evidence must describe or show real play, not only key art or marketing copy.",
+    "Never invent, shorten, truncate, or guess a URL. Never return Google grounding redirect URLs when a direct final URL is available. Omit any source whose direct final URL cannot be verified.",
     freshnessInstruction(input.freshness),
     domainInstruction(input),
   ].filter(Boolean).join("\n");
@@ -93,7 +99,7 @@ export function buildSharedPoolKieRequestBody(
     contents: [{ role: "user", parts: [{ text: buildPrompt(input, mode) }] }],
     tools: [{ googleSearch: {} }],
     generationConfig: {
-      maxOutputTokens: mode === "provenance_recovery" ? 384 : 640,
+      maxOutputTokens: mode === "provenance_recovery" ? 384 : 768,
       thinkingConfig: {
         includeThoughts: false,
         thinkingLevel: "low",
@@ -182,6 +188,7 @@ export class SharedPoolKieSearchProvider {
     private readonly apiKey: string,
     private readonly model = "gemini-3-6-flash",
     private readonly signal?: AbortSignal,
+    private readonly options: SharedPoolKieSearchProviderOptions = {},
   ) {}
 
   private async requestGrounded(
@@ -230,6 +237,15 @@ export class SharedPoolKieSearchProvider {
     if (!primary.parsed.answer.trim() || this.signal?.aborted) {
       throw groundingMissingError({
         message: "KIE Gemini returned no verifiable source URLs or visible grounded answer",
+        primary,
+      });
+    }
+
+    // Coverage-recovery searches use the final global provider-call slot and therefore
+    // may never spend an additional provenance-recovery call of their own.
+    if (this.options.allowProvenanceRecovery === false) {
+      throw groundingMissingError({
+        message: "KIE Gemini returned visible text without provenance and provenance recovery is disabled for this bounded search",
         primary,
       });
     }
@@ -293,6 +309,7 @@ export class SharedPoolKieSearchProvider {
 
 export function createSharedPoolKieSearchProvider(
   signal?: AbortSignal,
+  options: SharedPoolKieSearchProviderOptions = {},
 ): SharedPoolKieSearchProvider {
   const apiKey = (process.env.KIE_API_KEY ?? process.env.AGENT_LLM_API_KEY ?? "").trim();
   if (!apiKey) {
@@ -300,5 +317,5 @@ export function createSharedPoolKieSearchProvider(
   }
   const baseUrl = normalizeKieBaseUrl(process.env.KIE_API_BASE_URL ?? process.env.AGENT_LLM_BASE_URL);
   const model = (process.env.KIE_WEB_SEARCH_MODEL ?? "").trim() || "gemini-3-6-flash";
-  return new SharedPoolKieSearchProvider(baseUrl, apiKey, model, signal);
+  return new SharedPoolKieSearchProvider(baseUrl, apiKey, model, signal, options);
 }
