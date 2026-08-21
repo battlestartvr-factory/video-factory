@@ -44,6 +44,7 @@ export interface ResearchSynthesizerExecutor {
 
 export interface ResearchSynthesisRepository {
   loadSynthesisInput(researchRunId: string): Promise<ResearchSynthesisInputV1>;
+  getFinalization?(researchRunId: string): Promise<"full" | "early_finalized">;
   persistEvidencePack(input: {
     researchRunId: string;
     inputHash: string;
@@ -212,10 +213,15 @@ export class ResearchSynthesisService {
       };
     }
 
+    const finalization = input.finalization ?? (
+      this.repository.getFinalization
+        ? await this.repository.getFinalization(input.researchRunId)
+        : "full"
+    );
     const execution = await this.executor.synthesize({ synthesisInput, signal: input.signal });
     const markedPack = evidencePackSpecV1Schema.parse({
       ...execution.pack,
-      finalization: input.finalization ?? "full",
+      finalization,
     });
     const pack = validateEvidencePackReferences(markedPack, synthesisInput);
     const persisted = await this.repository.persistEvidencePack({
