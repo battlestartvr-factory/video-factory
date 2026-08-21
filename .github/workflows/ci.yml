@@ -28,7 +28,9 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      - run: bash -n scripts/deploy.sh
+      - run: bash -n scripts/deploy.sh scripts/check-schema-contract.sh
+
+      - run: bash scripts/check-schema-contract.sh
 
       - run: pnpm lint
 
