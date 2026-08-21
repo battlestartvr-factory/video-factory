@@ -113,7 +113,11 @@ export class SharedSourcePoolResearchScoutExecutor implements ResearchScoutExecu
     this.pool = sharedResearchSourcePoolV1Schema.parse(pool);
   }
 
-  private async progress(eventType: string, key: string, payload: Record<string, unknown> = {}) {
+  private async progress(
+    eventType: Parameters<ResearchScoutProgressReporter>[0]["eventType"],
+    key: string,
+    payload: Record<string, unknown> = {},
+  ) {
     await this.reportProgress?.({ eventType, key, payload });
   }
 
