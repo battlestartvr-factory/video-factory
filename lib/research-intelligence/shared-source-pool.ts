@@ -35,7 +35,7 @@ export type SharedResearchSourcePoolV1 = z.infer<typeof sharedResearchSourcePool
 
 const SAFE_FETCH_CONCURRENCY = 3;
 const MAX_POOL_SOURCES = 10;
-const MIN_USEFUL_POOL_SOURCES = 4;
+const MAX_KIE_PROVIDER_CALLS = 2;
 
 function metadataArray(value: unknown): string[] {
   return Array.isArray(value)
@@ -66,14 +66,6 @@ function broadAcquisitionQuery(plan: ResearchPlanSpecV1): string {
     "Prefer direct canonical publisher/developer/store/review/community pages. Include player-review/community sources where player sentiment is claimed. Avoid search-result pages, tracking wrappers, key-art-only pages and unverifiable summaries.",
     "Return enough distinct direct sources that the same verified pool can support five specialist analysts without additional web search.",
     ...dimensions,
-  ].join("\n");
-}
-
-function recoveryAcquisitionQuery(plan: ResearchPlanSpecV1): string {
-  return [
-    "Find additional DIRECT source pages for the same research objective. Return canonical source URLs with verifiable Google grounding; do not return Google/Vertex redirect URLs as the final source if a direct page is available.",
-    `Objective: ${plan.researchQuestion}`,
-    "Prioritize gaps across: Steam/store or developer pages, mechanics/gameplay documentation or reviews, repeated player reviews/community discussion, real gameplay pages/screenshots, and counterexamples/nearby competitors.",
   ].join("\n");
 }
 
@@ -128,25 +120,24 @@ export async function acquireSharedResearchSourcePool(input: {
   if (input.signal.aborted) throw input.signal.reason ?? new Error("Shared source acquisition aborted");
 
   const searchStartedAt = Date.now();
+  // Exactly one provider-level searchText invocation is permitted for the shared
+  // pool. KIE's grounded provider may spend one additional internal provenance
+  // recovery call, so the whole Research Run remains hard-capped at <= 2 paid
+  // KIE calls. No outer recovery search is allowed here.
   const primaryResults = await searchProvider.searchText({
     query,
     maxResults: MAX_POOL_SOURCES,
     freshness: plan.freshness,
   });
-  let providerCalls = providerCallCount(primaryResults);
-  let allResults = dedupeResults(primaryResults);
-
-  // One bounded outer recovery is allowed only when the provider itself has not
-  // already spent its second call on provenance recovery. Total KIE calls <= 2.
-  if (allResults.length < MIN_USEFUL_POOL_SOURCES && providerCalls < 2 && !input.signal.aborted) {
-    const recovery = await searchProvider.searchText({
-      query: recoveryAcquisitionQuery(plan),
-      maxResults: MAX_POOL_SOURCES,
-      freshness: plan.freshness,
-    });
-    providerCalls += providerCallCount(recovery);
-    allResults = dedupeResults([...allResults, ...recovery]);
+  const providerCalls = providerCallCount(primaryResults);
+  if (providerCalls > MAX_KIE_PROVIDER_CALLS) {
+    const error = new Error(
+      `Shared research source acquisition exceeded the hard KIE call cap (${providerCalls} > ${MAX_KIE_PROVIDER_CALLS})`,
+    ) as Error & { code?: string };
+    error.code = "RESEARCH_SHARED_SOURCE_POOL_PROVIDER_CALL_CAP_EXCEEDED";
+    throw error;
   }
+  const allResults = dedupeResults(primaryResults);
   const searchMs = Math.max(0, Date.now() - searchStartedAt);
 
   await input.reportProgress?.({
@@ -155,6 +146,7 @@ export async function acquireSharedResearchSourcePool(input: {
     payload: {
       result_count: allResults.length,
       provider_calls: providerCalls,
+      provider_call_cap: MAX_KIE_PROVIDER_CALLS,
       search_ms: searchMs,
       results: allResults.slice(0, 10).map((result) => ({
         title: result.title.slice(0, 300),
@@ -249,6 +241,7 @@ export async function acquireSharedResearchSourcePool(input: {
     ...providerUsage(primaryResults),
     provider_calls: providerCalls,
     search_calls: providerCalls,
+    provider_call_cap: MAX_KIE_PROVIDER_CALLS,
     search_provider: "kie_gemini_google_search",
     search_ms: searchMs,
     safe_fetch_ms: safeFetchMs,
@@ -261,6 +254,7 @@ export async function acquireSharedResearchSourcePool(input: {
     payload: {
       source_count: sources.length,
       provider_calls: providerCalls,
+      provider_call_cap: MAX_KIE_PROVIDER_CALLS,
       search_ms: searchMs,
       safe_fetch_ms: safeFetchMs,
     },
