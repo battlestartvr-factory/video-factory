@@ -15,13 +15,13 @@ describe("discovery chat prototype contract", () => {
     expect(cardSource).toContain("playsInline");
     expect(cardSource).toContain("preload=\"metadata\"");
     expect(cardSource).toContain("/api/discovery/batches/${encodeURIComponent(runId)}/prototypes/");
-    expect(cardSource).toContain("Gameplay prototype готов");
-    expect(cardSource).toContain("Gameplay master · 16:9");
-    expect(cardSource).toContain("Social edit · 9:16");
+    expect(cardSource).toContain("Игровой прототип готов");
+    expect(cardSource).toContain("Игровой мастер · 16:9");
+    expect(cardSource).toContain("Вертикальная версия · 9:16");
     expect(cardSource).toContain("?variant=master");
     expect(cardSource).toContain("?variant=social");
-    expect(cardSource).toContain("Скачать gameplay master 16:9");
-    expect(cardSource).toContain("Скачать social edit 9:16");
+    expect(cardSource).toContain("Скачать игровой мастер 16:9");
+    expect(cardSource).toContain("Скачать вертикальную версию 9:16");
   });
 
   it("keeps Caddy canonical and reloads tracked proxy configuration during deployment", () => {
