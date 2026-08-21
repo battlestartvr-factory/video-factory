@@ -72,17 +72,43 @@ function num(value: unknown): number | null {
 
 function stageLabel(stage: string | null): string {
   const labels: Record<string, string> = {
-    research_planning: "Research Director планирует поиск",
-    research_fanout: "Запуск 5 Research Scouts",
-    waiting_research_scouts: "5 Research Scouts изучают рынок и механики",
-    research_synthesis: "Research Synthesizer собирает Evidence Pack",
-    concept_council_fanout: "Запуск 3 Concept Designers",
-    waiting_concept_council: "Concept Council создаёт grounded hypotheses",
-    concept_curation: "Curator выбирает 6 механически разных игр",
-    human_concept_approval_pending: "Human Gate 1/3 — выберите игровые концепты",
-    concept_revision_pending: "Concept Council применяет ваш feedback",
+    research_planning: "Планирование исследования",
+    research_fanout: "Запуск исследователей",
+    waiting_research_scouts: "Исследователи изучают рынок и механики",
+    research_synthesis: "Сборка результатов исследования",
+    concept_council_fanout: "Запуск дизайнеров концептов",
+    waiting_concept_council: "Дизайнеры создают варианты игр",
+    concept_curation: "Отбор наиболее разных игровых концептов",
+    human_concept_approval_pending: "Проверка концептов — выберите подходящие идеи",
+    concept_revision_pending: "Переработка концептов по вашему комментарию",
   };
-  return stage ? labels[stage] ?? stage : "Stage 4.5 запускается";
+  return stage ? labels[stage] ?? stage : "Этап 4.5 запускается";
+}
+
+function statusLabel(status: string): string {
+  const labels: Record<string, string> = {
+    queued: "в очереди",
+    waiting: "ожидает",
+    running: "работает",
+    completed: "завершён",
+    failed: "ошибка",
+    cancelled: "отменён",
+  };
+  return labels[status] ?? status;
+}
+
+function roleLabel(role: string): string {
+  const labels: Record<string, string> = {
+    mechanics_explorer: "Исследователь механик",
+    social_viral_designer: "Дизайнер социальных моментов",
+    buildable_systems_designer: "Дизайнер реализуемых систем",
+    market_scout: "Исследователь рынка",
+    player_sentiment_scout: "Исследователь отзывов игроков",
+    competitor_scout: "Исследователь конкурентов",
+    visual_scout: "Исследователь визуальных референсов",
+    mechanic_scout: "Исследователь механик",
+  };
+  return labels[role] ?? role.replaceAll("_", " ");
 }
 
 function latestReview(reviews: Array<Record<string, unknown>>, conceptId: string) {
@@ -124,14 +150,14 @@ export function DiscoveryV2TaskCard({ task, runId }: DiscoveryV2TaskCardProps) {
         reviewResponse.json().catch(() => null),
         readinessResponse.json().catch(() => null),
       ]);
-      if (!batchResponse.ok || !batchPayload?.ok) throw new Error(batchPayload?.error?.message ?? "Не удалось обновить Game Discovery v2");
+      if (!batchResponse.ok || !batchPayload?.ok) throw new Error(batchPayload?.error?.message ?? "Не удалось обновить поиск игры");
       setDetail(batchPayload.data as BatchDetail);
       if (researchResponse.ok && researchPayload?.ok) setResearch(researchPayload.data as ResearchDetail);
       if (reviewResponse.ok && reviewPayload?.ok) setReviews(array(reviewPayload.data?.reviews).map(object));
       if (readinessResponse.ok && readinessPayload?.ok) setReadiness(readinessPayload.data as Readiness);
       setError(null);
     } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : "Не удалось обновить Stage 4.5");
+      setError(loadError instanceof Error ? loadError.message : "Не удалось обновить этап 4.5");
     }
   }, [runId]);
 
@@ -151,7 +177,7 @@ export function DiscoveryV2TaskCard({ task, runId }: DiscoveryV2TaskCardProps) {
       if (researchResponse.ok && researchPayload?.ok) setResearch(researchPayload.data as ResearchDetail);
       if (reviewResponse.ok && reviewPayload?.ok) setReviews(array(reviewPayload.data?.reviews).map(object));
     } catch {
-      // SSE keeps carrying progress; a later durable event or manual refresh can recover the snapshot.
+      // Поток событий продолжает нести прогресс; следующий durable-event или ручное обновление восстановит снимок.
     }
   }, [runId]);
 
@@ -213,7 +239,7 @@ export function DiscoveryV2TaskCard({ task, runId }: DiscoveryV2TaskCardProps) {
   ) => {
     const note = (feedback[conceptId] ?? "").trim();
     if (decision !== "approve" && !note) {
-      setError("Для Исправить / Отклонить нужен комментарий.");
+      setError("Для «Исправить» или «Отклонить» нужен комментарий.");
       return;
     }
     setSubmitting(conceptId);
@@ -239,10 +265,10 @@ export function DiscoveryV2TaskCard({ task, runId }: DiscoveryV2TaskCardProps) {
         <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 px-4 py-3 text-xs text-muted-foreground">
           <span className="font-semibold text-emerald-300">
             {researchFinalization === "early_finalized"
-              ? "Stage 4.5 research завершён досрочно по достаточному coverage."
-              : "Stage 4.5 research завершён."}
+              ? "Исследование этапа 4.5 завершено досрочно: данных уже было достаточно."
+              : "Исследование этапа 4.5 завершено."}
           </span>{" "}
-          Дальше используется проверенный Stage 4 media pipeline. Human Gate 2/3 и 3/3 остаются обязательными.
+          Дальше запускается проверенный медиаконвейер. Проверка изображения и проверка видео человеком остаются обязательными.
         </div>
         <DiscoveryTaskCard task={task} runId={runId} />
       </div>
@@ -262,7 +288,7 @@ export function DiscoveryV2TaskCard({ task, runId }: DiscoveryV2TaskCardProps) {
           <div>
             <div className="flex items-center gap-2">
               <Search className="h-4 w-4 text-violet-400" />
-              <p className="text-sm font-semibold text-foreground">Game Discovery v2 · Stage 4.5</p>
+              <p className="text-sm font-semibold text-foreground">Поиск игры · этап 4.5</p>
             </div>
             <p className="mt-1 text-xs text-muted-foreground">{stageLabel(currentStage)}</p>
           </div>
@@ -286,22 +312,22 @@ export function DiscoveryV2TaskCard({ task, runId }: DiscoveryV2TaskCardProps) {
           <div className="h-full rounded-full bg-violet-500 transition-all" style={{ width: `${progress}%` }} />
         </div>
         <div className="flex flex-wrap gap-3 text-[11px] text-muted-foreground">
-          <span>Research Scouts: {scoutDone}/5</span>
-          <span>Sources: {research?.sources.length ?? 0}</span>
-          <span>Evidence: {research?.evidence.length ?? 0}</span>
-          <span>Concept Designers: {designerDone}/3</span>
-          <span>Raw candidates: {research?.rawCandidates.length ?? 0}</span>
+          <span>Исследователи: {scoutDone}/5</span>
+          <span>Источники: {research?.sources.length ?? 0}</span>
+          <span>Доказательства: {research?.evidence.length ?? 0}</span>
+          <span>Дизайнеры концептов: {designerDone}/3</span>
+          <span>Черновые варианты: {research?.rawCandidates.length ?? 0}</span>
         </div>
         {canEarlyFinalize && (
           <p className="text-[11px] text-violet-200">
-            Coverage уже достаточен: {String(earlyFinalize.completed_scouts ?? scoutDone)} Scouts · {String(earlyFinalize.evidence_count ?? research?.evidence.length ?? 0)} evidence. Можно остановить оставшийся research и перейти к Synthesizer.
+            Данных уже достаточно: завершено исследователей — {String(earlyFinalize.completed_scouts ?? scoutDone)}, доказательств — {String(earlyFinalize.evidence_count ?? research?.evidence.length ?? 0)}. Можно остановить оставшееся исследование и перейти к итоговому анализу.
           </p>
         )}
       </div>
 
       {researchFinalization === "early_finalized" && (
         <div className="border-b border-violet-500/20 bg-violet-500/5 px-4 py-3 text-xs text-violet-200">
-          Этот run помечен как early-finalized: оставшийся Scout research был отменён после достижения coverage threshold, а Evidence Pack сформирован из уже подтверждённых источников.
+          Этот запуск завершён досрочно: оставшиеся исследователи были остановлены после достижения достаточного покрытия, а итоговый пакет собран из уже подтверждённых источников.
         </div>
       )}
 
@@ -316,7 +342,7 @@ export function DiscoveryV2TaskCard({ task, runId }: DiscoveryV2TaskCardProps) {
         <div className="flex gap-2 border-b border-amber-500/20 bg-amber-500/5 p-4 text-xs text-amber-200">
           <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
           <div>
-            Production readiness неполный: KIE={String(readiness.kieConfigured)}, KIE Search={String(readiness.kieOnlySearchEnabled)}, Drive={String(readiness.googleDriveConfigured)}, mock={String(readiness.mockWorkflows)}. Проверка конфигурационная — платных запросов не выполняет.
+            Готовность production неполная: KIE={String(readiness.kieConfigured)}, поиск KIE={String(readiness.kieOnlySearchEnabled)}, Drive={String(readiness.googleDriveConfigured)}, тестовый режим={String(readiness.mockWorkflows)}. Эта проверка только смотрит конфигурацию и не выполняет платных запросов.
           </div>
         </div>
       )}
@@ -324,21 +350,21 @@ export function DiscoveryV2TaskCard({ task, runId }: DiscoveryV2TaskCardProps) {
       {readiness?.readyForManualV2Test && (
         <div className="flex gap-2 border-b border-emerald-500/20 bg-emerald-500/5 p-3 text-xs text-emerald-200">
           <ShieldCheck className="h-4 w-4 shrink-0" />
-          KIE-only research и Drive настроены для ручного production-теста. Автоматический paid probe отключён.
+          Исследование через KIE и Google Drive настроены для ручного production-теста. Автоматический платный пробный запрос отключён.
         </div>
       )}
 
       {(research?.sources.length ?? 0) > 0 && (
         <details className="border-b border-border p-4">
-          <summary className="cursor-pointer text-xs font-semibold text-foreground">Research sources и provenance</summary>
+          <summary className="cursor-pointer text-xs font-semibold text-foreground">Источники исследования и их происхождение</summary>
           <div className="mt-3 space-y-2">
             {research!.sources.slice(0, 12).map((source, index) => {
               const url = str(source.url);
               return (
                 <div key={str(source.id) ?? `${index}`} className="flex items-start justify-between gap-3 text-xs">
                   <div className="min-w-0">
-                    <p className="truncate text-foreground">{str(source.title) ?? url ?? "Source"}</p>
-                    <p className="text-[11px] text-muted-foreground">{str(source.scoutRole)?.replaceAll("_", " ") ?? "research"}</p>
+                    <p className="truncate text-foreground">{str(source.title) ?? url ?? "Источник"}</p>
+                    <p className="text-[11px] text-muted-foreground">{roleLabel(str(source.scoutRole) ?? "research")}</p>
                   </div>
                   {url && (
                     <a href={url} target="_blank" rel="noreferrer" className="shrink-0 text-violet-300 hover:text-violet-200">
@@ -354,7 +380,7 @@ export function DiscoveryV2TaskCard({ task, runId }: DiscoveryV2TaskCardProps) {
 
       {Object.keys(coverage).length > 0 && (
         <div className="border-b border-border p-4 text-xs text-muted-foreground">
-          <p className="font-semibold text-foreground">Evidence Pack coverage</p>
+          <p className="font-semibold text-foreground">Покрытие пакета доказательств</p>
           <p className="mt-1">{Object.entries(coverage).map(([key, value]) => `${key}: ${String(value)}`).join(" · ")}</p>
         </div>
       )}
@@ -366,8 +392,8 @@ export function DiscoveryV2TaskCard({ task, runId }: DiscoveryV2TaskCardProps) {
             const status = str(designer.status) ?? "queued";
             return (
               <div key={role} className="rounded-lg border border-border bg-background/30 p-3">
-                <p className="text-xs font-semibold text-foreground">{role.replaceAll("_", " ")}</p>
-                <p className={`mt-1 text-[11px] ${statusTone(status)}`}>{status}</p>
+                <p className="text-xs font-semibold text-foreground">{roleLabel(role)}</p>
+                <p className={`mt-1 text-[11px] ${statusTone(status)}`}>{statusLabel(status)}</p>
               </div>
             );
           })}
@@ -378,7 +404,7 @@ export function DiscoveryV2TaskCard({ task, runId }: DiscoveryV2TaskCardProps) {
         <div>
           <div className="flex items-center gap-2 border-b border-border bg-violet-500/5 px-4 py-3 text-xs text-violet-200">
             <AlertCircle className="h-4 w-4" />
-            Human Gate 1/3. Media generation заблокирован, пока вы не примете решения по концептам.
+            Проверка концептов человеком. Генерация изображений и видео заблокирована, пока вы не примете решения по концептам.
           </div>
           {concepts.map(({ conceptRunId, conceptId, concept }) => (
             <ConceptReviewPanel
@@ -398,13 +424,13 @@ export function DiscoveryV2TaskCard({ task, runId }: DiscoveryV2TaskCardProps) {
       {currentStage === "concept_revision_pending" && (
         <div className="flex items-center gap-2 p-4 text-xs text-muted-foreground">
           <Loader2 className="h-4 w-4 animate-spin text-amber-400" />
-          Feedback сохранён. Завод обязан заменить отклонённые концепты механически новыми и снова вернётся к Human Concept Gate.
+          Комментарий сохранён. Завод перерабатывает или заменяет отмеченные концепты и затем снова вернёт их на вашу проверку.
         </div>
       )}
 
       {jobStatus === "failed" && (
         <div className="border-t border-red-500/20 bg-red-500/5 p-4 text-xs text-red-200">
-          <p>Stage 4.5 остановлен: {jobFailure.message}</p>
+          <p>Этап 4.5 остановлен: {jobFailure.message}</p>
           {jobFailure.code && (
             <p className="mt-1 text-[11px] text-red-300/80">Код: {jobFailure.code}</p>
           )}
