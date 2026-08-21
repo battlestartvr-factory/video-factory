@@ -90,20 +90,22 @@ function formatActivity(value: string | null, now: number): string {
 function eventLabel(event: TraceEvent): string {
   const role = event.scoutRole?.replaceAll("_", " ");
   switch (event.eventType) {
-    case "research.scout.started": return `${role ?? "Scout"}: старт`;
-    case "research.search.started": return `${role ?? "Scout"}: KIE Google Search`;
-    case "research.search.completed": return `${role ?? "Scout"}: поиск завершён`;
-    case "research.source.fetch_started": return `${role ?? "Scout"}: Safe Fetch`;
-    case "research.source.accepted": return `${role ?? "Scout"}: источник принят`;
-    case "research.source.rejected": return `${role ?? "Scout"}: источник отклонён`;
-    case "research.evidence.extracted": return `${role ?? "Scout"}: evidence извлечён`;
-    case "research.evidence.persisted": return `${role ?? "Scout"}: evidence сохранён`;
-    case "research.scout.persisted": return `${role ?? "Scout"}: отчёт сохранён`;
-    case "research.scout.completed": return `${role ?? "Scout"}: завершён`;
-    case "research.scouts_waiting": return "Research Director ждёт Scouts";
-    case "research.synthesis.started": return "Research Synthesizer запущен";
-    case "research.synthesis.completed": return "Evidence Pack готов";
-    case "job.cancelled": return "Research остановлен пользователем";
+    case "research.scout.started": return `${role ?? "Исследователь"}: старт`;
+    case "research.search.started": return `${role ?? "Исследователь"}: поиск KIE/Google`;
+    case "research.search.completed": return `${role ?? "Исследователь"}: поиск завершён`;
+    case "research.source.fetch_started": return `${role ?? "Исследователь"}: безопасная загрузка источника`;
+    case "research.source.accepted": return `${role ?? "Исследователь"}: источник принят`;
+    case "research.source.rejected": return `${role ?? "Исследователь"}: источник отклонён`;
+    case "research.evidence.extracted": return `${role ?? "Исследователь"}: доказательство извлечено`;
+    case "research.evidence.persisted": return `${role ?? "Исследователь"}: доказательство сохранено`;
+    case "research.scout.persisted": return `${role ?? "Исследователь"}: отчёт сохранён`;
+    case "research.scout.completed": return `${role ?? "Исследователь"}: завершён`;
+    case "research.scouts_waiting": return "Research Director ждёт исследователей";
+    case "research.synthesis.started": return "Синтез исследования запущен";
+    case "research.synthesis.completed": return "Пакет доказательств готов";
+    case "concept.curation.completed": return "Концепции готовы";
+    case "concept.council.completed": return "Совет концепций завершён";
+    case "job.cancelled": return "Исследование остановлено пользователем";
     default: return event.eventType.replaceAll("_", " ");
   }
 }
@@ -112,12 +114,17 @@ function scoutState(events: TraceEvent[], role: string, fallback: string): strin
   for (let index = events.length - 1; index >= 0; index -= 1) {
     const event = events[index];
     if (event?.scoutRole !== role) continue;
-    if (event.eventType === "research.scout.completed" || event.eventType === "research.scout.persisted") return "completed";
-    if (event.eventType === "research.evidence.persisted" || event.eventType === "research.evidence.extracted") return "evidence";
-    if (event.eventType === "research.source.fetch_started") return "fetching";
-    if (event.eventType === "research.search.started") return "searching";
-    if (event.eventType === "research.scout.started") return "running";
+    if (event.eventType === "research.scout.completed" || event.eventType === "research.scout.persisted") return "завершён";
+    if (event.eventType === "research.evidence.persisted" || event.eventType === "research.evidence.extracted") return "собирает доказательства";
+    if (event.eventType === "research.source.fetch_started") return "читает источники";
+    if (event.eventType === "research.search.started") return "ищет";
+    if (event.eventType === "research.scout.started") return "работает";
   }
+  const normalized = fallback.toLowerCase();
+  if (normalized === "queued") return "в очереди";
+  if (normalized === "running") return "работает";
+  if (normalized === "completed") return "завершён";
+  if (normalized === "failed") return "ошибка";
   return fallback;
 }
 
@@ -132,6 +139,7 @@ export function ResearchLiveTrace({
   const [now, setNow] = useState(() => Date.now());
   const materialUpdateRef = useRef(onMaterialUpdate);
   const refreshTimerRef = useRef<number | null>(null);
+  const doneRefreshTimersRef = useRef<number[]>([]);
 
   useEffect(() => {
     materialUpdateRef.current = onMaterialUpdate;
@@ -151,6 +159,16 @@ export function ResearchLiveTrace({
         refreshTimerRef.current = null;
         materialUpdateRef.current?.();
       }, 400);
+    };
+
+    const scheduleDoneReconciliation = () => {
+      // Concept persistence and the final human-gate transition can commit a fraction after
+      // the last trace event. Re-read the durable snapshot a few times so the gate appears
+      // without requiring a manual browser refresh.
+      for (const delay of [450, 1_500, 3_500]) {
+        const timer = window.setTimeout(() => materialUpdateRef.current?.(), delay);
+        doneRefreshTimersRef.current.push(timer);
+      }
     };
 
     const onReady = () => {
@@ -184,7 +202,7 @@ export function ResearchLiveTrace({
     const onDone = () => {
       setConnection("done");
       announceRun(runId, false);
-      scheduleMaterialRefresh();
+      scheduleDoneReconciliation();
       source.close();
     };
     const onError = () => setConnection((current) => current === "done" ? "done" : "reconnecting");
@@ -200,6 +218,8 @@ export function ResearchLiveTrace({
         window.clearTimeout(refreshTimerRef.current);
         refreshTimerRef.current = null;
       }
+      for (const timer of doneRefreshTimersRef.current) window.clearTimeout(timer);
+      doneRefreshTimersRef.current = [];
     };
   }, [runId]);
 
@@ -246,25 +266,33 @@ export function ResearchLiveTrace({
 
   const scouts = useMemo(() => {
     return initialScouts.map((row) => {
-      const role = str(row.role) ?? "scout";
+      const role = str(row.role) ?? "исследователь";
       const fallback = str(row.status) ?? "queued";
       return { role, state: scoutState(events, role, fallback) };
     });
   }, [events, initialScouts]);
+
+  const connectionLabel = connection === "live"
+    ? "в эфире"
+    : connection === "done"
+      ? "завершён"
+      : connection === "reconnecting"
+        ? "переподключение"
+        : "подключение";
 
   return (
     <div className="border-b border-border bg-background/10 p-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-2 text-xs font-semibold text-foreground">
           <Activity className="h-4 w-4 text-violet-400" />
-          Live Research Trace
+          Ход исследования
           <span className={connection === "live" ? "text-emerald-400" : connection === "done" ? "text-muted-foreground" : "text-amber-400"}>
-            · {connection}
+            · {connectionLabel}
           </span>
         </div>
         <div className="flex gap-3 text-[11px] text-muted-foreground">
-          <span>elapsed {elapsed}</span>
-          <span>last activity {formatActivity(lastEvent?.createdAt ?? null, now)}</span>
+          <span>прошло {elapsed}</span>
+          <span>последняя активность {formatActivity(lastEvent?.createdAt ?? null, now)}</span>
         </div>
       </div>
 
@@ -288,13 +316,13 @@ export function ResearchLiveTrace({
 
       {sources.length > 0 && (
         <details className="mt-3">
-          <summary className="cursor-pointer text-xs font-semibold text-foreground">Live sources · {sources.length}</summary>
+          <summary className="cursor-pointer text-xs font-semibold text-foreground">Источники · {sources.length}</summary>
           <div className="mt-2 space-y-1.5">
             {sources.map((source) => (
               <div key={source.url} className="flex items-start justify-between gap-3 text-xs">
                 <div className="min-w-0">
                   <p className="truncate text-foreground">{source.title}</p>
-                  <p className="text-[11px] text-muted-foreground">{source.role?.replaceAll("_", " ") ?? "research"}</p>
+                  <p className="text-[11px] text-muted-foreground">{source.role?.replaceAll("_", " ") ?? "исследование"}</p>
                 </div>
                 <a href={source.url} target="_blank" rel="noreferrer" className="shrink-0 text-violet-300 hover:text-violet-200">
                   <ExternalLink className="h-4 w-4" />
@@ -307,7 +335,7 @@ export function ResearchLiveTrace({
 
       {evidence.length > 0 && (
         <details className="mt-3">
-          <summary className="cursor-pointer text-xs font-semibold text-foreground">Live evidence · {evidence.length}</summary>
+          <summary className="cursor-pointer text-xs font-semibold text-foreground">Доказательства · {evidence.length}</summary>
           <div className="mt-2 space-y-2">
             {evidence.map((item) => (
               <div key={item.key} className="rounded-lg border border-border bg-background/30 px-3 py-2 text-xs">
@@ -323,7 +351,7 @@ export function ResearchLiveTrace({
 
       {events.length > 0 && (
         <details className="mt-3">
-          <summary className="cursor-pointer text-[11px] text-muted-foreground">Event history · {events.length}</summary>
+          <summary className="cursor-pointer text-[11px] text-muted-foreground">История событий · {events.length}</summary>
           <div className="mt-2 space-y-1 text-[11px] text-muted-foreground">
             {events.slice(-12).reverse().map((event) => (
               <div key={event.sequenceId} className="flex justify-between gap-3">
