@@ -33,7 +33,7 @@ CREATE INDEX IF NOT EXISTS idx_research_progress_run_sequence
 ALTER TABLE public.research_progress_events ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON TABLE public.research_progress_events FROM PUBLIC, anon, authenticated;
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.research_progress_events TO service_role;
-GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO service_role;
+GRANT USAGE, SELECT ON SEQUENCE public.research_progress_events_sequence_id_seq TO service_role;
 
 CREATE OR REPLACE FUNCTION public.research_record_progress_event(payload JSONB)
 RETURNS JSONB
@@ -101,8 +101,7 @@ BEGIN
   RETURN jsonb_build_object(
     'sequence_id', v_row.sequence_id,
     'event_type', v_row.event_type,
-    'created_at', v_row.created_at,
-    'duplicate', v_row.created_at < NOW() - INTERVAL '1 millisecond'
+    'created_at', v_row.created_at
   );
 END;
 $$;
