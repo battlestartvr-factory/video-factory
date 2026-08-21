@@ -153,6 +153,56 @@ describe("Stage 4.5 PR7 Game Discovery v2 integration", () => {
     expect(result.error).toMatchObject({ code: "RESEARCH_SCOUT_COVERAGE_FAILED", retryable: false });
   });
 
+  it("persists research failure and returns a bounded safe error when synthesis throws", async () => {
+    const markResearchFailure = vi.fn(async () => undefined);
+    const technicalDump = JSON.stringify({
+      issues: Array.from({ length: 30 }, (_, index) => ({
+        path: ["mechanicLandscape", index, "claim"],
+        code: "too_big",
+        message: "Too big: expected string to have <=2000 characters",
+      })),
+    });
+    const loadSynthesisInput = vi.fn(async () => {
+      throw new Error(technicalDump);
+    });
+
+    const result = await gameDiscoveryBatchV2(
+      context({
+        currentStage: "research_synthesis",
+        state: {
+          ...context().state,
+          research_run_id: "research-run-1",
+          research_scout_completed_count: 5,
+        },
+        services: {
+          researchIntelligence: { loadSynthesisInput },
+          researchSynthesizerExecutor: { synthesize: vi.fn() },
+          gameDiscoveryV2: { markResearchFailure },
+        } as unknown as NonNullable<WorkflowTickContext["services"]>,
+      }),
+    );
+
+    expect(markResearchFailure).toHaveBeenCalledOnce();
+    expect(markResearchFailure).toHaveBeenCalledWith(expect.objectContaining({
+      researchRunId: "research-run-1",
+      code: "RESEARCH_SYNTHESIS_FAILED",
+      bestEffortFallback: false,
+      coverage: expect.objectContaining({
+        phase: "research_synthesis",
+        technical_error_name: "Error",
+        technical_error_truncated: true,
+        technical_error_message: expect.any(String),
+      }),
+    }));
+    expect(result.status).toBe("failed");
+    expect(result.error).toMatchObject({
+      code: "RESEARCH_SYNTHESIS_FAILED",
+      message: "Required research could not produce a valid Evidence Pack",
+      retryable: false,
+    });
+    expect(String(result.error?.message)).not.toContain("mechanicLandscape");
+  });
+
   it("falls back to Stage 4 baseline on the same Scout failure in best_effort mode", async () => {
     const markResearchFailure = vi.fn(async () => undefined);
     const result = await gameDiscoveryBatchV2(

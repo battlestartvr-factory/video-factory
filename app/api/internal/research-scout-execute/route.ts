@@ -47,9 +47,13 @@ const NON_RETRYABLE_PROVIDER_CODES = new Set([
   "RESEARCH_SHARED_SOURCE_POOL_FAILED",
   "RESEARCH_SHARED_SOURCE_POOL_NO_GROUNDED_SOURCES",
   "RESEARCH_SHARED_SOURCE_POOL_NO_SAFE_SOURCES",
+  "RESEARCH_SHARED_SOURCE_POOL_COVERAGE_INSUFFICIENT",
+  "RESEARCH_SHARED_SOURCE_POOL_PROVIDER_CALL_CAP_EXCEEDED",
   "RESEARCH_SCOUT_NO_GROUNDED_SOURCES",
   "RESEARCH_SCOUT_NO_SAFE_FETCHED_SOURCES",
   "RESEARCH_SCOUT_GROUNDED_CLAIMS_MISSING",
+  "RESEARCH_SCOUT_ROLE_ANALYSIS_FAILED",
+  "RESEARCH_SCOUT_ROLE_ANALYSIS_INSUFFICIENT",
 ]);
 
 function statusForExecutionError(code: string): number {
@@ -134,7 +138,8 @@ export async function POST(request: Request) {
 
     const beforePaidCall =
       event.eventType === "research.scout.started" ||
-      event.eventType === "research.search.started";
+      event.eventType === "research.search.started" ||
+      event.eventType === "research.scout.role_analysis_started";
     if (beforePaidCall) {
       throw new Error(`RESEARCH_PROGRESS_PERSIST_FAILED: ${error.message}`);
     }
@@ -162,9 +167,10 @@ export async function POST(request: Request) {
       },
     });
     if (!error) return;
-    // The pre-search event is a money gate: never start KIE when durable trace
-    // cannot first record which job owns the shared paid acquisition.
-    if (event.eventType === "research.source_pool.search_started") {
+    if (
+      event.eventType === "research.source_pool.search_started" ||
+      event.eventType === "research.source_pool.coverage_recovery_started"
+    ) {
       throw new Error(`RESEARCH_PROGRESS_PERSIST_FAILED: ${error.message}`);
     }
     console.warn("research.source_pool_progress_persist_failed", {

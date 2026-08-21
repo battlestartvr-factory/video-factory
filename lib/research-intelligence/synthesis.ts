@@ -109,6 +109,24 @@ function normalizeInput(input: ResearchSynthesisInputV1): ResearchSynthesisInput
   };
 }
 
+export function compactEvidenceClaim(value: string, maxChars = 1_800): string {
+  const normalized = value.replace(/\r?\n/g, " ").replace(/\s+/g, " ").trim();
+  if (normalized.length <= maxChars) return normalized;
+  const sentences = normalized.split(/(?<=[.!?])\s+/u).filter(Boolean);
+  const selected: string[] = [];
+  let length = 0;
+  for (const sentence of sentences) {
+    const next = selected.length ? length + 1 + sentence.length : sentence.length;
+    if (next > maxChars) break;
+    selected.push(sentence);
+    length = next;
+  }
+  if (selected.length > 0) return selected.join(" ");
+  const hard = normalized.slice(0, maxChars - 1).trimEnd();
+  const boundary = hard.lastIndexOf(" ");
+  return `${(boundary >= Math.floor(maxChars * 0.65) ? hard.slice(0, boundary) : hard).trim()}…`;
+}
+
 export function researchSynthesisInputHash(input: ResearchSynthesisInputV1): string {
   const normalized = normalizeInput(input);
   return researchSha256({
@@ -218,6 +236,17 @@ export class ResearchSynthesisService {
         ? await this.repository.getFinalization(input.researchRunId)
         : "full"
     );
+
+    // Money boundary: prove that the current durable evidence can satisfy the local
+    // Evidence Pack schema and reference contract before any production Synthesizer
+    // model call is allowed to start. The production executor can still reprioritize
+    // valid evidence, but a local schema mismatch can no longer burn a paid call first.
+    const preflight = await new MockResearchSynthesizer().synthesize({ synthesisInput });
+    validateEvidencePackReferences(
+      evidencePackSpecV1Schema.parse({ ...preflight.pack, finalization }),
+      synthesisInput,
+    );
+
     const execution = await this.executor.synthesize({ synthesisInput, signal: input.signal });
     const markedPack = evidencePackSpecV1Schema.parse({
       ...execution.pack,
@@ -262,7 +291,7 @@ function evidenceRef(item: ResearchEvidenceSpecV1, conflicted: boolean): Evidenc
   return {
     evidenceId: item.evidenceId,
     subject: item.subject,
-    claim: item.claim,
+    claim: compactEvidenceClaim(item.claim),
     confidence: Math.max(
       0,
       Math.min(1, Number((item.confidence * freshnessMultiplier(item.freshnessClass) * conflictMultiplier).toFixed(4))),
@@ -326,8 +355,8 @@ export class MockResearchSynthesizer implements ResearchSynthesizerExecutor {
       conflicted.add(a.evidenceId);
       conflicted.add(b.evidenceId);
       contradictions.push({
-        claimA: a.claim,
-        claimB: b.claim,
+        claimA: compactEvidenceClaim(a.claim),
+        claimB: compactEvidenceClaim(b.claim),
         interpretation: "Conflicting source-backed observations require downstream caution; neither side is treated as final truth.",
         evidenceIds: [a.evidenceId, b.evidenceId],
       });
