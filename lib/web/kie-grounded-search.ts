@@ -348,12 +348,18 @@ function candidateScore(candidate: WebPageImageCandidate, query: string): number
   return score;
 }
 
+function groundedSearchSignal(signal?: AbortSignal): AbortSignal {
+  const timeout = AbortSignal.timeout(45_000);
+  return signal ? AbortSignal.any([signal, timeout]) : timeout;
+}
+
 export class KieGeminiGroundedSearchProvider implements WebSearchProvider {
   constructor(
     private readonly baseUrl: string,
     private readonly apiKey: string,
     private readonly model = "gemini-3-6-flash",
     private readonly fetchProvider: WebFetchProvider = createWebFetchProvider(),
+    private readonly signal?: AbortSignal,
   ) {}
 
   search(query: string, options?: SearchOptions): Promise<SearchResult[]> {
@@ -361,6 +367,7 @@ export class KieGeminiGroundedSearchProvider implements WebSearchProvider {
   }
 
   private async groundedSearch(input: TextSearchRequest): Promise<KieGroundedResponse> {
+    if (this.signal?.aborted) throw this.signal.reason ?? new DOMException("Aborted", "AbortError");
     const endpoint = `${this.baseUrl.replace(/\/+$/, "")}/gemini/v1/models/${encodeURIComponent(this.model)}:streamGenerateContent`;
     const maxResults = boundedMaxResults(input.maxResults);
     const prompt = [
@@ -389,7 +396,7 @@ export class KieGeminiGroundedSearchProvider implements WebSearchProvider {
         contents: [{ role: "user", parts: [{ text: prompt }] }],
         tools: [{ googleSearch: {} }],
       }),
-      signal: AbortSignal.timeout(45_000),
+      signal: groundedSearchSignal(this.signal),
     });
     const body = await response.text();
     if (!response.ok) {
@@ -499,12 +506,15 @@ export class KieGeminiGroundedSearchProvider implements WebSearchProvider {
   }
 }
 
-export function createKieGeminiGroundedSearchProvider(fetchProvider?: WebFetchProvider): WebSearchProvider {
+export function createKieGeminiGroundedSearchProvider(
+  fetchProvider?: WebFetchProvider,
+  signal?: AbortSignal,
+): WebSearchProvider {
   const apiKey = (process.env.KIE_API_KEY ?? process.env.AGENT_LLM_API_KEY ?? "").trim();
   if (!apiKey) {
     throw new WebToolError("WEB_SEARCH_NOT_CONFIGURED", "KIE API key is required for KIE grounded search");
   }
   const baseUrl = normalizeKieBaseUrl(process.env.KIE_API_BASE_URL ?? process.env.AGENT_LLM_BASE_URL);
   const model = (process.env.KIE_WEB_SEARCH_MODEL ?? "").trim() || "gemini-3-6-flash";
-  return new KieGeminiGroundedSearchProvider(baseUrl, apiKey, model, fetchProvider);
+  return new KieGeminiGroundedSearchProvider(baseUrl, apiKey, model, fetchProvider, signal);
 }
