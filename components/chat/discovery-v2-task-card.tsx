@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { AlertCircle, CheckCircle2, ExternalLink, Loader2, RefreshCw, Search, ShieldCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { TaskCardData } from "@/lib/types/workspace";
+import { researchUserFacingFailure } from "@/lib/research-intelligence/user-facing-errors";
 import { ConceptReviewPanel, type ConceptReviewDecision } from "@/components/discovery/concept-review-panel";
 import { DiscoveryTaskCard } from "./discovery-task-card";
 import { ResearchLiveTrace } from "./research-live-trace";
@@ -162,6 +163,7 @@ export function DiscoveryV2TaskCard({ task, runId }: DiscoveryV2TaskCardProps) {
   const jobStatus = str(detail?.factoryJob?.status) ?? task.status;
   const currentStage = str(detail?.factoryJob?.current_stage);
   const progress = Math.max(0, Math.min(100, num(detail?.factoryJob?.progress) ?? task.progress ?? 0));
+  const jobFailure = researchUserFacingFailure(detail?.factoryJob?.error);
   const frontStageActive = !currentStage || V2_FRONT_STAGES.has(currentStage);
   const durableState = object(detail?.factoryJob?.state);
   const earlyFinalize = object(durableState.research_early_finalize);
@@ -402,7 +404,10 @@ export function DiscoveryV2TaskCard({ task, runId }: DiscoveryV2TaskCardProps) {
 
       {jobStatus === "failed" && (
         <div className="border-t border-red-500/20 bg-red-500/5 p-4 text-xs text-red-200">
-          Stage 4.5 остановлен: {str(detail?.factoryJob?.error && object(detail.factoryJob.error).message) ?? "см. job error"}
+          <p>Stage 4.5 остановлен: {jobFailure.message}</p>
+          {jobFailure.code && (
+            <p className="mt-1 text-[11px] text-red-300/80">Код: {jobFailure.code}</p>
+          )}
         </div>
       )}
 
