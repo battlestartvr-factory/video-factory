@@ -30,7 +30,7 @@ export function TaskCard({ task }: TaskCardProps) {
       : null;
   if (discoveryRunId) {
     const workflowVersion = Number(task.settings?.workflowVersion ?? 1);
-    return workflowVersion === 2
+    return workflowVersion >= 2
       ? <DiscoveryV2TaskCard task={task} runId={discoveryRunId} />
       : <DiscoveryTaskCard task={task} runId={discoveryRunId} />;
   }
