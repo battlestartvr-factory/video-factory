@@ -1,13 +1,16 @@
+import { randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { verifyIngestBearerToken } from "@/lib/asset-ingest/auth";
 import { createKieGroundedResearchScoutExecutor } from "@/lib/research-intelligence/kie-research-scout";
+import type { ResearchScoutProgressEvent } from "@/lib/research-intelligence/progress";
 import {
   researchScoutAssignmentSpecV1Schema,
   researchScoutReportSpecV1Schema,
   researchScoutRoleSchema,
 } from "@/lib/research-intelligence/schemas";
 import { resolveSupabaseServiceRoleKey } from "@/lib/supabase/service-config";
+import { createSupabaseServiceClient } from "@/lib/supabase/server";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -82,8 +85,40 @@ export async function POST(request: Request) {
     );
   }
 
+  const executionId = randomUUID();
+  const service = createSupabaseServiceClient();
+  const reportProgress = async (event: ResearchScoutProgressEvent) => {
+    const { error } = await service.rpc("research_record_progress_event", {
+      payload: {
+        root_factory_job_id: parsed.data.context.rootFactoryJobId,
+        job_id: parsed.data.jobId,
+        research_run_id: parsed.data.context.researchRunId,
+        scout_role: parsed.data.context.scoutRole,
+        event_type: event.eventType,
+        dedupe_key: `scout:${parsed.data.jobId}:${executionId}:${event.key}`,
+        payload: {
+          ...event.payload,
+          execution_id: executionId,
+        },
+      },
+    });
+    if (!error) return;
+
+    const beforePaidCall =
+      event.eventType === "research.scout.started" ||
+      event.eventType === "research.search.started";
+    if (beforePaidCall) {
+      throw new Error(`RESEARCH_PROGRESS_PERSIST_FAILED: ${error.message}`);
+    }
+    console.warn("research.progress_persist_failed", {
+      event_type: event.eventType,
+      scout_role: parsed.data.context.scoutRole,
+      error: error.message.slice(0, 1_000),
+    });
+  };
+
   try {
-    const executor = createKieGroundedResearchScoutExecutor();
+    const executor = createKieGroundedResearchScoutExecutor(reportProgress);
     const result = await executor.execute({
       jobId: parsed.data.jobId,
       context: parsed.data.context,
