@@ -47,6 +47,12 @@ function num(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
+function announceRun(runId: string, active: boolean): void {
+  window.dispatchEvent(new CustomEvent("game-discovery-v2-activity", {
+    detail: { runId, active },
+  }));
+}
+
 function parseTrace(value: unknown): TraceEvent | null {
   const row = object(value);
   const sequenceId = num(row.sequenceId);
@@ -145,7 +151,10 @@ export function ResearchLiveTrace({
       }, 400);
     };
 
-    const onReady = () => setConnection("live");
+    const onReady = () => {
+      setConnection("live");
+      announceRun(runId, true);
+    };
     const onTrace = (message: MessageEvent<string>) => {
       let parsed: unknown;
       try {
@@ -161,6 +170,7 @@ export function ResearchLiveTrace({
         const next = [...current, event].sort((a, b) => a.sequenceId - b.sequenceId);
         return next.length > 200 ? next.slice(next.length - 200) : next;
       });
+      if (event.eventType === "job.cancelled") announceRun(runId, false);
       if (
         MATERIAL_EVENTS.has(event.eventType) ||
         event.eventType.startsWith("concept.") ||
@@ -171,6 +181,7 @@ export function ResearchLiveTrace({
     };
     const onDone = () => {
       setConnection("done");
+      announceRun(runId, false);
       scheduleMaterialRefresh();
       source.close();
     };
