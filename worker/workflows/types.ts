@@ -11,6 +11,7 @@ import type { ConceptCouncilDesignerExecutor } from "../../lib/research-intellig
 import type { ConceptCouncilRepository } from "../../lib/research-intelligence/concept-council-runtime";
 import type { ConceptCouncilCuratorExecutor } from "../../lib/research-intelligence/concept-curator";
 import type { GameDiscoveryV2Repository } from "../../lib/research-intelligence/game-discovery-v2";
+import type { GameDiscoveryV3Repository } from "../../lib/research-intelligence/game-discovery-v3";
 import type { ResearchIntelligenceRepository } from "../../lib/research-intelligence/repository";
 import type {
   ResearchScoutExecutor,
@@ -35,6 +36,7 @@ export interface WorkflowServices {
   gameDiscoveryVideo?: GameDiscoveryVideoRepository;
   gameDiscoveryAssembly?: GameDiscoveryAssemblyRuntime;
   gameDiscoveryV2?: GameDiscoveryV2Repository;
+  gameDiscoveryV3?: GameDiscoveryV3Repository;
   researchScouts?: ResearchScoutRepository;
   researchScoutExecutor?: ResearchScoutExecutor | null;
   researchIntelligence?: ResearchIntelligenceRepository;
