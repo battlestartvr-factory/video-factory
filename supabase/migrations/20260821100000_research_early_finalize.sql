@@ -1,6 +1,7 @@
 -- Hardening PR4 — explicit "Answer now" boundary for Stage 4.5 research.
--- The root discovery job stays alive. Only unfinished Research Scout children are
--- cancelled/fenced, then the root is made immediately eligible for fan-in/synthesis.
+-- The root discovery job stays alive. The user-facing RPC re-validates the durable
+-- coverage gate through the scoped Research Council finalizer, which cancels/fences
+-- only unfinished Scout children and then wakes the root for immediate synthesis.
 
 CREATE OR REPLACE FUNCTION public.orchestrator_request_research_early_finalize(
   p_root_job_id UUID,
@@ -16,6 +17,7 @@ DECLARE
   v_state JSONB;
   v_early JSONB;
   v_research_run_id UUID;
+  v_finalize JSONB;
   v_cancelled_scouts INTEGER := 0;
 BEGIN
   IF p_root_job_id IS NULL OR p_user_id IS NULL THEN
@@ -67,38 +69,32 @@ BEGIN
     RETURN jsonb_build_object('accepted', false, 'reason', 'research_run_missing');
   END IF;
 
-  -- Fence only unfinished Scout jobs. Setting cancel_requested is important for an
-  -- already-running Scout: the worker heartbeat observes the same PR1 cancellation
-  -- boundary and aborts KIE/Safe Fetch before any later paid/network step can start.
-  UPDATE public.factory_jobs AS fj
-  SET
-    cancel_requested = TRUE,
-    cancel_requested_at = COALESCE(fj.cancel_requested_at, NOW()),
-    cancel_requested_by = COALESCE(fj.cancel_requested_by, p_user_id),
-    cancel_reason = COALESCE(fj.cancel_reason, 'research_early_finalize'),
-    status = 'cancelled',
-    state_reason = 'research_early_finalized',
-    next_action_at = NULL,
-    lease_owner = NULL,
-    lease_token = NULL,
-    lease_expires_at = NULL,
-    last_heartbeat_at = NULL,
-    completed_at = COALESCE(fj.completed_at, NOW()),
-    error = COALESCE(fj.error, jsonb_build_object(
-      'code', 'RESEARCH_EARLY_FINALIZED',
-      'message', 'Research Scout cancelled because the user requested an early answer',
-      'retryable', false
-    ))
-  FROM public.research_scout_assignments AS rsa
-  WHERE rsa.run_id = v_research_run_id
-    AND rsa.factory_job_id = fj.id
-    AND fj.status NOT IN ('completed', 'failed', 'cancelled');
-  GET DIAGNOSTICS v_cancelled_scouts = ROW_COUNT;
+  -- Never trust the UI/root-state eligibility marker as the final authority. The
+  -- scoped DB finalizer locks the Research run + child jobs, re-checks completed
+  -- Scouts/evidence/critical-role coverage, terminalizes only unfinished Scouts,
+  -- cancels their active stages/provider reconciliation, records durable metadata,
+  -- and installs the late-evidence/report fence. The root job is not cancelled.
+  v_finalize := public.research_early_finalize_scout_fanout(v_research_run_id);
+
+  IF COALESCE((v_finalize->>'finalized')::BOOLEAN, FALSE) IS NOT TRUE THEN
+    RETURN jsonb_build_object(
+      'accepted', false,
+      'reason', COALESCE(v_finalize->>'reason', 'coverage_not_eligible'),
+      'research_run_id', v_research_run_id,
+      'finalization', 'full'
+    );
+  END IF;
+
+  v_cancelled_scouts := COALESCE(
+    NULLIF(v_finalize->>'terminalized_scouts', '')::INTEGER,
+    0
+  );
 
   v_early := v_early || jsonb_build_object(
     'eligible', false,
     'requested', true,
     'requested_at', NOW(),
+    'requested_by', p_user_id,
     'finalization', 'early_finalized'
   );
 
@@ -127,7 +123,7 @@ BEGIN
 
   RETURN jsonb_build_object(
     'accepted', true,
-    'duplicate', false,
+    'duplicate', COALESCE((v_finalize->>'duplicate')::BOOLEAN, FALSE),
     'root_job_id', p_root_job_id,
     'research_run_id', v_research_run_id,
     'cancelled_scouts', v_cancelled_scouts,
@@ -142,4 +138,4 @@ GRANT EXECUTE ON FUNCTION public.orchestrator_request_research_early_finalize(UU
   TO service_role;
 
 COMMENT ON FUNCTION public.orchestrator_request_research_early_finalize(UUID, UUID) IS
-  'Durably stops unfinished Research Scouts after coverage eligibility and wakes the root run for early-finalized synthesis.';
+  'User-authorized Answer-now boundary: revalidates coverage, scoped-cancels/fences unfinished Research Scouts, and wakes the root run for early-finalized synthesis.';
