@@ -47,6 +47,21 @@ function num(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
+function roleLabel(role: string | null): string {
+  if (!role) return "Исследователь";
+  const labels: Record<string, string> = {
+    mechanics_explorer: "Исследователь механик",
+    mechanic_scout: "Исследователь механик",
+    market_scout: "Исследователь рынка",
+    competitor_scout: "Исследователь конкурентов",
+    player_sentiment_scout: "Исследователь отзывов игроков",
+    visual_scout: "Исследователь визуальных референсов",
+    social_viral_designer: "Дизайнер социальных моментов",
+    buildable_systems_designer: "Дизайнер реализуемых систем",
+  };
+  return labels[role] ?? role.replaceAll("_", " ");
+}
+
 function announceRun(runId: string, active: boolean): void {
   window.dispatchEvent(new CustomEvent("game-discovery-v2-activity", {
     detail: { runId, active },
@@ -88,23 +103,23 @@ function formatActivity(value: string | null, now: number): string {
 }
 
 function eventLabel(event: TraceEvent): string {
-  const role = event.scoutRole?.replaceAll("_", " ");
+  const role = roleLabel(event.scoutRole);
   switch (event.eventType) {
-    case "research.scout.started": return `${role ?? "Исследователь"}: старт`;
-    case "research.search.started": return `${role ?? "Исследователь"}: поиск KIE/Google`;
-    case "research.search.completed": return `${role ?? "Исследователь"}: поиск завершён`;
-    case "research.source.fetch_started": return `${role ?? "Исследователь"}: безопасная загрузка источника`;
-    case "research.source.accepted": return `${role ?? "Исследователь"}: источник принят`;
-    case "research.source.rejected": return `${role ?? "Исследователь"}: источник отклонён`;
-    case "research.evidence.extracted": return `${role ?? "Исследователь"}: доказательство извлечено`;
-    case "research.evidence.persisted": return `${role ?? "Исследователь"}: доказательство сохранено`;
-    case "research.scout.persisted": return `${role ?? "Исследователь"}: отчёт сохранён`;
-    case "research.scout.completed": return `${role ?? "Исследователь"}: завершён`;
-    case "research.scouts_waiting": return "Research Director ждёт исследователей";
-    case "research.synthesis.started": return "Синтез исследования запущен";
+    case "research.scout.started": return `${role}: старт`;
+    case "research.search.started": return `${role}: поиск KIE/Google`;
+    case "research.search.completed": return `${role}: поиск завершён`;
+    case "research.source.fetch_started": return `${role}: безопасная загрузка источника`;
+    case "research.source.accepted": return `${role}: источник принят`;
+    case "research.source.rejected": return `${role}: источник отклонён`;
+    case "research.evidence.extracted": return `${role}: доказательство извлечено`;
+    case "research.evidence.persisted": return `${role}: доказательство сохранено`;
+    case "research.scout.persisted": return `${role}: отчёт сохранён`;
+    case "research.scout.completed": return `${role}: завершён`;
+    case "research.scouts_waiting": return "Координатор исследования ждёт исследователей";
+    case "research.synthesis.started": return "Итоговый анализ исследования запущен";
     case "research.synthesis.completed": return "Пакет доказательств готов";
     case "concept.curation.completed": return "Концепции готовы";
-    case "concept.council.completed": return "Совет концепций завершён";
+    case "concept.council.completed": return "Создание концепций завершено";
     case "job.cancelled": return "Исследование остановлено пользователем";
     default: return event.eventType.replaceAll("_", " ");
   }
@@ -122,9 +137,11 @@ function scoutState(events: TraceEvent[], role: string, fallback: string): strin
   }
   const normalized = fallback.toLowerCase();
   if (normalized === "queued") return "в очереди";
+  if (normalized === "waiting") return "ожидает";
   if (normalized === "running") return "работает";
   if (normalized === "completed") return "завершён";
   if (normalized === "failed") return "ошибка";
+  if (normalized === "cancelled") return "отменён";
   return fallback;
 }
 
@@ -300,7 +317,7 @@ export function ResearchLiveTrace({
         <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
           {scouts.map((scout) => (
             <div key={scout.role} className="rounded-lg border border-border bg-background/30 px-2.5 py-2">
-              <p className="truncate text-[11px] font-semibold text-foreground">{scout.role.replaceAll("_", " ")}</p>
+              <p className="truncate text-[11px] font-semibold text-foreground">{roleLabel(scout.role)}</p>
               <p className="mt-1 text-[11px] text-violet-300">{scout.state}</p>
             </div>
           ))}
@@ -322,7 +339,7 @@ export function ResearchLiveTrace({
               <div key={source.url} className="flex items-start justify-between gap-3 text-xs">
                 <div className="min-w-0">
                   <p className="truncate text-foreground">{source.title}</p>
-                  <p className="text-[11px] text-muted-foreground">{source.role?.replaceAll("_", " ") ?? "исследование"}</p>
+                  <p className="text-[11px] text-muted-foreground">{source.role ? roleLabel(source.role) : "исследование"}</p>
                 </div>
                 <a href={source.url} target="_blank" rel="noreferrer" className="shrink-0 text-violet-300 hover:text-violet-200">
                   <ExternalLink className="h-4 w-4" />
@@ -341,7 +358,7 @@ export function ResearchLiveTrace({
               <div key={item.key} className="rounded-lg border border-border bg-background/30 px-3 py-2 text-xs">
                 <p className="text-foreground">{item.claim}</p>
                 <p className="mt-1 text-[11px] text-muted-foreground">
-                  {[item.role?.replaceAll("_", " "), item.subject].filter(Boolean).join(" · ")}
+                  {[item.role ? roleLabel(item.role) : null, item.subject].filter(Boolean).join(" · ")}
                 </p>
               </div>
             ))}
