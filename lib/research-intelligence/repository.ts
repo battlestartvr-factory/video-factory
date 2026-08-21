@@ -57,6 +57,33 @@ function parseScoutStatuses(value: unknown): ResearchScoutSynthesisStatusV1[] {
 export class ResearchIntelligenceRepository implements ResearchSynthesisRepository {
   constructor(private readonly client: OrchestratorRpcClient) {}
 
+  async recordProgressEvent(input: {
+    rootFactoryJobId: string;
+    jobId?: string | null;
+    researchRunId?: string | null;
+    scoutRole?: ResearchScoutRoleV1 | null;
+    eventType: string;
+    dedupeKey: string;
+    payload?: Record<string, unknown>;
+  }): Promise<{ sequenceId: number | null }> {
+    const { data, error } = await this.client.rpc("research_record_progress_event", {
+      payload: {
+        root_factory_job_id: input.rootFactoryJobId,
+        job_id: input.jobId ?? null,
+        research_run_id: input.researchRunId ?? null,
+        scout_role: input.scoutRole ?? null,
+        event_type: input.eventType,
+        dedupe_key: input.dedupeKey,
+        payload: input.payload ?? {},
+      },
+    });
+    if (error) throw new Error(`Failed to record research progress: ${error.message}`);
+    const row = requireRpcObject(data, "research progress event");
+    return {
+      sequenceId: typeof row.sequence_id === "number" ? row.sequence_id : null,
+    };
+  }
+
   async persistScoutEvidenceBundle(input: {
     jobId: string;
     bundle: ResearchScoutEvidenceBundleV1;
