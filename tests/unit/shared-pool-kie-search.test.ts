@@ -17,12 +17,13 @@ describe("shared-pool KIE search", () => {
     });
     const generationConfig = body.generationConfig as Record<string, unknown>;
 
-    expect(generationConfig.maxOutputTokens).toBe(640);
+    expect(generationConfig.maxOutputTokens).toBe(768);
     expect(generationConfig.thinkingConfig).toEqual({
       includeThoughts: false,
       thinkingLevel: "low",
     });
     expect(JSON.stringify(body)).toContain("source acquisition, not analysis");
+    expect(JSON.stringify(body)).toContain("DIVERSITY IS REQUIRED");
     expect(JSON.stringify(body)).toContain("SOURCE|");
   });
 
