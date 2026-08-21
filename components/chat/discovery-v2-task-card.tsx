@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import type { TaskCardData } from "@/lib/types/workspace";
 import { ConceptReviewPanel, type ConceptReviewDecision } from "@/components/discovery/concept-review-panel";
 import { DiscoveryTaskCard } from "./discovery-task-card";
+import { ResearchLiveTrace } from "./research-live-trace";
 
 interface DiscoveryV2TaskCardProps {
   task: TaskCardData;
@@ -40,8 +41,6 @@ interface Readiness {
   paidProbePerformed?: boolean;
 }
 
-const POLL_MS = 5_000;
-const TERMINAL = new Set(["completed", "failed", "cancelled"]);
 const V2_FRONT_STAGES = new Set([
   "research_planning",
   "research_fanout",
@@ -134,6 +133,26 @@ export function DiscoveryV2TaskCard({ task, runId }: DiscoveryV2TaskCardProps) {
     }
   }, [runId]);
 
+  const refreshFromTrace = useCallback(async () => {
+    try {
+      const [batchResponse, researchResponse, reviewResponse] = await Promise.all([
+        fetch(`/api/discovery/batches/${runId}`, { cache: "no-store" }),
+        fetch(`/api/discovery/batches/${runId}/research`, { cache: "no-store" }),
+        fetch(`/api/discovery/batches/${runId}/concept-reviews`, { cache: "no-store" }),
+      ]);
+      const [batchPayload, researchPayload, reviewPayload] = await Promise.all([
+        batchResponse.json().catch(() => null),
+        researchResponse.json().catch(() => null),
+        reviewResponse.json().catch(() => null),
+      ]);
+      if (batchResponse.ok && batchPayload?.ok) setDetail(batchPayload.data as BatchDetail);
+      if (researchResponse.ok && researchPayload?.ok) setResearch(researchPayload.data as ResearchDetail);
+      if (reviewResponse.ok && reviewPayload?.ok) setReviews(array(reviewPayload.data?.reviews).map(object));
+    } catch {
+      // SSE keeps carrying progress; a later durable event or manual refresh can recover the snapshot.
+    }
+  }, [runId]);
+
   useEffect(() => {
     const timer = window.setTimeout(() => void load(), 0);
     return () => window.clearTimeout(timer);
@@ -143,12 +162,6 @@ export function DiscoveryV2TaskCard({ task, runId }: DiscoveryV2TaskCardProps) {
   const currentStage = str(detail?.factoryJob?.current_stage);
   const progress = Math.max(0, Math.min(100, num(detail?.factoryJob?.progress) ?? task.progress ?? 0));
   const frontStageActive = !currentStage || V2_FRONT_STAGES.has(currentStage);
-
-  useEffect(() => {
-    if (TERMINAL.has(jobStatus) || currentStage === "human_concept_approval_pending") return;
-    const timer = window.setInterval(() => void load(), POLL_MS);
-    return () => window.clearInterval(timer);
-  }, [currentStage, jobStatus, load]);
 
   const concepts = useMemo(() => {
     const rootOutputs = object(detail?.root?.outputs);
@@ -206,6 +219,7 @@ export function DiscoveryV2TaskCard({ task, runId }: DiscoveryV2TaskCardProps) {
   const designerDone = (research?.conceptDesigners ?? []).filter((item) => str(item.status) === "completed").length;
   const evidencePack = object(research?.evidencePack?.pack);
   const coverage = object(evidencePack.coverage);
+  const researchStartedAt = str(research?.researchRun?.started_at) ?? str(research?.researchRun?.created_at);
 
   return (
     <div className="overflow-hidden rounded-2xl border border-border bg-card/70 shadow-sm">
@@ -234,6 +248,13 @@ export function DiscoveryV2TaskCard({ task, runId }: DiscoveryV2TaskCardProps) {
         </div>
       </div>
 
+      <ResearchLiveTrace
+        runId={runId}
+        startedAt={researchStartedAt}
+        initialScouts={research?.scouts ?? []}
+        onMaterialUpdate={() => { void refreshFromTrace(); }}
+      />
+
       {readiness && !readiness.readyForManualV2Test && (
         <div className="flex gap-2 border-b border-amber-500/20 bg-amber-500/5 p-4 text-xs text-amber-200">
           <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
@@ -247,21 +268,6 @@ export function DiscoveryV2TaskCard({ task, runId }: DiscoveryV2TaskCardProps) {
         <div className="flex gap-2 border-b border-emerald-500/20 bg-emerald-500/5 p-3 text-xs text-emerald-200">
           <ShieldCheck className="h-4 w-4 shrink-0" />
           KIE-only research и Drive настроены для ручного production-теста. Автоматический paid probe отключён.
-        </div>
-      )}
-
-      {(research?.scouts.length ?? 0) > 0 && (
-        <div className="grid gap-2 border-b border-border p-4 sm:grid-cols-2 lg:grid-cols-5">
-          {research!.scouts.map((scout) => {
-            const role = str(scout.role) ?? "scout";
-            const status = str(scout.status) ?? "queued";
-            return (
-              <div key={role} className="rounded-lg border border-border bg-background/30 p-2.5">
-                <p className="truncate text-[11px] font-semibold text-foreground">{role.replaceAll("_", " ")}</p>
-                <p className={`mt-1 text-[11px] ${statusTone(status)}`}>{status}</p>
-              </div>
-            );
-          })}
         </div>
       )}
 
