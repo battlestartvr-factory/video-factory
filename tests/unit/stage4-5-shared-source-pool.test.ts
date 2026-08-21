@@ -8,7 +8,10 @@ import {
 } from "@/lib/research-intelligence/shared-source-pool-scout";
 import type { ResearchScoutJobContext } from "@/lib/research-intelligence/scout-runtime";
 import type { ResearchScoutRoleV1 } from "@/lib/research-intelligence/schemas";
-import { sharedResearchSourcePoolV1Schema } from "@/lib/research-intelligence/shared-source-pool";
+import {
+  sharedResearchSourcePoolV1Schema,
+  sourceCoverageCategories,
+} from "@/lib/research-intelligence/shared-source-pool";
 
 const roles: ResearchScoutRoleV1[] = [
   "market_competitor",
@@ -208,6 +211,65 @@ describe("shared verified research source pool", () => {
     expect(sanitizeSharedPoolEvidenceClaim("The physics mechanic requires teammates to coordinate movement and rescue each other after mistakes.")).toContain("physics mechanic");
   });
 
+  it("does not mistake an editorial or YouTube review for player-authored voice", () => {
+    expect(sourceCoverageCategories({
+      title: "Knockout City Review",
+      domain: "www.youtube.com",
+      url: "https://www.youtube.com/watch?v=Lp9YNM5_bzI",
+      text: "Gameplay review footage demonstrates camera readability and team interactions.",
+    })).toEqual(expect.arrayContaining(["gameplay_visual"]));
+    expect(sourceCoverageCategories({
+      title: "Knockout City Review",
+      domain: "www.youtube.com",
+      url: "https://www.youtube.com/watch?v=Lp9YNM5_bzI",
+      text: "Gameplay review footage demonstrates camera readability and team interactions.",
+    })).not.toContain("player_voice");
+
+    expect(sourceCoverageCategories({
+      title: "Gang Beasts review | PC Gamer",
+      domain: "www.pcgamer.com",
+      url: "https://www.pcgamer.com/gang-beasts-review/",
+      text: "An editorial review discusses physics and controls.",
+    })).toContain("contrarian");
+    expect(sourceCoverageCategories({
+      title: "Gang Beasts review | PC Gamer",
+      domain: "www.pcgamer.com",
+      url: "https://www.pcgamer.com/gang-beasts-review/",
+      text: "An editorial review discusses physics and controls.",
+    })).not.toContain("player_voice");
+
+    expect(sourceCoverageCategories({
+      title: "Party Animals General Discussions :: Steam Community",
+      domain: "steamcommunity.com",
+      url: "https://steamcommunity.com/app/1260320/discussions/0/",
+      text: "Players discuss physics, controls, fun and frustration.",
+    })).toContain("player_voice");
+  });
+
+  it("replays the latest production verified pool and proves player voice is still missing", () => {
+    const verifiedCoverage = new Set([
+      ...sourceCoverageCategories({
+        title: "Party Animals on Steam",
+        domain: "store.steampowered.com",
+        url: "https://store.steampowered.com/app/1260320/Party_Animals/",
+        text: "Physics-based multiplayer game with co-op interactions and abilities.",
+      }),
+      ...sourceCoverageCategories({
+        title: "www.youtube.com",
+        domain: "www.youtube.com",
+        url: "https://www.youtube.com/watch?v=Lp9YNM5_bzI",
+        text: "Knockout City gameplay review footage demonstrates movement, controls, camera readability and team interactions.",
+      }),
+    ]);
+
+    expect([...verifiedCoverage]).toEqual(expect.arrayContaining([
+      "competitor",
+      "mechanics",
+      "gameplay_visual",
+    ]));
+    expect(verifiedCoverage.has("player_voice")).toBe(false);
+  });
+
   it("lets all five Scouts analyze one pool without another search call", async () => {
     for (const role of roles) {
       const progress = vi.fn();
@@ -242,17 +304,17 @@ describe("shared verified research source pool", () => {
     }
   });
 
-  it("keeps the global shared-source acquisition cap at two paid search calls", () => {
+  it("recovers against verified post-fetch coverage with a bounded quality-first search cap", () => {
     const source = readFileSync(
       join(process.cwd(), "lib/research-intelligence/shared-source-pool.ts"),
       "utf8",
     );
-    expect(source).toContain("const MAX_KIE_PROVIDER_CALLS = 2");
-    expect(source).toContain("primaryProvider.searchText");
-    expect(source).toContain("recoveryProvider.searchText");
-    expect(source).toContain("primaryCalls === 1");
-    expect(source).toContain("allowProvenanceRecovery: false");
-    expect(source).toContain("const totalProviderCalls = primaryCalls + recoveryCalls");
-    expect(source).toContain("totalProviderCalls > MAX_KIE_PROVIDER_CALLS");
+    expect(source).toContain("const MAX_KIE_PROVIDER_CALLS = 6");
+    expect(source).toContain("const MIN_VERIFIED_SOURCES = 4");
+    expect(source).toContain("verifiedCoverageOfSources(sources)");
+    expect(source).toContain("while (totalProviderCalls < MAX_KIE_PROVIDER_CALLS)");
+    expect(source).toContain("createSharedPoolKieSearchProvider(input.signal, { allowProvenanceRecovery })");
+    expect(source).toContain("PLAYER-AUTHORED evidence only");
+    expect(source).toContain("provider_call_cap: MAX_KIE_PROVIDER_CALLS");
   });
 });
