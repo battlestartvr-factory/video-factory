@@ -52,6 +52,12 @@ const REQUIRED_COVERAGE: SourceCoverageCategory[] = [
   "player_voice",
   "gameplay_visual",
 ];
+const CORE_RECOVERY_ORDER: SourceCoverageCategory[] = [
+  "player_voice",
+  "gameplay_visual",
+  "mechanics",
+  "competitor",
+];
 
 function object(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -125,8 +131,8 @@ function coverageRecoveryQuery(
   const instructions: Record<SourceCoverageCategory, string> = {
     competitor: "direct competitor/store/developer pages for mechanically relevant PC/Steam games",
     mechanics: "developer explanation, manual/guide/interview, or detailed gameplay systems covering physics, controls, movement, dependency, abilities, or failure/recovery",
-    player_voice: "PLAYER-AUTHORED evidence only: Steam Community discussions/reviews, Reddit discussion threads, GameFAQs/community forums, or equivalent player posts. Do NOT use YouTube reviews, press/editorial reviews, store descriptions, or aggregate ratings as player voice",
-    gameplay_visual: "real gameplay footage, gameplay video, screenshots, camera/readability examples, or detailed gameplay descriptions; not key art or trailers without readable play",
+    player_voice: "PLAYER-AUTHORED evidence only from Safe-Fetchable pages: prefer direct Steam Community discussions/reviews, then other public forums readable without login or anti-bot challenges. Do NOT return Reddit because production Safe Fetch receives HTTP 403 there. Do NOT use YouTube reviews, press/editorial reviews, store descriptions, or aggregate ratings as player voice",
+    gameplay_visual: "real gameplay footage, direct YouTube watch pages, Steam Community gameplay videos/screenshots, camera/readability examples, or detailed gameplay descriptions; not key art or trailers without readable play",
     contrarian: "critical review, comparison, counterexample, saturation, or novelty-challenging evidence from a credible independent source",
   };
   return [
@@ -246,15 +252,19 @@ function verifiedCoverageOfSources(sources: SharedResearchSourcePoolItemV1[]): S
   return coverage;
 }
 
-function nextRecoveryTargets(
+export function selectSharedPoolRecoveryTargets(
   missing: SourceCoverageCategory[],
   sourceCount: number,
   minSources: number,
+  attemptsByCategory: Partial<Record<SourceCoverageCategory, number>> = {},
 ): SourceCoverageCategory[] {
-  // Player voice is the most fragile family because editorial/video reviews must not
-  // masquerade as player-authored evidence. Recover it independently first.
-  for (const category of ["player_voice", "gameplay_visual", "mechanics", "competitor"] as SourceCoverageCategory[]) {
-    if (missing.includes(category)) return [category];
+  const missingCore = CORE_RECOVERY_ORDER.filter((category) => missing.includes(category));
+  if (missingCore.length > 0) {
+    // Do not let one fragile family monopolize the global provider-call budget.
+    // Choose the missing category with the fewest attempts; stable order breaks ties.
+    const fewestAttempts = Math.min(...missingCore.map((category) => attemptsByCategory[category] ?? 0));
+    const target = missingCore.find((category) => (attemptsByCategory[category] ?? 0) === fewestAttempts);
+    return target ? [target] : [];
   }
   if (sourceCount < minSources) return ["contrarian"];
   return [];
@@ -330,6 +340,7 @@ export async function acquireSharedResearchSourcePool(input: {
   const canonicalSeen = new Set<string>();
   const contentSeen = new Set<string>();
   const sources: SharedResearchSourcePoolItemV1[] = [];
+  const recoveryAttemptsByCategory: Partial<Record<SourceCoverageCategory, number>> = {};
   let candidateOrdinal = 0;
 
   const appendFetchedResults = async (results: SearchResult[], attemptLabel: string): Promise<number> => {
@@ -538,16 +549,25 @@ export async function acquireSharedResearchSourcePool(input: {
   while (totalProviderCalls < MAX_KIE_PROVIDER_CALLS) {
     const verifiedCoverage = verifiedCoverageOfSources(sources);
     const missing = missingCoverage(verifiedCoverage);
-    const targets = nextRecoveryTargets(missing, sources.length, minVerifiedSources);
+    const targets = selectSharedPoolRecoveryTargets(
+      missing,
+      sources.length,
+      minVerifiedSources,
+      recoveryAttemptsByCategory,
+    );
     if (targets.length === 0) break;
 
     recoveryAttempts += 1;
+    for (const target of targets) {
+      recoveryAttemptsByCategory[target] = (recoveryAttemptsByCategory[target] ?? 0) + 1;
+    }
     const recoveryKey = `source_pool_verified_recovery_${recoveryAttempts}`;
     await input.reportProgress?.({
       eventType: "research.source_pool.coverage_recovery_started",
       key: `${recoveryKey}_started`,
       payload: {
         recovery_attempt: recoveryAttempts,
+        recovery_attempts_by_category: { ...recoveryAttemptsByCategory },
         missing_categories: missing,
         target_categories: targets,
         verified_coverage_before: [...verifiedCoverage],
@@ -575,6 +595,7 @@ export async function acquireSharedResearchSourcePool(input: {
         key: `${recoveryKey}_completed`,
         payload: {
           recovery_attempt: recoveryAttempts,
+          recovery_attempts_by_category: { ...recoveryAttemptsByCategory },
           result_count: recoveryResults.length,
           verified_sources_after: sources.length,
           verified_coverage_after: [...afterCoverage],
@@ -588,6 +609,7 @@ export async function acquireSharedResearchSourcePool(input: {
         key: `${recoveryKey}_failed`,
         payload: {
           recovery_attempt: recoveryAttempts,
+          recovery_attempts_by_category: { ...recoveryAttemptsByCategory },
           target_categories: targets,
           total_provider_calls: totalProviderCalls,
           error: (error instanceof Error ? error.message : String(error)).slice(0, 500),
@@ -609,6 +631,7 @@ export async function acquireSharedResearchSourcePool(input: {
       provider_call_cap: MAX_KIE_PROVIDER_CALLS,
       coverage_recovery_used: recoveryAttempts > 0,
       recovery_attempts: recoveryAttempts,
+      recovery_attempts_by_category: { ...recoveryAttemptsByCategory },
       verified_coverage: [...verifiedCoverage],
       verified_source_count: sources.length,
       search_ms: searchMs,
@@ -630,6 +653,7 @@ export async function acquireSharedResearchSourcePool(input: {
       ...mergedUsage,
       provider_calls: totalProviderCalls,
       recovery_attempts: recoveryAttempts,
+      recovery_attempts_by_category: { ...recoveryAttemptsByCategory },
       safely_fetched_sources: 0,
       missing_coverage: stillMissing,
     };
@@ -652,6 +676,7 @@ export async function acquireSharedResearchSourcePool(input: {
       provider_call_cap: MAX_KIE_PROVIDER_CALLS,
       coverage_recovery_used: recoveryAttempts > 0,
       recovery_attempts: recoveryAttempts,
+      recovery_attempts_by_category: { ...recoveryAttemptsByCategory },
       verified_coverage: [...verifiedCoverage],
       missing_coverage: stillMissing,
       safely_fetched_sources: sources.length,
@@ -671,6 +696,7 @@ export async function acquireSharedResearchSourcePool(input: {
     safely_fetched_sources: sources.length,
     coverage_recovery_used: recoveryAttempts > 0,
     recovery_attempts: recoveryAttempts,
+    recovery_attempts_by_category: { ...recoveryAttemptsByCategory },
     verified_coverage: [...verifiedCoverage],
     min_verified_sources: minVerifiedSources,
   };
@@ -686,6 +712,7 @@ export async function acquireSharedResearchSourcePool(input: {
       safe_fetch_ms: safeFetchMs,
       coverage_recovery_used: recoveryAttempts > 0,
       recovery_attempts: recoveryAttempts,
+      recovery_attempts_by_category: { ...recoveryAttemptsByCategory },
       verified_coverage: [...verifiedCoverage],
     },
   });
