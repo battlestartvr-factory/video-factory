@@ -23,6 +23,31 @@ import {
 } from "./schemas";
 import { createResearchToolbox, type ResearchToolbox } from "./toolbox";
 
+export const RESEARCH_SAFE_FETCH_CONCURRENCY = 3;
+
+function elapsedMs(startedAt: number): number {
+  return Math.max(0, Date.now() - startedAt);
+}
+
+export function adaptiveResearchFetchTopK(input: {
+  resultCount: number;
+  maxFetchedSources: number;
+  maxEvidenceItems: number;
+}): number {
+  const resultCount = Math.max(0, Math.trunc(input.resultCount));
+  const maxFetchedSources = Math.max(0, Math.trunc(input.maxFetchedSources));
+  if (resultCount === 0 || maxFetchedSources === 0) return 0;
+
+  // Most grounded KIE source rows carry one or more usable claims. Fetch enough
+  // pages to establish source diversity without blindly paying the latency cost
+  // of every search result. The hard assignment budget remains the upper bound.
+  const evidenceDrivenTarget = Math.max(
+    2,
+    Math.ceil(Math.min(Math.max(1, input.maxEvidenceItems), 8) / 2),
+  );
+  return Math.min(resultCount, maxFetchedSources, evidenceDrivenTarget);
+}
+
 function metadataArray(value: unknown): string[] {
   return Array.isArray(value)
     ? value.filter((item): item is string => typeof item === "string" && item.trim().length > 0)
@@ -87,6 +112,15 @@ function providerUsage(results: SearchResult[]): Record<string, unknown> {
     : {};
 }
 
+type FetchSourceResult = Awaited<ReturnType<ResearchToolbox["fetchSource"]>>;
+
+interface SafeFetchOutcome {
+  resultIndex: number;
+  result: SearchResult;
+  fetched?: FetchSourceResult;
+  error?: unknown;
+}
+
 export class KieGroundedResearchScoutExecutor implements ResearchScoutExecutor {
   constructor(
     private readonly toolbox: ResearchToolbox,
@@ -108,6 +142,7 @@ export class KieGroundedResearchScoutExecutor implements ResearchScoutExecutor {
     context: ResearchScoutJobContext;
     signal: AbortSignal;
   }): Promise<ResearchScoutExecutionResult> {
+    const totalStartedAt = Date.now();
     const { context } = input;
     const budget = context.assignment.budget;
     const generatedAt = this.now().toISOString();
@@ -158,14 +193,24 @@ export class KieGroundedResearchScoutExecutor implements ResearchScoutExecutor {
     });
     if (input.signal.aborted) throw input.signal.reason ?? new Error("Research Scout aborted");
 
+    const searchStartedAt = Date.now();
     const search = await this.toolbox.searchText({
       query,
       maxResults: budget.maxFetchedSources,
       freshness: context.assignment.freshness,
     });
+    const searchMs = elapsedMs(searchStartedAt);
     const searchResults = search.value.slice(0, budget.maxFetchedSources);
+    const fetchTarget = adaptiveResearchFetchTopK({
+      resultCount: searchResults.length,
+      maxFetchedSources: budget.maxFetchedSources,
+      maxEvidenceItems: budget.maxEvidenceItems,
+    });
+    const selectedSearchResults = searchResults.slice(0, fetchTarget);
     await this.progress("research.search.completed", "search_completed", {
       result_count: searchResults.length,
+      safe_fetch_target: fetchTarget,
+      search_ms: searchMs,
       reused_from_cache: search.reusedFromCache,
       results: searchResults.slice(0, 8).map((result) => ({
         title: result.title.slice(0, 300),
@@ -182,73 +227,101 @@ export class KieGroundedResearchScoutExecutor implements ResearchScoutExecutor {
       });
     }
 
-    const sources: ResearchSourceCandidateV1[] = [];
-    const resultBySourceRef = new Map<string, SearchResult>();
-    const warnings: string[] = [];
+    const outcomes: Array<SafeFetchOutcome | undefined> = new Array(selectedSearchResults.length);
+    const warningsByIndex: Array<string | undefined> = new Array(selectedSearchResults.length);
     let discoveredPageImageCandidates = 0;
+    let nextFetchIndex = 0;
+    const safeFetchStartedAt = Date.now();
+    const workerCount = Math.min(RESEARCH_SAFE_FETCH_CONCURRENCY, selectedSearchResults.length);
 
-    for (const [resultIndex, result] of searchResults.entries()) {
-      if (input.signal.aborted) throw input.signal.reason ?? new Error("Research Scout aborted");
-      if (sources.length >= budget.maxFetchedSources) break;
-      const sourceUrl = result.canonicalUrl ?? result.url;
-      await this.progress("research.source.fetch_started", `source_${resultIndex}_fetch_started`, {
-        source_index: resultIndex,
-        title: result.title.slice(0, 300),
-        url: sourceUrl.slice(0, 2_000),
-      });
-      try {
-        const fetched = await this.toolbox.fetchSource({
-          url: sourceUrl,
-          query: context.assignment.mandate,
-          freshness: context.assignment.freshness,
-          excerptMaxChars: 8_000,
-        });
-        const document = fetched.document;
-        const canonicalUrl = document.canonicalUrl ?? document.url;
-        const sourceRef = `source-${sources.length + 1}`;
-        discoveredPageImageCandidates += document.imageCandidates?.length ?? 0;
-        sources.push({
-          sourceRef,
-          canonicalUrl,
-          urlSha256: document.urlSha256 ?? urlSha256(canonicalUrl),
-          sourceType: "web_page",
-          title: document.title || result.title,
-          ...(document.publishedAt ? { publishedAt: document.publishedAt } : {}),
-          observedAt: document.observedAt ?? generatedAt,
-          ...(document.fetchedAt ? { fetchedAt: document.fetchedAt } : {}),
-          ...(document.contentSha256 ? { contentSha256: document.contentSha256 } : {}),
-          extractedText: document.text.slice(0, 30_000),
-          relevanceScore: Math.max(0.55, 0.95 - sources.length * 0.05),
-          reusedFromCache: fetched.reusedFromCache,
-          metadata: {
-            domain: document.domain,
-            kie_grounded: true,
-            provider_metadata: result.providerMetadata ?? {},
-            page_image_candidate_count: document.imageCandidates?.length ?? 0,
-          },
-        });
-        resultBySourceRef.set(sourceRef, result);
-        await this.progress("research.source.accepted", `source_${resultIndex}_accepted`, {
-          source_index: resultIndex,
-          source_ref: sourceRef,
-          title: (document.title || result.title).slice(0, 300),
-          url: canonicalUrl.slice(0, 2_000),
-          domain: document.domain,
-          reused_from_cache: fetched.reusedFromCache,
-          image_candidate_count: document.imageCandidates?.length ?? 0,
-        });
-      } catch (error) {
-        if (input.signal.aborted) throw input.signal.reason ?? error;
-        const message = (error instanceof Error ? error.message : String(error)).slice(0, 500);
-        await this.progress("research.source.rejected", `source_${resultIndex}_rejected`, {
+    const safeFetchWorker = async (): Promise<void> => {
+      while (true) {
+        if (input.signal.aborted) throw input.signal.reason ?? new Error("Research Scout aborted");
+        const resultIndex = nextFetchIndex;
+        nextFetchIndex += 1;
+        if (resultIndex >= selectedSearchResults.length) return;
+
+        const result = selectedSearchResults[resultIndex]!;
+        const sourceUrl = result.canonicalUrl ?? result.url;
+        await this.progress("research.source.fetch_started", `source_${resultIndex}_fetch_started`, {
           source_index: resultIndex,
           title: result.title.slice(0, 300),
           url: sourceUrl.slice(0, 2_000),
-          error: message,
         });
-        warnings.push(`Source fetch skipped: ${message}`.slice(0, 240));
+        // Stop may be observed while durable progress IO is in flight. Re-check
+        // immediately before starting the next Safe Fetch network boundary.
+        if (input.signal.aborted) throw input.signal.reason ?? new Error("Research Scout aborted");
+
+        try {
+          const fetched = await this.toolbox.fetchSource({
+            url: sourceUrl,
+            query: context.assignment.mandate,
+            freshness: context.assignment.freshness,
+            excerptMaxChars: 8_000,
+          });
+          outcomes[resultIndex] = { resultIndex, result, fetched };
+          const document = fetched.document;
+          const canonicalUrl = document.canonicalUrl ?? document.url;
+          const sourceRef = `source-${resultIndex + 1}`;
+          discoveredPageImageCandidates += document.imageCandidates?.length ?? 0;
+          await this.progress("research.source.accepted", `source_${resultIndex}_accepted`, {
+            source_index: resultIndex,
+            source_ref: sourceRef,
+            title: (document.title || result.title).slice(0, 300),
+            url: canonicalUrl.slice(0, 2_000),
+            domain: document.domain,
+            reused_from_cache: fetched.reusedFromCache,
+            image_candidate_count: document.imageCandidates?.length ?? 0,
+          });
+        } catch (error) {
+          if (input.signal.aborted) throw input.signal.reason ?? error;
+          outcomes[resultIndex] = { resultIndex, result, error };
+          const message = (error instanceof Error ? error.message : String(error)).slice(0, 500);
+          warningsByIndex[resultIndex] = `Source fetch skipped: ${message}`.slice(0, 240);
+          await this.progress("research.source.rejected", `source_${resultIndex}_rejected`, {
+            source_index: resultIndex,
+            title: result.title.slice(0, 300),
+            url: sourceUrl.slice(0, 2_000),
+            error: message,
+          });
+        }
       }
+    };
+
+    await Promise.all(Array.from({ length: workerCount }, () => safeFetchWorker()));
+    const safeFetchMs = elapsedMs(safeFetchStartedAt);
+
+    const sources: ResearchSourceCandidateV1[] = [];
+    const resultBySourceRef = new Map<string, SearchResult>();
+    for (const outcome of outcomes) {
+      if (!outcome?.fetched) continue;
+      const { resultIndex, result, fetched } = outcome;
+      const document = fetched.document;
+      const canonicalUrl = document.canonicalUrl ?? document.url;
+      const sourceRef = `source-${resultIndex + 1}`;
+      sources.push({
+        sourceRef,
+        canonicalUrl,
+        urlSha256: document.urlSha256 ?? urlSha256(canonicalUrl),
+        sourceType: "web_page",
+        title: document.title || result.title,
+        ...(document.publishedAt ? { publishedAt: document.publishedAt } : {}),
+        observedAt: document.observedAt ?? generatedAt,
+        ...(document.fetchedAt ? { fetchedAt: document.fetchedAt } : {}),
+        ...(document.contentSha256 ? { contentSha256: document.contentSha256 } : {}),
+        extractedText: document.text.slice(0, 30_000),
+        relevanceScore: Math.max(0.55, 0.95 - resultIndex * 0.05),
+        reusedFromCache: fetched.reusedFromCache,
+        metadata: {
+          domain: document.domain,
+          kie_grounded: true,
+          provider_metadata: result.providerMetadata ?? {},
+          page_image_candidate_count: document.imageCandidates?.length ?? 0,
+        },
+      });
+      resultBySourceRef.set(sourceRef, result);
     }
+    const warnings = warningsByIndex.filter((warning): warning is string => Boolean(warning));
 
     if (sources.length === 0) {
       throw new DurableWorkflowError({
@@ -259,6 +332,7 @@ export class KieGroundedResearchScoutExecutor implements ResearchScoutExecutor {
       });
     }
 
+    const evidenceStartedAt = Date.now();
     const evidence: ResearchEvidenceDraftV1[] = [];
     const seenClaims = new Set<string>();
     for (const source of sources) {
@@ -287,6 +361,7 @@ export class KieGroundedResearchScoutExecutor implements ResearchScoutExecutor {
       }
       if (evidence.length >= budget.maxEvidenceItems) break;
     }
+    const evidenceMs = elapsedMs(evidenceStartedAt);
 
     if (evidence.length === 0) {
       throw new DurableWorkflowError({
@@ -299,6 +374,7 @@ export class KieGroundedResearchScoutExecutor implements ResearchScoutExecutor {
 
     await this.progress("research.evidence.extracted", "evidence_extracted", {
       evidence_count: evidence.length,
+      evidence_ms: evidenceMs,
       items: evidence.slice(0, 12).map((item) => ({
         evidence_ref: item.evidenceRef,
         evidence_type: item.evidenceType,
@@ -324,8 +400,15 @@ export class KieGroundedResearchScoutExecutor implements ResearchScoutExecutor {
       source_count: sources.length,
       evidence_count: evidence.length,
       image_candidate_count: discoveredPageImageCandidates,
+      safe_fetch_target: fetchTarget,
+      safe_fetch_concurrency: workerCount,
+      search_ms: searchMs,
+      safe_fetch_ms: safeFetchMs,
+      evidence_ms: evidenceMs,
+      total_ms: elapsedMs(totalStartedAt),
       model,
     });
+    const totalMs = elapsedMs(totalStartedAt);
 
     return {
       report: researchScoutReportSpecV1Schema.parse({
@@ -339,7 +422,7 @@ export class KieGroundedResearchScoutExecutor implements ResearchScoutExecutor {
         imageCandidateIds: [],
         queriesExecuted: 1,
         coverageNotes: [
-          `${sources.length} safely fetched Google-grounded source pages.`,
+          `${sources.length} safely fetched Google-grounded source pages (${fetchTarget} adaptive Top-K target).`,
           `${evidence.length} grounded evidence claims extracted.`,
           context.assignment.imageSearchRequired
             ? `${discoveredPageImageCandidates} page image candidates discovered without a second paid search provider.`
@@ -353,8 +436,14 @@ export class KieGroundedResearchScoutExecutor implements ResearchScoutExecutor {
         ...providerUsage(searchResults),
         search_provider: "kie_gemini_google_search",
         search_calls: 1,
+        safe_fetch_target: fetchTarget,
+        safe_fetch_concurrency: workerCount,
         safely_fetched_sources: sources.length,
         page_image_candidates: discoveredPageImageCandidates,
+        search_ms: searchMs,
+        safe_fetch_ms: safeFetchMs,
+        evidence_ms: evidenceMs,
+        total_ms: totalMs,
       },
       model,
       provider: "kie",
