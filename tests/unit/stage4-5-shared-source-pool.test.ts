@@ -252,6 +252,7 @@ describe("shared verified research source pool", () => {
     expect(source).toContain("recoveryProvider.searchText");
     expect(source).toContain("primaryCalls === 1");
     expect(source).toContain("allowProvenanceRecovery: false");
-    expect(source).toContain("primaryCalls + recoveryCalls > MAX_KIE_PROVIDER_CALLS");
+    expect(source).toContain("const totalProviderCalls = primaryCalls + recoveryCalls");
+    expect(source).toContain("totalProviderCalls > MAX_KIE_PROVIDER_CALLS");
   });
 });
