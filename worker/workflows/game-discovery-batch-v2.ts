@@ -14,6 +14,8 @@ import type { WorkflowTickContext, WorkflowTickHandler, WorkflowTickOutcome } fr
 
 const FAN_IN_POLL_MS = 5_000;
 
+type ResearchSynthesisRunResult = Awaited<ReturnType<ResearchSynthesisService["run"]>>;
+
 function nextAt(delayMs = FAN_IN_POLL_MS): string {
   return new Date(Date.now() + delayMs).toISOString();
 }
@@ -22,6 +24,28 @@ function record(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : {};
+}
+
+function boundedResearchFailureDiagnostic(error: unknown): Record<string, unknown> {
+  const row = record(error);
+  const rawMessage =
+    error instanceof Error
+      ? error.message
+      : typeof row.message === "string"
+        ? row.message
+        : typeof error === "string"
+          ? error
+          : "";
+  const normalizedMessage = rawMessage.replace(/\s+/g, " ").trim();
+  const errorName = error instanceof Error ? error.name : null;
+  const errorCode = typeof row.code === "string" && row.code.trim() ? row.code.trim() : null;
+
+  return {
+    ...(errorName ? { technical_error_name: errorName.slice(0, 120) } : {}),
+    ...(errorCode ? { technical_error_code: errorCode.slice(0, 160) } : {}),
+    ...(normalizedMessage ? { technical_error_message: normalizedMessage.slice(0, 600) } : {}),
+    technical_error_truncated: normalizedMessage.length > 600,
+  };
 }
 
 function creativeRunId(context: WorkflowTickContext): string {
@@ -63,7 +87,7 @@ function researchRunId(context: WorkflowTickContext): string {
 
 function baselineFallback(input: {
   context: WorkflowTickContext;
-  reason: "disabled" | "low" | "scout_failure";
+  reason: "disabled" | "low" | "scout_failure" | "synthesis_failure";
   details?: Record<string, unknown>;
 }): WorkflowTickOutcome {
   return {
@@ -340,11 +364,42 @@ export const gameDiscoveryBatchV2: WorkflowTickHandler = async (context) => {
     );
     const earlyFinalizeRequested = record(context.state.research_early_finalize).requested === true;
     const finalization = earlyFinalizeRequested ? "early_finalized" as const : "full" as const;
-    const result = await synthesis.run({
-      researchRunId: runId,
-      signal: context.signal,
-      finalization,
-    });
+    let result: ResearchSynthesisRunResult;
+    try {
+      result = await synthesis.run({
+        researchRunId: runId,
+        signal: context.signal,
+        finalization,
+      });
+    } catch (error) {
+      if (context.signal.aborted) throw error;
+      const details = {
+        research_run_id: runId,
+        phase: "research_synthesis",
+        finalization,
+        completed_scout_count:
+          typeof context.state.research_scout_completed_count === "number"
+            ? context.state.research_scout_completed_count
+            : null,
+        ...boundedResearchFailureDiagnostic(error),
+      };
+      await services.gameDiscoveryV2.markResearchFailure({
+        researchRunId: runId,
+        code: "RESEARCH_SYNTHESIS_FAILED",
+        message: "Research synthesis failed before a valid Evidence Pack could be persisted",
+        coverage: details,
+        bestEffortFallback: policy.mode === "best_effort",
+      });
+      if (policy.mode === "best_effort") {
+        return baselineFallback({ context, reason: "synthesis_failure", details });
+      }
+      return terminalResearchFailure({
+        context,
+        code: "RESEARCH_SYNTHESIS_FAILED",
+        message: "Required research could not produce a valid Evidence Pack",
+        details,
+      });
+    }
     const coverage = researchCoverageSummary(result.pack);
     if (!coverage.useful) {
       const details = {
