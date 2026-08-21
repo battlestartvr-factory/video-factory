@@ -1,4 +1,5 @@
 import { getKieModelById, resolveModelId } from "./registry";
+import { resolveReasoning } from "./reasoning";
 
 export interface KieClaudeUsage {
   inputTokens: number | null;
@@ -79,6 +80,28 @@ function extractOpenAiText(payload: Record<string, unknown>): string {
     .trim();
 }
 
+function extractResponsesText(payload: Record<string, unknown>): string {
+  if (typeof payload.output_text === "string" && payload.output_text.trim()) {
+    return payload.output_text.trim();
+  }
+  const output = Array.isArray(payload.output) ? payload.output : [];
+  const chunks: string[] = [];
+  for (const rawItem of output) {
+    const item = asObject(rawItem);
+    if (item.type === "message" && Array.isArray(item.content)) {
+      for (const rawPart of item.content) {
+        const part = asObject(rawPart);
+        if ((part.type === "output_text" || part.type === "text") && typeof part.text === "string") {
+          chunks.push(part.text);
+        }
+      }
+    } else if ((item.type === "output_text" || item.type === "text") && typeof item.text === "string") {
+      chunks.push(item.text);
+    }
+  }
+  return chunks.join("").trim();
+}
+
 function safeProviderErrorDetail(payload: Record<string, unknown>): string | null {
   const error = asObject(payload.error);
   const candidates = [error.message, payload.message, payload.detail, error.type];
@@ -131,7 +154,13 @@ export class KieClaudeTaskAdapter {
     }
 
     const isOpenAiChat = model.adapter === "openai_chat";
-    if (!isOpenAiChat && model.adapter !== "claude_messages" && model.adapter !== "claude_sonnet") {
+    const isResponses = model.adapter === "responses";
+    if (
+      !isOpenAiChat &&
+      !isResponses &&
+      model.adapter !== "claude_messages" &&
+      model.adapter !== "claude_sonnet"
+    ) {
       throw new KieClaudeTaskError(
         `KIE LLM adapter ${model.adapter} is not supported by durable discovery`,
         false,
@@ -139,24 +168,34 @@ export class KieClaudeTaskAdapter {
     }
 
     const endpoint = joinUrl(this.baseUrl, model.endpoint);
-    const body = isOpenAiChat
+    const body = isResponses
       ? {
           model: model.providerModel,
-          stream: false,
-          messages: [
-            { role: "system", content: input.system },
-            { role: "user", content: input.prompt },
+          input: [
+            { role: "system", content: [{ type: "input_text", text: input.system }] },
+            { role: "user", content: [{ type: "input_text", text: input.prompt }] },
           ],
-          temperature: 0.4,
+          max_output_tokens: input.maxTokens ?? 8192,
+          ...resolveReasoning(model, input.thinking ? "high" : "medium").providerParam,
         }
-      : {
-          model: model.providerModel,
-          max_tokens: input.maxTokens ?? 8192,
-          stream: false,
-          system: input.system,
-          messages: [{ role: "user", content: input.prompt }],
-          ...(input.thinking ? { thinkingFlag: true } : {}),
-        };
+      : isOpenAiChat
+        ? {
+            model: model.providerModel,
+            stream: false,
+            messages: [
+              { role: "system", content: input.system },
+              { role: "user", content: input.prompt },
+            ],
+            temperature: 0.4,
+          }
+        : {
+            model: model.providerModel,
+            max_tokens: input.maxTokens ?? 8192,
+            stream: false,
+            system: input.system,
+            messages: [{ role: "user", content: input.prompt }],
+            ...(input.thinking ? { thinkingFlag: true } : {}),
+          };
 
     let response: Response;
     try {
@@ -165,7 +204,7 @@ export class KieClaudeTaskAdapter {
         headers: {
           Authorization: `Bearer ${this.apiKey}`,
           "Content-Type": "application/json",
-          ...(isOpenAiChat ? {} : { "anthropic-version": "2023-06-01" }),
+          ...(!isOpenAiChat && !isResponses ? { "anthropic-version": "2023-06-01" } : {}),
         },
         body: JSON.stringify(body),
         signal: input.signal,
@@ -188,7 +227,11 @@ export class KieClaudeTaskAdapter {
       );
     }
 
-    const text = isOpenAiChat ? extractOpenAiText(payload) : extractClaudeText(payload);
+    const text = isResponses
+      ? extractResponsesText(payload)
+      : isOpenAiChat
+        ? extractOpenAiText(payload)
+        : extractClaudeText(payload);
     if (!text) {
       throw new KieClaudeTaskError(
         `KIE LLM ${model.id} returned no text content`,
@@ -197,11 +240,29 @@ export class KieClaudeTaskAdapter {
       );
     }
 
+    if (isResponses) {
+      const usage = asObject(payload.usage);
+      const inputTokens = typeof usage.input_tokens === "number" ? usage.input_tokens : null;
+      const outputTokens = typeof usage.output_tokens === "number" ? usage.output_tokens : null;
+      const totalTokens = typeof usage.total_tokens === "number" ? usage.total_tokens : null;
+      return {
+        text,
+        usage: {
+          inputTokens,
+          outputTokens,
+          totalTokens:
+            totalTokens ??
+            (inputTokens !== null && outputTokens !== null ? inputTokens + outputTokens : null),
+        },
+        stopReason: typeof payload.status === "string" ? payload.status : null,
+        responsePayload: payload,
+      };
+    }
+
     if (isOpenAiChat) {
       const usage = asObject(payload.usage);
       const inputTokens = typeof usage.prompt_tokens === "number" ? usage.prompt_tokens : null;
-      const outputTokens =
-        typeof usage.completion_tokens === "number" ? usage.completion_tokens : null;
+      const outputTokens = typeof usage.completion_tokens === "number" ? usage.completion_tokens : null;
       const totalTokens = typeof usage.total_tokens === "number" ? usage.total_tokens : null;
       const choices = Array.isArray(payload.choices) ? payload.choices : [];
       const first = asObject(choices[0]);
