@@ -177,13 +177,13 @@ export function ConceptReviewPanel({
           <RotateCcw className="h-4 w-4" /> Исправить идею
         </Button>
         <Button size="sm" variant="danger" onClick={() => onDecision("reject")} disabled={disabled || !gateActive}>
-          <X className="h-4 w-4" /> Отклонить и заменить
+          <X className="h-4 w-4" /> Отклонить идею
         </Button>
       </div>
 
       {decision === "reject" && (
         <p className="text-xs leading-5 text-muted-foreground">
-          При отклонении эта идея удаляется из активного набора. Завод обязан создать механически новую игру, а не перекрасить старую; отклонённая версия остаётся только как отрицательная память.
+          Отклонённая идея просто удаляется из активного набора — завод не придумывает ей замену. Новый цикл идей запускается только если отклонены все активные концепции и не осталось ни одной принятой или отправленной на исправление.
         </p>
       )}
     </div>

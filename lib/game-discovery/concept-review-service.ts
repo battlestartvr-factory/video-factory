@@ -84,18 +84,12 @@ export async function recordGameplayConceptReview(input: {
         ? "preserve_and_continue"
         : input.decision === "revise"
           ? "revise_same_concept"
-          : "replace_with_fundamentally_new_concept",
-    replacementContract:
+          : "drop_concept",
+    regenerationPolicy:
       input.decision === "reject"
         ? {
-            reskinForbidden: true,
-            mustChange: [
-              "core_mechanic",
-              "coop_dependency",
-              "player_actions",
-              "failure_signature",
-              "social_moment",
-            ],
+            regenerateOnlyWhenAllActiveConceptsRejected: true,
+            freshCycleUsesRejectedConceptsAsNegativeSpace: true,
           }
         : null,
   };
