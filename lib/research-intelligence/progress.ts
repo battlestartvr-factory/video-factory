@@ -6,6 +6,7 @@ export interface ResearchScoutProgressEvent {
     | "research.source.fetch_started"
     | "research.source.accepted"
     | "research.source.rejected"
+    | "research.source_pool.reused"
     | "research.evidence.extracted"
     | "research.scout.execution_completed";
   key: string;
