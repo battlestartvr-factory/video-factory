@@ -11,6 +11,7 @@ import {
   type ResearchScoutEvidenceBundleV1,
   type ResearchSourceCandidateV1,
 } from "./evidence-bundle";
+import type { ResearchScoutProgressReporter } from "./progress";
 import type {
   ResearchScoutExecutionResult,
   ResearchScoutExecutor,
@@ -90,7 +91,17 @@ export class KieGroundedResearchScoutExecutor implements ResearchScoutExecutor {
   constructor(
     private readonly toolbox: ResearchToolbox,
     private readonly now: () => Date = () => new Date(),
+    private readonly reportProgress?: ResearchScoutProgressReporter,
   ) {}
+
+  private async progress(
+    eventType: Parameters<ResearchScoutProgressReporter>[0]["eventType"],
+    key: string,
+    payload: Record<string, unknown> = {},
+  ): Promise<void> {
+    if (!this.reportProgress) return;
+    await this.reportProgress({ eventType, key, payload });
+  }
 
   async execute(input: {
     jobId: string;
@@ -133,13 +144,35 @@ export class KieGroundedResearchScoutExecutor implements ResearchScoutExecutor {
     }
 
     if (input.signal.aborted) throw input.signal.reason ?? new Error("Research Scout aborted");
+    await this.progress("research.scout.started", "scout_started", {
+      mandate: context.assignment.mandate.slice(0, 500),
+      max_sources: budget.maxFetchedSources,
+      max_evidence: budget.maxEvidenceItems,
+    });
+
+    const query = combinedQuery(context);
+    await this.progress("research.search.started", "search_started", {
+      query: query.slice(0, 1_500),
+      max_results: budget.maxFetchedSources,
+      freshness: context.assignment.freshness,
+    });
+    if (input.signal.aborted) throw input.signal.reason ?? new Error("Research Scout aborted");
 
     const search = await this.toolbox.searchText({
-      query: combinedQuery(context),
+      query,
       maxResults: budget.maxFetchedSources,
       freshness: context.assignment.freshness,
     });
     const searchResults = search.value.slice(0, budget.maxFetchedSources);
+    await this.progress("research.search.completed", "search_completed", {
+      result_count: searchResults.length,
+      reused_from_cache: search.reusedFromCache,
+      results: searchResults.slice(0, 8).map((result) => ({
+        title: result.title.slice(0, 300),
+        url: (result.canonicalUrl ?? result.url).slice(0, 2_000),
+        domain: result.domain,
+      })),
+    });
     if (searchResults.length === 0) {
       throw new DurableWorkflowError({
         code: "RESEARCH_SCOUT_NO_GROUNDED_SOURCES",
@@ -154,12 +187,18 @@ export class KieGroundedResearchScoutExecutor implements ResearchScoutExecutor {
     const warnings: string[] = [];
     let discoveredPageImageCandidates = 0;
 
-    for (const result of searchResults) {
+    for (const [resultIndex, result] of searchResults.entries()) {
       if (input.signal.aborted) throw input.signal.reason ?? new Error("Research Scout aborted");
       if (sources.length >= budget.maxFetchedSources) break;
+      const sourceUrl = result.canonicalUrl ?? result.url;
+      await this.progress("research.source.fetch_started", `source_${resultIndex}_fetch_started`, {
+        source_index: resultIndex,
+        title: result.title.slice(0, 300),
+        url: sourceUrl.slice(0, 2_000),
+      });
       try {
         const fetched = await this.toolbox.fetchSource({
-          url: result.canonicalUrl ?? result.url,
+          url: sourceUrl,
           query: context.assignment.mandate,
           freshness: context.assignment.freshness,
           excerptMaxChars: 8_000,
@@ -189,11 +228,25 @@ export class KieGroundedResearchScoutExecutor implements ResearchScoutExecutor {
           },
         });
         resultBySourceRef.set(sourceRef, result);
+        await this.progress("research.source.accepted", `source_${resultIndex}_accepted`, {
+          source_index: resultIndex,
+          source_ref: sourceRef,
+          title: (document.title || result.title).slice(0, 300),
+          url: canonicalUrl.slice(0, 2_000),
+          domain: document.domain,
+          reused_from_cache: fetched.reusedFromCache,
+          image_candidate_count: document.imageCandidates?.length ?? 0,
+        });
       } catch (error) {
         if (input.signal.aborted) throw input.signal.reason ?? error;
-        warnings.push(
-          `Source fetch skipped: ${error instanceof Error ? error.message : String(error)}`.slice(0, 240),
-        );
+        const message = (error instanceof Error ? error.message : String(error)).slice(0, 500);
+        await this.progress("research.source.rejected", `source_${resultIndex}_rejected`, {
+          source_index: resultIndex,
+          title: result.title.slice(0, 300),
+          url: sourceUrl.slice(0, 2_000),
+          error: message,
+        });
+        warnings.push(`Source fetch skipped: ${message}`.slice(0, 240));
       }
     }
 
@@ -244,6 +297,17 @@ export class KieGroundedResearchScoutExecutor implements ResearchScoutExecutor {
       });
     }
 
+    await this.progress("research.evidence.extracted", "evidence_extracted", {
+      evidence_count: evidence.length,
+      items: evidence.slice(0, 12).map((item) => ({
+        evidence_ref: item.evidenceRef,
+        evidence_type: item.evidenceType,
+        subject: item.subject.slice(0, 300),
+        claim: item.claim.slice(0, 1_000),
+        confidence: item.confidence,
+      })),
+    });
+
     const evidenceBundle = researchScoutEvidenceBundleV1Schema.parse({
       schema: "research_scout_evidence_bundle",
       version: 1,
@@ -255,6 +319,13 @@ export class KieGroundedResearchScoutExecutor implements ResearchScoutExecutor {
     const summary = evidence.slice(0, 4).map((item) => item.claim).join(" ").slice(0, 4_000);
     const firstMetadata = searchResults[0]?.providerMetadata ?? {};
     const model = typeof firstMetadata.model === "string" ? firstMetadata.model : "gemini-3-6-flash";
+
+    await this.progress("research.scout.execution_completed", "scout_execution_completed", {
+      source_count: sources.length,
+      evidence_count: evidence.length,
+      image_candidate_count: discoveredPageImageCandidates,
+      model,
+    });
 
     return {
       report: researchScoutReportSpecV1Schema.parse({
@@ -291,13 +362,17 @@ export class KieGroundedResearchScoutExecutor implements ResearchScoutExecutor {
   }
 }
 
-export function createKieGroundedResearchScoutExecutor(): ResearchScoutExecutor {
+export function createKieGroundedResearchScoutExecutor(
+  reportProgress?: ResearchScoutProgressReporter,
+): ResearchScoutExecutor {
   return {
     async execute(input) {
       const fetchProvider = createWebFetchProvider(undefined, input.signal);
       const searchProvider = createKieGeminiGroundedSearchProvider(fetchProvider, input.signal);
       const executor = new KieGroundedResearchScoutExecutor(
         createResearchToolbox({ searchProvider, fetchProvider }),
+        () => new Date(),
+        reportProgress,
       );
       return executor.execute(input);
     },
