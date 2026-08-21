@@ -81,7 +81,7 @@ export function ChatComposer({
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const isHero = variant === "hero";
-  const autoStopRunId = autoStopTarget?.chatId === chatId ? autoStopTarget.runId : null;
+  const autoStopRunId = autoStopTarget && autoStopTarget.chatId === chatId ? autoStopTarget.runId : null;
   const effectiveStopActive = stopActive || Boolean(autoStopRunId);
   const effectiveStopPending = stopPending || autoStopPending;
   const effectiveDisabled = disabled || submitting;
