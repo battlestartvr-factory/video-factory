@@ -1,7 +1,6 @@
 import { DurableWorkflowError } from "../orchestrator/retry";
 import { requireRpcObject, type OrchestratorRpcClient } from "../orchestrator/rpc";
 import type { ResearchScoutEvidenceBundleV1 } from "./evidence-bundle";
-import { evaluateResearchEarlyFinalizeEligibility } from "./early-finalize";
 import {
   researchPlanSpecV1Schema,
   researchScoutAssignmentSpecV1Schema,
@@ -90,7 +89,6 @@ export interface ResearchScoutFanoutStatus {
   failedCount: number;
   cancelledCount: number;
   allTerminal: boolean;
-  earlyFinalized: boolean;
   items: ResearchScoutFanoutItem[];
 }
 
@@ -243,22 +241,7 @@ export class ResearchScoutRepository {
     return { duplicate: row.duplicate === true, report: stored.data };
   }
 
-  async getRunFinalization(researchRunId: string): Promise<"full" | "early_finalized"> {
-    const { data, error } = await this.client.rpc("research_get_run_finalization", {
-      p_research_run_id: researchRunId,
-    });
-    if (error) {
-      throw new DurableWorkflowError({
-        code: "RESEARCH_FINALIZATION_STATUS_FAILED",
-        message: `Failed to load research finalization state: ${error.message}`,
-        retryable: true,
-      });
-    }
-    const row = requireRpcObject(data, "research_get_run_finalization");
-    return row.finalization === "early_finalized" ? "early_finalized" : "full";
-  }
-
-  private async loadFanoutStatus(researchRunId: string): Promise<ResearchScoutFanoutStatus> {
+  async getFanoutStatus(researchRunId: string): Promise<ResearchScoutFanoutStatus> {
     const { data, error } = await this.client.rpc("research_get_scout_fanout_status", {
       p_research_run_id: researchRunId,
     });
@@ -299,42 +282,8 @@ export class ResearchScoutRepository {
       failedCount: typeof row.failed_count === "number" ? row.failed_count : 0,
       cancelledCount: typeof row.cancelled_count === "number" ? row.cancelled_count : 0,
       allTerminal: row.all_terminal === true,
-      earlyFinalized: false,
       items,
     };
-  }
-
-  private async requestEarlyFinalize(researchRunId: string): Promise<boolean> {
-    const { data, error } = await this.client.rpc("research_early_finalize_scout_fanout", {
-      p_research_run_id: researchRunId,
-    });
-    if (error) {
-      throw new DurableWorkflowError({
-        code: "RESEARCH_EARLY_FINALIZE_FAILED",
-        message: `Failed to early-finalize research Scout fan-out: ${error.message}`,
-        retryable: true,
-      });
-    }
-    const row = requireRpcObject(data, "research_early_finalize_scout_fanout");
-    return row.finalized === true;
-  }
-
-  async getFanoutStatus(researchRunId: string): Promise<ResearchScoutFanoutStatus> {
-    let status = await this.loadFanoutStatus(researchRunId);
-    let finalization = await this.getRunFinalization(researchRunId);
-    status.earlyFinalized = finalization === "early_finalized";
-
-    if (!status.allTerminal && !status.earlyFinalized) {
-      const eligibility = evaluateResearchEarlyFinalizeEligibility(status);
-      if (eligibility.eligible) {
-        await this.requestEarlyFinalize(researchRunId);
-        status = await this.loadFanoutStatus(researchRunId);
-        finalization = await this.getRunFinalization(researchRunId);
-        status.earlyFinalized = finalization === "early_finalized";
-      }
-    }
-
-    return status;
   }
 }
 
