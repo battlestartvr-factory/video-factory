@@ -54,6 +54,27 @@ function metadataArray(value: unknown): string[] {
     : [];
 }
 
+export function sanitizeGroundedEvidenceClaim(value: string): string | null {
+  let claim = value.replace(/\r?\n/g, " ").replace(/\s+/g, " ").trim();
+  if (!claim) return null;
+  if (/^(?:SOURCE|SOURCE_URL|CITATION)\s*[|:]/i.test(claim)) return null;
+  if (/^https?:\/\//i.test(claim)) return null;
+
+  claim = claim
+    .replace(/^(?:[-•]\s+|\*+\s*)+/, "")
+    .replace(/^\d+[.)]\s+/, "")
+    .replace(/\*\*/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (!claim || /^(?:SOURCE|SOURCE_URL|CITATION)\s*[|:]/i.test(claim)) return null;
+  if (/^[\p{P}\p{S}\s]+$/u.test(claim)) return null;
+  const letters = claim.match(/\p{L}/gu)?.length ?? 0;
+  const words = claim.match(/[\p{L}\p{N}][\p{L}\p{N}'’\-]*/gu)?.length ?? 0;
+  if (claim.length < 24 || letters < 8 || words < 5) return null;
+  return claim.slice(0, 4_000);
+}
+
 function evidenceType(
   role: ResearchScoutRoleV1,
   index: number,
@@ -100,8 +121,14 @@ function combinedQuery(context: ResearchScoutJobContext): string {
 
 function groundedClaims(result: SearchResult): string[] {
   const claims = metadataArray(result.providerMetadata?.groundedClaims);
-  if (claims.length > 0) return claims;
-  return result.snippet?.trim() ? [result.snippet.trim()] : [];
+  const rawClaims = claims.length > 0
+    ? claims
+    : result.snippet?.trim()
+      ? [result.snippet.trim()]
+      : [];
+  return rawClaims
+    .map(sanitizeGroundedEvidenceClaim)
+    .filter((claim): claim is string => Boolean(claim));
 }
 
 function providerUsage(results: SearchResult[]): Record<string, unknown> {
@@ -110,6 +137,11 @@ function providerUsage(results: SearchResult[]): Record<string, unknown> {
   return usage && typeof usage === "object" && !Array.isArray(usage)
     ? (usage as Record<string, unknown>)
     : {};
+}
+
+function providerCallCount(results: SearchResult[]): number {
+  const calls = Number(providerUsage(results).provider_calls ?? 1);
+  return Number.isFinite(calls) && calls >= 1 ? Math.trunc(calls) : 1;
 }
 
 type FetchSourceResult = Awaited<ReturnType<ResearchToolbox["fetchSource"]>>;
@@ -211,6 +243,8 @@ export class KieGroundedResearchScoutExecutor implements ResearchScoutExecutor {
       result_count: searchResults.length,
       safe_fetch_target: fetchTarget,
       search_ms: searchMs,
+      provider_calls: providerCallCount(searchResults),
+      provenance_recovery_used: providerUsage(searchResults).provenance_recovery_used === true,
       reused_from_cache: search.reusedFromCache,
       results: searchResults.slice(0, 8).map((result) => ({
         title: result.title.slice(0, 300),
@@ -347,7 +381,7 @@ export class KieGroundedResearchScoutExecutor implements ResearchScoutExecutor {
           evidenceRef: `evidence-${index + 1}`,
           evidenceType: evidenceType(context.scoutRole, index),
           subject: source.title?.slice(0, 500) || result.title.slice(0, 500),
-          claim: claim.slice(0, 4_000),
+          claim,
           sourceRefs: [source.sourceRef],
           confidence: 0.82,
           freshnessClass: freshnessClass(context.assignment.freshness),
@@ -402,6 +436,7 @@ export class KieGroundedResearchScoutExecutor implements ResearchScoutExecutor {
       image_candidate_count: discoveredPageImageCandidates,
       safe_fetch_target: fetchTarget,
       safe_fetch_concurrency: workerCount,
+      provider_calls: providerCallCount(searchResults),
       search_ms: searchMs,
       safe_fetch_ms: safeFetchMs,
       evidence_ms: evidenceMs,
@@ -423,7 +458,10 @@ export class KieGroundedResearchScoutExecutor implements ResearchScoutExecutor {
         queriesExecuted: 1,
         coverageNotes: [
           `${sources.length} safely fetched Google-grounded source pages (${fetchTarget} adaptive Top-K target).`,
-          `${evidence.length} grounded evidence claims extracted.`,
+          `${evidence.length} quality-filtered grounded evidence claims extracted.`,
+          providerUsage(searchResults).provenance_recovery_used === true
+            ? "One bounded provenance-only recovery call was required; no worker retry was used for missing grounding."
+            : "Primary grounded search exposed verifiable provenance without recovery.",
           context.assignment.imageSearchRequired
             ? `${discoveredPageImageCandidates} page image candidates discovered without a second paid search provider.`
             : "Visual-source harvesting was not required for this Scout role.",
@@ -435,7 +473,7 @@ export class KieGroundedResearchScoutExecutor implements ResearchScoutExecutor {
       usage: {
         ...providerUsage(searchResults),
         search_provider: "kie_gemini_google_search",
-        search_calls: 1,
+        search_calls: providerCallCount(searchResults),
         safe_fetch_target: fetchTarget,
         safe_fetch_concurrency: workerCount,
         safely_fetched_sources: sources.length,
