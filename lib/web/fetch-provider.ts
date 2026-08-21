@@ -36,6 +36,11 @@ function stripActiveHtmlContainers(html: string): string {
     .replace(/<(?:input|button|textarea|select|option|iframe|object|embed)\b[^>]*>/gi, " ");
 }
 
+function requestSignal(signal?: AbortSignal): AbortSignal {
+  const timeout = AbortSignal.timeout(CONTENT_LIMITS.webFetchTimeoutMs);
+  return signal ? AbortSignal.any([signal, timeout]) : timeout;
+}
+
 async function readBoundedResponseBytes(response: Response, maxBytes: number): Promise<Uint8Array> {
   const contentLength = response.headers.get("content-length");
   if (contentLength) {
@@ -85,10 +90,12 @@ async function fetchFollowingSafeRedirects(
   rawUrl: string,
   accept: string,
   lookup?: DnsLookupFn,
+  signal?: AbortSignal,
 ): Promise<{ response: Response; finalUrl: URL }> {
   let current = await validateWebFetchUrl(rawUrl, lookup);
 
   for (let hop = 0; hop <= CONTENT_LIMITS.maxWebFetchRedirects; hop += 1) {
+    if (signal?.aborted) throw signal.reason ?? new DOMException("Aborted", "AbortError");
     const response = await globalThis.fetch(current.toString(), {
       method: "GET",
       redirect: "manual",
@@ -96,7 +103,7 @@ async function fetchFollowingSafeRedirects(
         "User-Agent": "AI-Content-Factory-Research/1.0",
         Accept: accept,
       },
-      signal: AbortSignal.timeout(CONTENT_LIMITS.webFetchTimeoutMs),
+      signal: requestSignal(signal),
     });
 
     if (response.status < 300 || response.status >= 400) return { response, finalUrl: current };
@@ -111,11 +118,12 @@ async function fetchFollowingSafeRedirects(
   throw new WebToolError("WEB_FETCH_TOO_MANY_REDIRECTS", "Redirect limit exceeded");
 }
 
-async function fetchPage(url: string, lookup?: DnsLookupFn): Promise<WebDocument> {
+async function fetchPage(url: string, lookup?: DnsLookupFn, signal?: AbortSignal): Promise<WebDocument> {
   const { response, finalUrl } = await fetchFollowingSafeRedirects(
     url,
     "text/html,application/xhtml+xml,text/plain,application/json,application/xml;q=0.9,*/*;q=0.1",
     lookup,
+    signal,
   );
   if (!response.ok) throw new WebToolError("WEB_FETCH_FAILED", `Fetch returned ${response.status}`);
 
@@ -151,11 +159,12 @@ async function fetchPage(url: string, lookup?: DnsLookupFn): Promise<WebDocument
   };
 }
 
-async function fetchImage(url: string, lookup?: DnsLookupFn): Promise<WebImage> {
+async function fetchImage(url: string, lookup?: DnsLookupFn, signal?: AbortSignal): Promise<WebImage> {
   const { response, finalUrl } = await fetchFollowingSafeRedirects(
     url,
     "image/avif,image/webp,image/png,image/jpeg,image/gif;q=0.9,*/*;q=0.1",
     lookup,
+    signal,
   );
   if (!response.ok) throw new WebToolError("WEB_FETCH_FAILED", `Image fetch returned ${response.status}`);
 
@@ -201,16 +210,16 @@ async function fetchImage(url: string, lookup?: DnsLookupFn): Promise<WebImage> 
   };
 }
 
-export function createWebFetchProvider(lookup?: DnsLookupFn): WebFetchProvider {
+export function createWebFetchProvider(lookup?: DnsLookupFn, signal?: AbortSignal): WebFetchProvider {
   return {
     fetch(url: string) {
-      return fetchPage(url, lookup);
+      return fetchPage(url, lookup, signal);
     },
     fetchPage(url: string) {
-      return fetchPage(url, lookup);
+      return fetchPage(url, lookup, signal);
     },
     fetchImage(url: string) {
-      return fetchImage(url, lookup);
+      return fetchImage(url, lookup, signal);
     },
   };
 }
