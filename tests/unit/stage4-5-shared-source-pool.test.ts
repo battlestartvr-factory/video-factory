@@ -246,6 +246,30 @@ describe("shared verified research source pool", () => {
     })).toContain("player_voice");
   });
 
+  it("replays the latest production verified pool and proves player voice is still missing", () => {
+    const verifiedCoverage = new Set([
+      ...sourceCoverageCategories({
+        title: "Party Animals on Steam",
+        domain: "store.steampowered.com",
+        url: "https://store.steampowered.com/app/1260320/Party_Animals/",
+        text: "Physics-based multiplayer game with co-op interactions and abilities.",
+      }),
+      ...sourceCoverageCategories({
+        title: "www.youtube.com",
+        domain: "www.youtube.com",
+        url: "https://www.youtube.com/watch?v=Lp9YNM5_bzI",
+        text: "Knockout City gameplay review footage demonstrates movement, controls, camera readability and team interactions.",
+      }),
+    ]);
+
+    expect([...verifiedCoverage]).toEqual(expect.arrayContaining([
+      "competitor",
+      "mechanics",
+      "gameplay_visual",
+    ]));
+    expect(verifiedCoverage.has("player_voice")).toBe(false);
+  });
+
   it("lets all five Scouts analyze one pool without another search call", async () => {
     for (const role of roles) {
       const progress = vi.fn();
@@ -289,7 +313,7 @@ describe("shared verified research source pool", () => {
     expect(source).toContain("const MIN_VERIFIED_SOURCES = 4");
     expect(source).toContain("verifiedCoverageOfSources(sources)");
     expect(source).toContain("while (totalProviderCalls < MAX_KIE_PROVIDER_CALLS)");
-    expect(source).toContain("allowProvenanceRecovery: false");
+    expect(source).toContain("createSharedPoolKieSearchProvider(input.signal, { allowProvenanceRecovery })");
     expect(source).toContain("PLAYER-AUTHORED evidence only");
     expect(source).toContain("provider_call_cap: MAX_KIE_PROVIDER_CALLS");
   });
