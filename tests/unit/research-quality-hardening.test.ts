@@ -240,7 +240,7 @@ describe("research quality hardening", () => {
       signal: new AbortController().signal,
     });
 
-    expect(result.evidenceBundle.evidence.map((item) => item.evidenceType)).toEqual(["player_love", "player_pain"]);
+    expect(result.evidenceBundle?.evidence.map((item) => item.evidenceType)).toEqual(["player_love", "player_pain"]);
     expect(result.usage?.provider_calls).toBe(0);
     expect(result.usage?.role_analysis_provider_calls).toBe(1);
   });
