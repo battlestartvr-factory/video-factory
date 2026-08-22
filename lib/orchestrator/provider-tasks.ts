@@ -131,6 +131,22 @@ export class ProviderTaskRepository {
     if (error) throw new Error(`Failed to record provider submit failure: ${error.message}`);
   }
 
+  async recordRetryableSubmitFailure(input: {
+    providerTaskId: string;
+    error: Record<string, unknown>;
+  }): Promise<void> {
+    const { error } = await this.rpcClient.rpc(
+      "orchestrator_record_provider_retryable_submit_failure",
+      {
+        p_provider_task_id: input.providerTaskId,
+        p_error: input.error,
+      },
+    );
+    if (error) {
+      throw new Error(`Failed to record retryable provider submit failure: ${error.message}`);
+    }
+  }
+
   async failImageSubmit(input: {
     jobId: string;
     providerTaskId: string;
