@@ -69,6 +69,40 @@ const GAME_DISCOVERY_PATTERNS: RegExp[] = [
   /(?:concept|концепт).*(?:diversity|pre-?evaluation|gameplay\s+moment)/i,
 ];
 
+// JS word-boundary semantics are ASCII-oriented, so Russian morphology is matched with
+// Unicode letters rather than \b. English tokens keep word boundaries to avoid substring hits.
+const GAME_DOMAIN_PATTERN = /(?:игр\p{L}*|геймпле\p{L}*|кооператив\p{L}*|ко-?оп\p{L}*|\bgame(?:s|play)?\b|\bco-?op\b|\bcoop\b|\bfps\b|\bsteam\b)/iu;
+const GAME_DESIGN_ACTION_PATTERN = /(?:придум\p{L}*|предлож\p{L}*|улучш\p{L}*|усил\p{L}*|доработ\p{L}*|передел\p{L}*|измен\p{L}*|разработ\p{L}*|проработ\p{L}*|оцен\p{L}*|поиграй\s+с|что\s+думаешь|как\s+тебе|питч\p{L}*|pitch\w*|design\w*|improv\w*|rework\w*|iterate\w*|invent\w*|brainstorm\w*)/iu;
+const GAME_CONCEPT_OWNERSHIP_PATTERN = /(?:я\s+придумал\p{L}*|моя\s+(?:игра|идея|концепц\p{L}*)|мой\s+концепт|у\s+меня\s+(?:есть\s+)?(?:игра|идея|концепт)|вот\s+(?:моя\s+)?(?:идея|концепт))/iu;
+const GAME_DESIGN_SUBJECT_PATTERN = /(?:механик\p{L}*|концепц\p{L}*|концепт\p{L}*|core\s+loop|game\s+design|геймдизайн\p{L}*)/iu;
+const NON_DISCOVERY_CREATIVE_PATTERN = /(?:реклам\p{L}*|маркетинг\p{L}*|слоган\p{L}*|копирайт\p{L}*|пост\s+(?:для|в)|store\s+description|описани\p{L}*\s+(?:для\s+)?(?:steam|магазин)|трейлер\p{L}*\s+(?:текст|сценар))/iu;
+
+function isObviousNonDiscoveryGameCreativeRequest(text: string): boolean {
+  return NON_DISCOVERY_CREATIVE_PATTERN.test(text) && !GAME_DESIGN_SUBJECT_PATTERN.test(text);
+}
+
+/**
+ * Product-level admission for the simplified Game Discovery Factory.
+ * Users should be able to talk about a new or existing game exactly as they would in ChatGPT;
+ * they must not know internal keywords such as "Stage 4" or "Discovery".
+ */
+export function isNaturalGameDesignRequest(text: string): boolean {
+  const normalized = text.trim();
+  if (!normalized || !GAME_DOMAIN_PATTERN.test(normalized)) return false;
+
+  const asksForDesignWork = GAME_DESIGN_ACTION_PATTERN.test(normalized);
+  const isOwnedConceptDiscussion =
+    GAME_CONCEPT_OWNERSHIP_PATTERN.test(normalized) && GAME_DESIGN_SUBJECT_PATTERN.test(normalized);
+
+  if (!asksForDesignWork && !isOwnedConceptDiscussion) return false;
+
+  // Keep obvious marketing/copy requests in normal chat unless the same turn explicitly asks
+  // to change the game design itself.
+  if (isObviousNonDiscoveryGameCreativeRequest(normalized)) return false;
+
+  return true;
+}
+
 const KNOWLEDGE_PATTERNS: RegExp[] = [
   /баз[ae]\s+знан/i,
   /knowledge\s+base/i,
@@ -144,10 +178,17 @@ export function detectTurnIntent(input: ResolveToolsForTurnInput): TurnIntent {
   const text = input.userMessage.trim();
   if (!text) return "general";
 
-  // Stage 4 discovery is a durable product workflow, not a generic document-analysis turn.
-  // Detect it before knowledge/image/video patterns because a real discovery brief often
-  // contains all of those words at once.
-  if (matchesAny(text, GAME_DISCOVERY_PATTERNS)) return "game_discovery";
+  // Discovery admission is checked before generic creativity/image/video because normal game
+  // briefs frequently contain words like "idea", "video" and "image" while still asking the
+  // factory to invent or improve the game itself. A clear marketing/copy request must not be
+  // rescued by broad legacy Stage 4 patterns such as "придумай ... Steam ... игры".
+  const obviousNonDiscoveryCreative = isObviousNonDiscoveryGameCreativeRequest(text);
+  if (
+    isNaturalGameDesignRequest(text) ||
+    (!obviousNonDiscoveryCreative && matchesAny(text, GAME_DISCOVERY_PATTERNS))
+  ) {
+    return "game_discovery";
+  }
   if (matchesAny(text, MEMORY_PATTERNS)) return "memory";
   if (matchesAny(text, WEB_PATTERNS)) return "web";
   if (matchesAny(text, KNOWLEDGE_PATTERNS)) return "knowledge";
@@ -160,7 +201,12 @@ export function detectTurnIntent(input: ResolveToolsForTurnInput): TurnIntent {
 
   const hasAttachments = (input.attachmentIds?.length ?? 0) > 0;
   if (hasAttachments) {
-    if (matchesAny(text, GAME_DISCOVERY_PATTERNS)) return "game_discovery";
+    if (
+      isNaturalGameDesignRequest(text) ||
+      (!obviousNonDiscoveryCreative && matchesAny(text, GAME_DISCOVERY_PATTERNS))
+    ) {
+      return "game_discovery";
+    }
     if (matchesAny(text, IMAGE_PATTERNS)) return "image";
     if (matchesAny(text, VIDEO_PATTERNS)) return "video";
     if (/pdf|документ|document|extract|извлеч|research|report|срез\s+рынка/i.test(text)) return "knowledge";
