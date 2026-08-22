@@ -40,8 +40,8 @@ export type SourceCoverageCategory =
 
 const SAFE_FETCH_CONCURRENCY = 3;
 const MAX_POOL_SOURCES = 10;
-// Quality-first bounded acquisition. A single broad grounded call often exposes only
-// one or two grounding chunks, so recovery is driven by VERIFIED post-fetch coverage.
+// Absolute production safety ceiling. The effective cap is always additionally bounded
+// by the Research Plan's maxTotalSearchQueries so callers can request a cheaper run.
 const MAX_KIE_PROVIDER_CALLS = 6;
 const MIN_VERIFIED_SOURCES = 4;
 const REQUIRED_COVERAGE: SourceCoverageCategory[] = [
@@ -314,6 +314,11 @@ export interface SharedSourcePoolProgressEvent {
 
 export type SharedSourcePoolProgressReporter = (event: SharedSourcePoolProgressEvent) => Promise<void> | void;
 
+export function resolveSharedPoolProviderCallCap(plan: ResearchPlanSpecV1): number {
+  const parsed = researchPlanSpecV1Schema.parse(plan);
+  return Math.max(1, Math.min(MAX_KIE_PROVIDER_CALLS, parsed.budget.maxTotalSearchQueries));
+}
+
 export async function acquireSharedResearchSourcePool(input: {
   researchRunId: string;
   ownerJobId: string;
@@ -327,6 +332,7 @@ export async function acquireSharedResearchSourcePool(input: {
   const query = broadAcquisitionQuery(plan);
   const maxPoolSources = Math.max(1, Math.min(MAX_POOL_SOURCES, plan.budget.maxTotalFetchedSources));
   const minVerifiedSources = Math.min(MIN_VERIFIED_SOURCES, maxPoolSources);
+  const providerCallCap = resolveSharedPoolProviderCallCap(plan);
 
   let totalProviderCalls = 0;
   let searchMs = 0;
@@ -485,7 +491,13 @@ export async function acquireSharedResearchSourcePool(input: {
   };
 
   const runSearch = async (searchQuery: string, maxResults: number, label: string, allowProvenanceRecovery: boolean): Promise<SearchResult[]> => {
-    const provider = createSharedPoolKieSearchProvider(input.signal, { allowProvenanceRecovery });
+    const remainingProviderCalls = Math.max(0, providerCallCap - totalProviderCalls);
+    if (remainingProviderCalls < 1) {
+      throw new Error(`Shared research source acquisition provider-call budget exhausted (${providerCallCap})`);
+    }
+    const provider = createSharedPoolKieSearchProvider(input.signal, {
+      allowProvenanceRecovery: allowProvenanceRecovery && remainingProviderCalls >= 2,
+    });
     const startedAt = Date.now();
     try {
       const results = await provider.searchText({
@@ -515,7 +527,7 @@ export async function acquireSharedResearchSourcePool(input: {
     payload: {
       max_results: maxPoolSources,
       research_run_id: input.researchRunId,
-      provider_call_cap: MAX_KIE_PROVIDER_CALLS,
+      provider_call_cap: providerCallCap,
       min_verified_sources: minVerifiedSources,
     },
   });
@@ -535,16 +547,16 @@ export async function acquireSharedResearchSourcePool(input: {
     });
   }
 
-  if (totalProviderCalls > MAX_KIE_PROVIDER_CALLS) {
+  if (totalProviderCalls > providerCallCap) {
     const error = new Error(
-      `Shared research source acquisition exceeded the hard KIE call cap (${totalProviderCalls} > ${MAX_KIE_PROVIDER_CALLS})`,
+      `Shared research source acquisition exceeded the bounded KIE call cap (${totalProviderCalls} > ${providerCallCap})`,
     ) as Error & { code?: string; usage?: Record<string, unknown> };
     error.code = "RESEARCH_SHARED_SOURCE_POOL_PROVIDER_CALL_CAP_EXCEEDED";
-    error.usage = { ...mergedUsage, provider_calls: totalProviderCalls };
+    error.usage = { ...mergedUsage, provider_calls: totalProviderCalls, provider_call_cap: providerCallCap };
     throw error;
   }
 
-  while (totalProviderCalls < MAX_KIE_PROVIDER_CALLS) {
+  while (totalProviderCalls < providerCallCap) {
     const verifiedCoverage = verifiedCoverageOfSources(sources);
     const missing = missingCoverage(verifiedCoverage);
     const targets = selectSharedPoolRecoveryTargets(
@@ -626,7 +638,7 @@ export async function acquireSharedResearchSourcePool(input: {
     payload: {
       result_count: finalSearchResults.length,
       provider_calls: totalProviderCalls,
-      provider_call_cap: MAX_KIE_PROVIDER_CALLS,
+      provider_call_cap: providerCallCap,
       coverage_recovery_used: recoveryAttempts > 0,
       recovery_attempts: recoveryAttempts,
       recovery_attempts_by_category: { ...recoveryAttemptsByCategory },
@@ -650,6 +662,7 @@ export async function acquireSharedResearchSourcePool(input: {
     error.usage = {
       ...mergedUsage,
       provider_calls: totalProviderCalls,
+      provider_call_cap: providerCallCap,
       recovery_attempts: recoveryAttempts,
       recovery_attempts_by_category: { ...recoveryAttemptsByCategory },
       safely_fetched_sources: 0,
@@ -671,7 +684,7 @@ export async function acquireSharedResearchSourcePool(input: {
     error.usage = {
       ...mergedUsage,
       provider_calls: totalProviderCalls,
-      provider_call_cap: MAX_KIE_PROVIDER_CALLS,
+      provider_call_cap: providerCallCap,
       coverage_recovery_used: recoveryAttempts > 0,
       recovery_attempts: recoveryAttempts,
       recovery_attempts_by_category: { ...recoveryAttemptsByCategory },
@@ -687,7 +700,7 @@ export async function acquireSharedResearchSourcePool(input: {
     ...mergedUsage,
     provider_calls: totalProviderCalls,
     search_calls: totalProviderCalls,
-    provider_call_cap: MAX_KIE_PROVIDER_CALLS,
+    provider_call_cap: providerCallCap,
     search_provider: "kie_gemini_google_search_shared_pool",
     search_ms: searchMs,
     safe_fetch_ms: safeFetchMs,
@@ -705,7 +718,7 @@ export async function acquireSharedResearchSourcePool(input: {
     payload: {
       source_count: sources.length,
       provider_calls: totalProviderCalls,
-      provider_call_cap: MAX_KIE_PROVIDER_CALLS,
+      provider_call_cap: providerCallCap,
       search_ms: searchMs,
       safe_fetch_ms: safeFetchMs,
       coverage_recovery_used: recoveryAttempts > 0,
