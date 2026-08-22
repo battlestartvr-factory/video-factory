@@ -201,7 +201,11 @@ function schemaPrompt(): string {
   "researchRunId":"<same research run id>",
   "model":"gpt-5-6-terra",
   "concepts":[EXACTLY THREE objects]
-}\nEach object in concepts must contain:\n- concept: a complete CoopGameConceptSpec v1 with schema:"coop_game_concept", version:1 and every required field;\n- sourceRefs: 2..8 sourceRef values copied exactly from RESEARCH PACK;\n- researchRationale: what evidence informed the hypothesis without pretending research proves the game is fun;\n- intentionalDifference: concrete mechanical difference from the closest analogs;\n- mustNotCopy: at least one explicit anti-copy rule.\nThe three concepts must have genuinely different core mechanics, co-op dependency types, failure signatures and social dynamics. A new theme, setting, character skin or art style is not sufficient diversity.`;
+}\nEach object in concepts must contain:\n- concept: a complete CoopGameConceptSpec v1 with schema:"coop_game_concept", version:1 and every required field;
+- sourceRefs: 2..8 sourceRef values copied exactly from RESEARCH PACK;
+- researchRationale: what evidence informed the hypothesis without pretending research proves the game is fun;
+- intentionalDifference: concrete mechanical difference from the closest analogs;
+- mustNotCopy: at least one explicit anti-copy rule.\nThe three concepts must have genuinely different core mechanics, co-op dependency types, failure signatures and social dynamics. A new theme, setting, character skin or art style is not sufficient diversity.`;
 }
 
 function prompt(input: {
@@ -233,10 +237,9 @@ export async function generateStrongConceptBatch(input: {
         "You are the single strong Concept LLM in a production AI co-op game factory. Human intent is authoritative. Analyze verified research, generate typed design hypotheses, and never add extra agent layers or prose outside the requested JSON.",
       prompt: prompt({ objective, pack, priorFailure }),
       maxTokens: 10_000,
-      // The production v3 concept pass deliberately uses the adapter's medium reasoning
-      // tier. High reasoning materially increases cost/latency here without adding a
-      // second creative decision layer, and the output still passes strict typed,
-      // grounding and diversity validation before it can reach the Human Concept Gate.
+      // `false` maps Responses models to the adapter's medium reasoning tier.
+      // Keep the production v3 concept pass bounded; deterministic schema,
+      // provenance and diversity validation remain the quality gate.
       thinking: false,
       signal: input.signal,
     });
@@ -298,46 +301,109 @@ export class GameDiscoveryV3Repository {
     return requireRpcObject(data, "v3 shared source pool");
   }
 
+  async acquireSharedSourcePool(input: {
+    researchRunId: string;
+    jobId: string;
+  }): Promise<Record<string, unknown>> {
+    const { data, error } = await this.client.rpc("research_acquire_shared_source_pool", {
+      payload: { research_run_id: input.researchRunId, job_id: input.jobId },
+    });
+    if (error) throw new Error(`Failed to acquire v3 shared source pool: ${error.message}`);
+    return requireRpcObject(data, "v3 shared source pool acquisition");
+  }
+
+  async completeSharedSourcePool(input: {
+    researchRunId: string;
+    jobId: string;
+    pool: SharedResearchSourcePoolV1;
+  }): Promise<void> {
+    const pool = sharedResearchSourcePoolV1Schema.parse(input.pool);
+    const { error } = await this.client.rpc("research_complete_shared_source_pool", {
+      payload: {
+        research_run_id: input.researchRunId,
+        job_id: input.jobId,
+        pool,
+        usage: pool.usage,
+      },
+    });
+    if (error) throw new Error(`Failed to complete v3 shared source pool: ${error.message}`);
+  }
+
+  async failSharedSourcePool(input: {
+    researchRunId: string;
+    jobId: string;
+    code: string;
+    message: string;
+    usage?: Record<string, unknown>;
+  }): Promise<void> {
+    const { error } = await this.client.rpc("research_fail_shared_source_pool", {
+      payload: {
+        research_run_id: input.researchRunId,
+        job_id: input.jobId,
+        error: { code: input.code, message: input.message.slice(0, 2_000) },
+        usage: input.usage ?? {},
+      },
+    });
+    if (error) throw new Error(`Failed to mark v3 shared source pool failure: ${error.message}`);
+  }
+
   async persistResearchPack(input: {
     jobId: string;
     rootCreativeRunId: string;
-    researchPack: GameDiscoveryResearchPackV1;
+    pack: GameDiscoveryResearchPackV1;
   }): Promise<void> {
+    const pack = gameDiscoveryResearchPackV1Schema.parse(input.pack);
     const { error } = await this.client.rpc("orchestrator_persist_game_discovery_v3_research_pack", {
       payload: {
         job_id: input.jobId,
         root_creative_run_id: input.rootCreativeRunId,
-        research_pack: gameDiscoveryResearchPackV1Schema.parse(input.researchPack),
+        research_pack: pack,
       },
     });
     if (error) throw new Error(`Failed to persist Game Discovery v3 Research Pack: ${error.message}`);
   }
 
+  async getResearchPack(input: { rootCreativeRunId: string }): Promise<GameDiscoveryResearchPackV1 | null> {
+    const { data, error } = await this.client.rpc("orchestrator_get_game_discovery_v3_research_pack", {
+      p_root_creative_run_id: input.rootCreativeRunId,
+    });
+    if (error) throw new Error(`Failed to load Game Discovery v3 Research Pack: ${error.message}`);
+    if (!data) return null;
+    const row = object(data);
+    return row.research_pack ? gameDiscoveryResearchPackV1Schema.parse(row.research_pack) : null;
+  }
+
   async persistConcepts(input: {
     jobId: string;
     rootCreativeRunId: string;
-    researchPack: GameDiscoveryResearchPackV1;
-    conceptBatch: StrongConceptBatchV1;
-    metadata?: Record<string, unknown>;
+    pack: GameDiscoveryResearchPackV1;
+    result: StrongConceptGenerationResult;
   }): Promise<PersistedV3ConceptRun[]> {
+    const pack = gameDiscoveryResearchPackV1Schema.parse(input.pack);
+    const batch = validateStrongConceptBatch({ batch: input.result.batch, pack });
     const { data, error } = await this.client.rpc("orchestrator_persist_game_discovery_v3_concepts", {
       payload: {
         job_id: input.jobId,
         root_creative_run_id: input.rootCreativeRunId,
-        research_pack: gameDiscoveryResearchPackV1Schema.parse(input.researchPack),
-        concept_batch: strongConceptBatchV1Schema.parse(input.conceptBatch),
-        metadata: input.metadata ?? {},
+        research_pack: pack,
+        concept_batch: batch,
+        metadata: {
+          model: input.result.model,
+          provider: "kie",
+          attempts: input.result.attempts,
+          usage: input.result.usage,
+          raw_response_hashes: input.result.rawResponseHashes,
+        },
       },
     });
     if (error) throw new Error(`Failed to persist Game Discovery v3 concepts: ${error.message}`);
-    const row = requireRpcObject(data, "v3 concept persistence");
+    const row = requireRpcObject(data, "game discovery v3 concept persistence");
     const conceptRuns = Array.isArray(row.concept_runs) ? row.concept_runs : [];
-    return conceptRuns.map((item) => {
-      const value = object(item);
-      if (typeof value.run_id !== "string" || typeof value.concept_id !== "string") {
-        throw new Error("Invalid v3 concept persistence response");
-      }
-      return { runId: value.run_id, conceptId: value.concept_id };
+    return conceptRuns.flatMap((value) => {
+      const item = object(value);
+      return typeof item.run_id === "string" && typeof item.concept_id === "string"
+        ? [{ runId: item.run_id, conceptId: item.concept_id }]
+        : [];
     });
   }
 }
