@@ -15,7 +15,11 @@ import {
 } from "../../lib/research-intelligence/shared-source-pool";
 import { discoveryObjectiveSpecV1Schema } from "../../lib/game-discovery/schemas";
 import { gameDiscoveryBatchStage4InspectedV1 } from "./game-discovery-batch-stage4-inspected-v1";
-import type { WorkflowTickContext, WorkflowTickHandler } from "./types";
+import type {
+  WorkflowTickContext,
+  WorkflowTickHandler,
+  WorkflowTickOutcome,
+} from "./types";
 
 function text(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
@@ -25,6 +29,79 @@ function object(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown>
     : {};
+}
+
+function stringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+    : [];
+}
+
+/**
+ * In v1/v2 the Human Concept Gate is followed by an AI pre-evaluator. V3 deliberately
+ * removes that second veto: once a person approves a surviving concept, it goes directly
+ * to gameplay-moment planning. The legacy Stage 4 shell still owns review persistence,
+ * revise/reject handling and every media gate; this adapter only rewires that one edge.
+ */
+export function applyV3HumanConceptAuthority(
+  currentStage: string | null,
+  outcome: WorkflowTickOutcome,
+  now = new Date().toISOString(),
+): WorkflowTickOutcome {
+  if (
+    currentStage !== "human_concept_approval_pending" ||
+    outcome.currentStage !== "pre_evaluation_pending"
+  ) {
+    return outcome;
+  }
+
+  const state = outcome.state ?? {};
+  const approvedConceptIds = stringArray(state.human_approved_concept_ids);
+  const selectedConceptIds = approvedConceptIds.length
+    ? approvedConceptIds
+    : stringArray(state.concept_ids);
+
+  if (!selectedConceptIds.length) {
+    return {
+      ...outcome,
+      status: "failed",
+      currentStage: "human_concept_approval_pending",
+      nextActionAt: null,
+      error: {
+        code: "V3_HUMAN_APPROVAL_SELECTION_MISSING",
+        message: "Game Discovery v3 cannot continue without at least one human-approved concept",
+        retryable: false,
+      },
+      stateReason: "v3_human_concept_gate_missing_approved_selection",
+      eventType: "discovery.v3_concept_gate_invalid",
+    };
+  }
+
+  return {
+    ...outcome,
+    status: "waiting",
+    currentStage: "planning_moments_pending",
+    progress: Math.max(50, outcome.progress ?? 0),
+    nextActionAt: now,
+    enqueueReason: "gameplay_moment_planning",
+    state: {
+      ...state,
+      selected_concept_ids: selectedConceptIds,
+      concept_pre_evaluations: [],
+      pre_evaluation: {
+        skipped: true,
+        reason: "human_concept_gate_is_authoritative_in_v3",
+      },
+      v3_ai_pre_evaluation_skipped: true,
+    },
+    stateReason: "v3_human_concept_gate_passed_direct_to_moments",
+    eventType: "discovery.v3_concept_gate_passed",
+    eventPayload: {
+      ...(outcome.eventPayload ?? {}),
+      approved_concept_ids: selectedConceptIds,
+      ai_pre_evaluation_skipped: true,
+    },
+  };
 }
 
 function requireRuntime(context: WorkflowTickContext) {
@@ -394,5 +471,8 @@ export const gameDiscoveryBatchV3: WorkflowTickHandler = async (context) => {
   // The simplified creative front-end is complete. From this point v3 reuses the
   // proven Stage 4 reliability shell: concept revise/reject semantics, gameplay moment,
   // visual references, image gate, Kling, human video gate, assembly and recovery.
-  return gameDiscoveryBatchStage4InspectedV1(context);
+  // Human approval is authoritative in v3, so the one legacy AI pre-evaluation edge is
+  // rewritten into a direct transition to gameplay-moment planning.
+  const downstream = await gameDiscoveryBatchStage4InspectedV1(context);
+  return applyV3HumanConceptAuthority(context.currentStage, downstream);
 };
