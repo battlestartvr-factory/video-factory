@@ -140,6 +140,33 @@ function researchPack(): GameDiscoveryResearchPackV1 {
   return buildGameDiscoveryV3ResearchPack({ objectiveId: "objective-v3", pool: pool() });
 }
 
+function rejectPruneOutcome(input: {
+  activeConceptIds: string[];
+  replacedCount: number;
+  revisedCount?: number;
+  regeneratedConceptIds?: string[];
+}): WorkflowTickOutcome {
+  return {
+    status: "waiting",
+    currentStage: "human_concept_approval_pending",
+    progress: 38,
+    nextActionAt: null,
+    state: {
+      concept_ids: input.activeConceptIds,
+      human_concept_gate_required: true,
+      human_concept_gate_passed: false,
+    },
+    stateReason: "s4_003_human_concepts_regenerated_waiting_for_review",
+    eventType: "discovery.concepts_regenerated_for_review",
+    eventPayload: {
+      active_concept_ids: input.activeConceptIds,
+      regenerated_concept_ids: input.regeneratedConceptIds ?? [],
+      revised_count: input.revisedCount ?? 0,
+      replaced_count: input.replacedCount,
+    },
+  };
+}
+
 describe("Game Discovery v3 simplified graph", () => {
   it("builds one compact research pack from verified sources with deterministic coverage", () => {
     const pack = researchPack();
@@ -210,6 +237,116 @@ describe("Game Discovery v3 simplified graph", () => {
       expect(outcome.enqueueReason).toBe("gameplay_moment_planning");
     },
   );
+
+  it.each([
+    {
+      name: "approve + approve + reject",
+      activeConceptIds: ["atlas", "garden"],
+      replacedCount: 1,
+    },
+    {
+      name: "approve + reject + reject",
+      activeConceptIds: ["garden"],
+      replacedCount: 2,
+    },
+    {
+      name: "approved survivor after a revised card is later rejected",
+      activeConceptIds: ["atlas"],
+      replacedCount: 1,
+    },
+  ])(
+    "continues after reject-only pruning for $name without reopening the concept gate",
+    ({ activeConceptIds, replacedCount }) => {
+      const outcome = applyV3HumanConceptAuthority(
+        "concept_revision_pending",
+        rejectPruneOutcome({ activeConceptIds, replacedCount }),
+        observedAt,
+      );
+
+      expect(outcome.currentStage).toBe("planning_moments_pending");
+      expect(outcome.state?.human_concept_gate_passed).toBe(true);
+      expect(outcome.state?.human_approved_concept_ids).toEqual(activeConceptIds);
+      expect(outcome.state?.selected_concept_ids).toEqual(activeConceptIds);
+      expect(outcome.state?.v3_reject_only_prune_resolved).toBe(true);
+      expect(outcome.enqueueReason).toBe("gameplay_moment_planning");
+      expect(outcome.stateReason).toBe("v3_rejected_concepts_pruned_direct_to_moments");
+    },
+  );
+
+  it.each([
+    {
+      name: "approve + revise + reject",
+      activeConceptIds: ["atlas", "garden-rev-123"],
+      replacedCount: 1,
+      revisedCount: 1,
+      regeneratedConceptIds: ["garden-rev-123"],
+    },
+    {
+      name: "revise + revise + revise",
+      activeConceptIds: ["a-rev", "b-rev", "c-rev"],
+      replacedCount: 0,
+      revisedCount: 3,
+      regeneratedConceptIds: ["a-rev", "b-rev", "c-rev"],
+    },
+    {
+      name: "reject + reject + reject fresh cycle",
+      activeConceptIds: ["fresh-a", "fresh-b", "fresh-c"],
+      replacedCount: 3,
+      revisedCount: 0,
+      regeneratedConceptIds: ["fresh-a", "fresh-b", "fresh-c"],
+    },
+  ])(
+    "keeps Human Concept Gate open when new concept versions exist for $name",
+    ({ activeConceptIds, replacedCount, revisedCount, regeneratedConceptIds }) => {
+      const legacyOutcome = rejectPruneOutcome({
+        activeConceptIds,
+        replacedCount,
+        revisedCount,
+        regeneratedConceptIds,
+      });
+      const outcome = applyV3HumanConceptAuthority(
+        "concept_revision_pending",
+        legacyOutcome,
+        observedAt,
+      );
+
+      expect(outcome).toBe(legacyOutcome);
+      expect(outcome.currentStage).toBe("human_concept_approval_pending");
+      expect(outcome.state?.human_concept_gate_passed).toBe(false);
+    },
+  );
+
+  it("removes the legacy AI pre-evaluator even when the gate pass was produced after a recovery tick", () => {
+    const outcome = applyV3HumanConceptAuthority(
+      "concept_revision_pending",
+      {
+        status: "waiting",
+        currentStage: "pre_evaluation_pending",
+        progress: 40,
+        nextActionAt: observedAt,
+        state: {
+          concept_ids: ["atlas", "garden"],
+          human_approved_concept_ids: ["atlas", "garden"],
+          human_concept_gate_passed: true,
+        },
+      },
+      observedAt,
+    );
+
+    expect(outcome.currentStage).toBe("planning_moments_pending");
+    expect(outcome.state?.selected_concept_ids).toEqual(["atlas", "garden"]);
+    expect(outcome.state?.v3_ai_pre_evaluation_skipped).toBe(true);
+  });
+
+  it("does not treat malformed or stale regeneration events as a reject-only pass", () => {
+    const outcome = rejectPruneOutcome({
+      activeConceptIds: ["atlas", "garden"],
+      replacedCount: 1,
+      revisedCount: 1,
+      regeneratedConceptIds: [],
+    });
+    expect(applyV3HumanConceptAuthority("concept_revision_pending", outcome, observedAt)).toBe(outcome);
+  });
 
   it("does not rewrite unrelated downstream stages", () => {
     const outcome: WorkflowTickOutcome = {
