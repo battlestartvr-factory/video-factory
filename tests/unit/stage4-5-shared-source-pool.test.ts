@@ -311,10 +311,11 @@ describe("shared verified research source pool", () => {
     );
     expect(source).toContain("const MAX_KIE_PROVIDER_CALLS = 6");
     expect(source).toContain("const MIN_VERIFIED_SOURCES = 4");
+    expect(source).toContain("resolveSharedPoolProviderCallCap(plan)");
     expect(source).toContain("verifiedCoverageOfSources(sources)");
-    expect(source).toContain("while (totalProviderCalls < MAX_KIE_PROVIDER_CALLS)");
-    expect(source).toContain("createSharedPoolKieSearchProvider(input.signal, { allowProvenanceRecovery })");
+    expect(source).toContain("while (totalProviderCalls < providerCallCap)");
+    expect(source).toContain("remainingProviderCalls >= 2");
     expect(source).toContain("PLAYER-AUTHORED evidence only");
-    expect(source).toContain("provider_call_cap: MAX_KIE_PROVIDER_CALLS");
+    expect(source).toContain("provider_call_cap: providerCallCap");
   });
 });
