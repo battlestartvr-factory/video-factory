@@ -1,5 +1,10 @@
--- Admin-only provider_models seed template (manual fill-in required).
--- Do NOT enable rows until endpoint/model/parameters are verified against KIE docs.
+-- HISTORICAL admin-only provider_models seed template.
+-- Current provider catalogue is evolved by versioned Supabase migrations, not by manually
+-- filling this file. In particular, current gameplay video primary is `minimax-h3` mapped
+-- to KIE `minimax/hailuo-03`; Kling 3 remains enabled fallback/baseline.
+--
+-- Keep this template only as a reminder of the provider_models shape. Never use it to bypass
+-- the schema contract, migration history, provider verification, or production admission gates.
 
 /*
 INSERT INTO public.provider_models (
@@ -18,7 +23,7 @@ INSERT INTO public.provider_models (
   'llm',
   'balanced',
   'FILL_ME',
-  'FILL_ME_FROM_KIE_DOCS',
+  'FILL_ME_FROM_VERIFIED_PROVIDER_CONTRACT',
   false,
   '{}'::jsonb,
   100,
@@ -29,7 +34,7 @@ INSERT INTO public.provider_models (
   'image',
   'balanced',
   'FILL_ME',
-  'FILL_ME_FROM_KIE_DOCS',
+  'FILL_ME_FROM_VERIFIED_PROVIDER_CONTRACT',
   false,
   '{}'::jsonb,
   100,
@@ -40,7 +45,7 @@ INSERT INTO public.provider_models (
   'video',
   'balanced',
   'FILL_ME',
-  'FILL_ME_FROM_KIE_DOCS',
+  'FILL_ME_FROM_VERIFIED_PROVIDER_CONTRACT',
   false,
   '{}'::jsonb,
   100,
