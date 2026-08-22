@@ -37,29 +37,68 @@ function stringArray(value: unknown): string[] {
     : [];
 }
 
+function numberValue(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function rejectOnlyPruneReady(
+  currentStage: string | null,
+  outcome: WorkflowTickOutcome,
+): boolean {
+  if (
+    currentStage !== "concept_revision_pending" ||
+    outcome.currentStage !== "human_concept_approval_pending" ||
+    outcome.eventType !== "discovery.concepts_regenerated_for_review"
+  ) {
+    return false;
+  }
+
+  const payload = object(outcome.eventPayload);
+  const revisedCount = numberValue(payload.revised_count);
+  const replacedCount = numberValue(payload.replaced_count);
+  const regeneratedConceptIds = stringArray(payload.regenerated_concept_ids);
+  const survivingConceptIds = stringArray(outcome.state?.concept_ids);
+
+  return (
+    revisedCount === 0 &&
+    replacedCount !== null &&
+    replacedCount > 0 &&
+    regeneratedConceptIds.length === 0 &&
+    survivingConceptIds.length > 0
+  );
+}
+
 /**
- * In v1/v2 the Human Concept Gate is followed by an AI pre-evaluator. V3 deliberately
- * removes that second veto: once a person approves a surviving concept, it goes directly
- * to gameplay-moment planning. The legacy Stage 4 shell still owns review persistence,
- * revise/reject handling and every media gate; this adapter only rewires that one edge.
+ * Game Discovery v3 makes the Human Concept Gate authoritative.
+ *
+ * The compatibility Stage 4 shell still persists reviews and performs immutable concept
+ * revision/pruning, but two legacy behaviours are removed from the active v3 graph:
+ * - no AI pre-evaluator may veto a human-approved concept;
+ * - Reject-only review sets prune rejected cards and continue immediately instead of
+ *   reopening the same Human Concept Gate and waiting for approvals that already exist.
+ *
+ * Revise still creates a new immutable concept version and therefore requires a new human
+ * review. Rejecting every active card still creates a fresh discovery cycle which also
+ * requires human review. Mandatory image and video human gates remain unchanged.
  */
 export function applyV3HumanConceptAuthority(
   currentStage: string | null,
   outcome: WorkflowTickOutcome,
   now = new Date().toISOString(),
 ): WorkflowTickOutcome {
-  if (
-    currentStage !== "human_concept_approval_pending" ||
-    outcome.currentStage !== "pre_evaluation_pending"
-  ) {
+  const legacyGatePassed = outcome.currentStage === "pre_evaluation_pending";
+  const rejectOnlyPrune = rejectOnlyPruneReady(currentStage, outcome);
+  if (!legacyGatePassed && !rejectOnlyPrune) {
     return outcome;
   }
 
   const state = outcome.state ?? {};
-  const approvedConceptIds = stringArray(state.human_approved_concept_ids);
-  const selectedConceptIds = approvedConceptIds.length
-    ? approvedConceptIds
-    : stringArray(state.concept_ids);
+  const explicitApprovedConceptIds = stringArray(state.human_approved_concept_ids);
+  const selectedConceptIds = rejectOnlyPrune
+    ? stringArray(state.concept_ids)
+    : explicitApprovedConceptIds.length
+      ? explicitApprovedConceptIds
+      : stringArray(state.concept_ids);
 
   if (!selectedConceptIds.length) {
     return {
@@ -86,6 +125,10 @@ export function applyV3HumanConceptAuthority(
     enqueueReason: "gameplay_moment_planning",
     state: {
       ...state,
+      human_concept_gate_required: true,
+      human_concept_gate_passed: true,
+      human_concept_gate_passed_at: text(state.human_concept_gate_passed_at) ?? now,
+      human_approved_concept_ids: selectedConceptIds,
       selected_concept_ids: selectedConceptIds,
       concept_pre_evaluations: [],
       pre_evaluation: {
@@ -93,13 +136,17 @@ export function applyV3HumanConceptAuthority(
         reason: "human_concept_gate_is_authoritative_in_v3",
       },
       v3_ai_pre_evaluation_skipped: true,
+      v3_reject_only_prune_resolved: rejectOnlyPrune,
     },
-    stateReason: "v3_human_concept_gate_passed_direct_to_moments",
+    stateReason: rejectOnlyPrune
+      ? "v3_rejected_concepts_pruned_direct_to_moments"
+      : "v3_human_concept_gate_passed_direct_to_moments",
     eventType: "discovery.v3_concept_gate_passed",
     eventPayload: {
       ...(outcome.eventPayload ?? {}),
       approved_concept_ids: selectedConceptIds,
       ai_pre_evaluation_skipped: true,
+      reject_only_prune_resolved: rejectOnlyPrune,
     },
   };
 }
@@ -468,11 +515,10 @@ export const gameDiscoveryBatchV3: WorkflowTickHandler = async (context) => {
     };
   }
 
-  // The simplified creative front-end is complete. From this point v3 reuses the
-  // proven Stage 4 reliability shell: concept revise/reject semantics, gameplay moment,
-  // visual references, image gate, Kling, human video gate, assembly and recovery.
-  // Human approval is authoritative in v3, so the one legacy AI pre-evaluation edge is
-  // rewritten into a direct transition to gameplay-moment planning.
+  // The simplified creative front-end is complete. The Stage 4 shell remains the
+  // durable persistence/media engine, but v3 owns Human Concept Gate authority:
+  // Reject prunes, Revise creates a new reviewable version, and no legacy AI
+  // pre-evaluator or reject-only re-review is allowed in the active v3 graph.
   const downstream = await gameDiscoveryBatchStage4InspectedV1(context);
   return applyV3HumanConceptAuthority(context.currentStage, downstream);
 };
