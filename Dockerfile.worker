@@ -12,6 +12,11 @@ COPY lib/orchestrator ./lib/orchestrator
 COPY lib/models/kie ./lib/models/kie
 COPY lib/game-discovery ./lib/game-discovery
 COPY lib/research-intelligence ./lib/research-intelligence
+COPY lib/web ./lib/web
+COPY lib/agent/config.ts lib/agent/redaction.ts ./lib/agent/
+COPY lib/knowledge/extraction.ts ./lib/knowledge/extraction.ts
+COPY lib/logging/logger.ts ./lib/logging/logger.ts
+COPY lib/asset-ingest/url-safety.ts lib/asset-ingest/types.ts ./lib/asset-ingest/
 COPY worker ./worker
 RUN pnpm exec tsc -p tsconfig.worker.json
 
