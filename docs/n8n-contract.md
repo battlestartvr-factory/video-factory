@@ -1,90 +1,96 @@
-# n8n Contract
+# n8n Contract — legacy generic content lane
 
-## Next.js → n8n
+> **LEGACY / NOT CURRENT GAME DISCOVERY ORCHESTRATION.**  
+> The repository still contains generic `jobs/assets` and n8n-compatible code paths, so this contract is retained for compatibility. New Game Discovery v3 work must use the durable `factory_jobs` + `creative_runs` + worker/PGMQ architecture documented in `implementation-current.md`.
 
-**Endpoint:** `POST {N8N_WEBHOOK_URL}`
+## What this contract was for
 
-**Headers:**
+The original generic content-factory MVP used:
+
+```text
+Next.js -> signed n8n webhook
+n8n -> external providers
+n8n -> signed callback to Next.js
+Next.js -> jobs/assets state
 ```
+
+Related env variables still exist:
+
+- `N8N_WEBHOOK_URL`;
+- `N8N_WEBHOOK_SECRET`;
+- `N8N_FACTORY_BASE_URL`;
+- `FACTORY_WEBHOOK_SECRET`.
+
+Do not provision or extend n8n merely to implement Game Discovery v3.
+
+## Legacy outbound shape
+
+Historical endpoint:
+
+`POST {N8N_WEBHOOK_URL}`
+
+Historical headers:
+
+```text
 Content-Type: application/json
-X-Webhook-Timestamp: {unix}
+X-Webhook-Timestamp: <unix>
 X-Webhook-Signature: HMAC-SHA256(rawBody, N8N_WEBHOOK_SECRET)
-Idempotency-Key: {eventId}
+Idempotency-Key: <eventId>
 ```
 
-**Body:**
-```json
-{
-  "event": "job.created",
-  "eventId": "uuid",
-  "jobId": "uuid",
-  "projectId": "uuid",
-  "type": "short_video",
-  "mode": "balanced",
-  "language": "ru",
-  "targetPlatform": "youtube_shorts",
-  "brief": "...",
-  "source": {
-    "provider": "google_drive",
-    "externalId": "...",
-    "url": "..."
-  },
-  "callbackUrl": "https://your-app.vercel.app/api/webhooks/n8n/job-update",
-  "createdAt": "2026-03-11T12:00:00.000Z"
-}
+Typical body carried a generic `job.created` event with project/job/type/mode/source/callback fields.
+
+## Legacy callback
+
+Historical callback endpoint:
+
+`POST /api/webhooks/n8n/job-update`
+
+with the same HMAC scheme and `job.updated` state/progress/assets/usage/error payload.
+
+The old generic status graph was:
+
+```text
+draft -> queued
+queued -> processing | cancelled | failed
+processing -> review | completed | cancelled | failed
+review -> processing | completed | cancelled
+failed -> queued (retry only)
+completed/cancelled -> terminal
 ```
 
-## n8n → Next.js
+## Current Discovery difference
 
-**Endpoint:** `POST /api/webhooks/n8n/job-update`
+Current co-op Game Discovery does not depend on the n8n callback graph.
 
-**Headers:** same HMAC scheme
+It uses:
 
-**Body:**
-```json
-{
-  "event": "job.updated",
-  "eventId": "uuid",
-  "jobId": "uuid",
-  "status": "processing",
-  "progress": 45,
-  "stage": "Генерация раскадровки",
-  "message": "Создано 6 сцен",
-  "n8nExecutionId": "12345",
-  "assets": [],
-  "usage": [],
-  "error": null,
-  "occurredAt": "2026-03-11T12:05:00.000Z"
-}
+```text
+chat
+ -> Universal Agent intent routing
+ -> start_game_discovery
+ -> factory_jobs / creative_runs
+ -> PGMQ
+ -> core/research workers
+ -> durable workflow events
+ -> KIE/Safe Fetch/media providers
+ -> Human Gates
 ```
 
-## Status transitions
+DB state is authoritative; queue delivery is only a wake-up.
 
-```
-draft → queued
-queued → processing | cancelled | failed
-processing → review | completed | cancelled | failed
-review → processing | completed | cancelled
-failed → queued (retry only)
-completed/cancelled → terminal
-```
+## If maintaining a legacy n8n path
 
-## Idempotency
+Preserve:
 
-Повторный `eventId` возвращает `{ ok: true, data: { duplicate: true } }` без дублей.
+- HMAC verification;
+- idempotency by `eventId`;
+- server-side secrets only;
+- safe terminal transitions;
+- no secret leakage in callback errors.
 
-## Test curl (без секретов)
+Use the current production domain `https://battlestart-factory.duckdns.org` for any intentionally maintained callback configuration, not stale `*.vercel.app` examples.
 
-```bash
-# Health check
-curl https://your-app.vercel.app/api/health
+## Future decision
 
-# Unsigned callback rejected in production
-curl -X POST https://your-app.vercel.app/api/webhooks/n8n/job-update \
-  -H "Content-Type: application/json" \
-  -d '{"event":"job.updated","eventId":"00000000-0000-4000-8000-000000000001","jobId":"...","status":"processing","occurredAt":"2026-03-11T12:00:00.000Z"}'
-```
-
-## Retries
-
-При недоступности n8n задача помечается failed с кодом `N8N_DISPATCH_FAILED`. Пользователь использует «Повторить».
+If generic scripts/posts/dev-diary production is revived as a first-class product lane, decide separately whether to keep n8n or migrate it onto the durable worker substrate. Do not conflate that decision with the Game Discovery architecture.
