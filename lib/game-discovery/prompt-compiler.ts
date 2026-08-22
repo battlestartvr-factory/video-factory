@@ -16,7 +16,7 @@ import {
   type ShotSpecV1,
 } from "./schemas";
 
-export const GAMEPLAY_PROMPT_COMPILER_VERSION = "gameplay_prompt_compiler_v5";
+export const GAMEPLAY_PROMPT_COMPILER_VERSION = "gameplay_prompt_compiler_v6";
 const GAMEPLAY_PROMPT_SCHEMA_MAX_CHARS = 8_000;
 const GAMEPLAY_PROMPT_TARGET_MAX_CHARS = 7_200;
 
@@ -188,9 +188,12 @@ export function compileGameplayPromptPlan(input: {
         `${beat.startSec.toFixed(1)}–${beat.endSec.toFixed(1)} sec — ${clipText(beat.description, 300)}`,
     )
     .join("\n");
+  const durationLabel = Number.isInteger(motionPlan.durationSec)
+    ? String(motionPlan.durationSec)
+    : motionPlan.durationSec.toFixed(1);
   const videoPrompt = assertPromptBudget(
     "PROMPT_COMPILER_VIDEO",
-    `Animate the approved gameplay reference still into one continuous 5-second capture of one active gameplay session. Preserve character identities, positions, environment, art direction, interactable objects, meaningful HUD/affordances, and the approved player-camera composition.\n\nHARD CAMERA CONTRACT:\ncamera remains physically attached to the playable character for the entire clip\nNo cinematic reframing, camera orbit, dolly shot, cutaway, dramatic zoom, detached camera, spectator movement, or automatic hero framing.\n\nPLAYABLE 5-SECOND BEAT:\n${beatBlock}\n\nCONTROLLABLE PLAYER INPUT:\n${clipText(authenticity.playerInput.input, 220)}\n\nACTION:\n${clipText(authenticity.playerAction.action, 300)}\n\nWORLD RESPONSE CAUSED BY THAT ACTION:\n${clipText(authenticity.worldResponse.response, 360)}\n\nTEAMMATE DEPENDENCY:\n${clipText(authenticity.coop.teammateFunction, 260)}\n${clipText(authenticity.coop.visualEvidence, 280)}\n\nGAMEPLAY MOMENT HYPOTHESIS:\n${clipText(moment.hypothesis, 280)}\n\nHUMAN FEEDBACK MEMORY — APPLY THIS TO THE REGENERATION:\n${humanFeedbackBlock}\n\nVISIBLE EVIDENCE THAT MUST REMAIN LEGIBLE:\n${evidenceBlock(shot)}\n\nCAMERA:\n${clipText(shot.camera, 320)}\n\nThe result must plausibly be five seconds a player could obtain by pressing Record while actually playing. Do not introduce a new mechanic, location, camera cut, trailer montage, unrelated spectacle, or animation unrelated to player input/gameplay state. Human feedback above is authoritative for what to preserve or correct; never replace an approved creative choice merely because another aesthetic option seems cleaner.`,
+    `Animate the approved gameplay reference still into one continuous ${durationLabel}-second capture of one active gameplay session. Preserve character identities, positions, environment, art direction, interactable objects, meaningful HUD/affordances, and the approved player-camera composition.\n\nHARD CAMERA CONTRACT:\ncamera remains physically attached to the playable character for the entire clip\nNo cinematic reframing, camera orbit, dolly shot, cutaway, dramatic zoom, detached camera, spectator movement, or automatic hero framing.\n\nPLAYABLE ${durationLabel}-SECOND BEAT:\n${beatBlock}\n\nCONTROLLABLE PLAYER INPUT:\n${clipText(authenticity.playerInput.input, 220)}\n\nACTION:\n${clipText(authenticity.playerAction.action, 300)}\n\nWORLD RESPONSE CAUSED BY THAT ACTION:\n${clipText(authenticity.worldResponse.response, 360)}\n\nTEAMMATE DEPENDENCY:\n${clipText(authenticity.coop.teammateFunction, 260)}\n${clipText(authenticity.coop.visualEvidence, 280)}\n\nGAMEPLAY MOMENT HYPOTHESIS:\n${clipText(moment.hypothesis, 280)}\n\nHUMAN FEEDBACK MEMORY — APPLY THIS TO THE REGENERATION:\n${humanFeedbackBlock}\n\nVISIBLE EVIDENCE THAT MUST REMAIN LEGIBLE:\n${evidenceBlock(shot)}\n\nCAMERA:\n${clipText(shot.camera, 320)}\n\nThe result must plausibly be ${durationLabel} seconds a player could obtain by pressing Record while actually playing. Do not introduce a new mechanic, location, camera cut, trailer montage, unrelated spectacle, or animation unrelated to player input/gameplay state. Human feedback above is authoritative for what to preserve or correct; never replace an approved creative choice merely because another aesthetic option seems cleaner.`,
   );
 
   const compilerInputsHash = stableHash({
