@@ -50,6 +50,7 @@ function services(input: {
     });
   const recordSubmit = vi.fn().mockResolvedValue(undefined);
   const recordSubmitFailure = vi.fn().mockResolvedValue(undefined);
+  const recordRetryableSubmitFailure = vi.fn().mockResolvedValue(undefined);
   const recordStatus = vi.fn().mockResolvedValue({ status: "succeeded", error: null });
   const markProcessing = vi.fn().mockResolvedValue(undefined);
   const complete = vi.fn().mockResolvedValue(undefined);
@@ -78,6 +79,7 @@ function services(input: {
     prepare,
     recordSubmit,
     recordSubmitFailure,
+    recordRetryableSubmitFailure,
     recordStatus,
   } as unknown as ProviderTaskRepository;
 
@@ -103,6 +105,7 @@ function services(input: {
       prepare,
       recordSubmit,
       recordSubmitFailure,
+      recordRetryableSubmitFailure,
       recordStatus,
       markProcessing,
       complete,
@@ -227,6 +230,7 @@ describe("generation_image@1 lifecycle", () => {
     expect(outcome.state?.external_task_id).toBeNull();
     expect(outcome.state?.ambiguous_submit).toBe(true);
     expect(setup.mocks.recordSubmitFailure).not.toHaveBeenCalled();
+    expect(setup.mocks.recordRetryableSubmitFailure).not.toHaveBeenCalled();
   });
 
   it("reconciles a persisted provider task to generation completion without another submit", async () => {
@@ -249,6 +253,115 @@ describe("generation_image@1 lifecycle", () => {
     expect(submit).not.toHaveBeenCalled();
     expect(setup.mocks.recordStatus).toHaveBeenCalledOnce();
     expect(setup.mocks.complete).toHaveBeenCalledOnce();
+  });
+
+  it("schedules a fresh provider attempt after a terminal HTTP 500-style failure", async () => {
+    const first = services({
+      getTask: vi.fn().mockResolvedValue({
+        taskId: "kie-old",
+        model: "gpt-image-2-text-to-image",
+        state: "fail",
+        resultUrls: [],
+        failCode: "500",
+        failMessage: "Internal Error",
+        progress: 100,
+        creditsConsumed: 10,
+        payload: { code: 200, data: { state: "fail", failCode: "500" } },
+      }),
+    });
+
+    const retryScheduled = await generationImageV1(
+      context(first.value, {
+        generation_id: "gen-1",
+        variant_index: 0,
+        outputs: [],
+        provider_task_id: "pt-old",
+        external_task_id: "kie-old",
+      }),
+    );
+
+    expect(retryScheduled.status).toBe("waiting");
+    expect(retryScheduled.state?.provider_task_id).toBeNull();
+    expect(retryScheduled.state?.external_task_id).toBeNull();
+    expect(retryScheduled.state?.provider_retry_count).toBe(1);
+    expect(retryScheduled.eventType).toBe("provider.retry_scheduled");
+    expect(first.mocks.fail).not.toHaveBeenCalled();
+
+    const prepare = vi.fn().mockResolvedValue({
+      providerTaskId: "pt-retry-1",
+      stageId: "stage-retry-1",
+      status: "submitting",
+      externalTaskId: null,
+      callbackToken: "token-retry-1",
+      submissionAttempts: 1,
+      shouldSubmit: true,
+    });
+    const second = services({ prepare });
+    const retrySubmitted = await generationImageV1(
+      context(second.value, retryScheduled.state ?? {}),
+    );
+
+    expect(retrySubmitted.status).toBe("waiting");
+    expect(retrySubmitted.state?.provider_task_id).toBe("pt-retry-1");
+    expect(retrySubmitted.state?.external_task_id).toBe("kie-1");
+    expect(prepare).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stageAttempt: 11,
+        submissionKey: "generation:gen-1:image:v1:0:retry:1",
+      }),
+    );
+    expect(second.mocks.submit).toHaveBeenCalledOnce();
+  });
+
+  it("retries a definite non-ambiguous 429 submit rejection without failing the generation", async () => {
+    const submit = vi.fn().mockRejectedValue(
+      new KieMarketTaskError("KIE task creation failed: rate limited", true, false, 429, "Too Many Requests"),
+    );
+    const setup = services({ submit });
+
+    const outcome = await generationImageV1(context(setup.value));
+
+    expect(outcome.status).toBe("waiting");
+    expect(outcome.state?.provider_retry_count).toBe(1);
+    expect(outcome.state?.provider_task_id).toBeNull();
+    expect(setup.mocks.recordRetryableSubmitFailure).toHaveBeenCalledOnce();
+    expect(setup.mocks.recordSubmitFailure).not.toHaveBeenCalled();
+    expect(setup.mocks.fail).not.toHaveBeenCalled();
+  });
+
+  it("stops after two provider retries and fails the generation on a third transient failure", async () => {
+    const setup = services({
+      getTask: vi.fn().mockResolvedValue({
+        taskId: "kie-retry-2",
+        model: "gpt-image-2-text-to-image",
+        state: "fail",
+        resultUrls: [],
+        failCode: "503",
+        failMessage: "Service Unavailable",
+        progress: 100,
+        creditsConsumed: 10,
+        payload: { code: 200, data: { state: "fail", failCode: "503" } },
+      }),
+    });
+
+    const outcome = await generationImageV1(
+      context(setup.value, {
+        generation_id: "gen-1",
+        variant_index: 0,
+        outputs: [],
+        provider_task_id: "pt-retry-2",
+        external_task_id: "kie-retry-2",
+        provider_retry_count: 2,
+      }),
+    );
+
+    expect(outcome.status).toBe("failed");
+    expect(setup.mocks.fail).toHaveBeenCalledWith(
+      expect.objectContaining({ errorCode: "503" }),
+    );
+    expect(outcome.error?.details).toEqual(
+      expect.objectContaining({ provider_retry_count: 2, max_provider_retries: 2 }),
+    );
   });
 
   it("registers all durable workflows", () => {
