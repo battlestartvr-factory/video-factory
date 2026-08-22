@@ -24,6 +24,8 @@ function setupContext(overrides: Partial<WorkflowTickContext> = {}) {
     state: { generation_id: "generation-1" },
     retryCount: 0,
     signal: new AbortController().signal,
+    workerId: "worker-test",
+    leaseToken: "lease-test",
     services: {
       generationImages: {
         getGeneration: mocks.getGeneration,
