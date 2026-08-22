@@ -200,7 +200,7 @@ describe("Stage 4 token economy and visual approval planning", () => {
     expect(plan.videoPrompt).toContain("continuous 5-second capture");
     expect(plan.negativeConstraints).toContain("wide cinematic establishing shot");
     expect(plan.metadata).toMatchObject({
-      compiler_version: "gameplay_prompt_compiler_v6",
+      compiler_version: "gameplay_prompt_compiler_v7_h3",
       image_model: "gpt-image-2",
       reference_approval_required: true,
       human_feedback_applied: true,

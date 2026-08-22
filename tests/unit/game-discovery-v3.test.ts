@@ -231,8 +231,8 @@ describe("Game Discovery v3 simplified graph", () => {
     expect(outcome.error?.code).toBe("V3_HUMAN_APPROVAL_SELECTION_MISSING");
   });
 
-  it("snaps requested gameplay duration to Kling 3 supported values", () => {
-    expect(gameplayDurationSeconds(objective())).toBe(5);
+  it("uses 10 seconds by default and keeps shared H3/Kling fallback duration buckets", () => {
+    expect(gameplayDurationSeconds(objective())).toBe(10);
     expect(gameplayDurationSeconds(objective(7))).toBe(5);
     expect(gameplayDurationSeconds(objective(8))).toBe(10);
     expect(gameplayDurationSeconds(objective(12))).toBe(10);

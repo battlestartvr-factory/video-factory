@@ -17,6 +17,8 @@ import {
 
 const shotBatchSchema = z.object({ shots: z.array(shotSpecV1Schema).min(1).max(4) }).strict();
 
+export const PRIMARY_GAMEPLAY_VIDEO_MODEL = "minimax-h3" as const;
+
 type DiscoveryImageModel = NonNullable<ShotSpecV1["generationPlan"]["imageModel"]>;
 
 export interface ShotPlannerLlm {
@@ -75,6 +77,30 @@ export function preferredDiscoveryImageModel(objective: DiscoveryObjectiveSpecV1
   return "gpt-image-2";
 }
 
+function normalizeGenerationPolicy(
+  shot: ShotSpecV1,
+  durationSec: number,
+  imageModel: DiscoveryImageModel,
+): ShotSpecV1 {
+  // Provider routing is factory policy, not a creative decision. The LLM may describe the
+  // shot, but it cannot silently choose an older video provider or stale duration. This also
+  // avoids paying for a stronger repair pass when the creative shot is valid and only the
+  // provider-policy fields drifted.
+  return shotSpecV1Schema.parse({
+    ...shot,
+    durationSec,
+    generationPlan: {
+      ...shot.generationPlan,
+      keyframeRequired: true,
+      imageModel,
+      videoModel: PRIMARY_GAMEPLAY_VIDEO_MODEL,
+      videoMode: "image-to-video",
+      aspectRatio: "16:9",
+      durationSec,
+    },
+  });
+}
+
 function authenticityInstructions(): string {
   return `Every shot.metadata MUST contain gameplayAuthenticityPlan with this exact typed evidence contract:\n{
   "schema":"gameplay_authenticity_plan","version":1,"shotId":"<same shotId>","momentId":"<same momentId>",
@@ -92,7 +118,7 @@ Do NOT invent a decorative HUD as an affordance. If a UI element does not carry 
 }
 
 function schemaInstructions(durationSec: number, imageModel: DiscoveryImageModel): string {
-  return `Return ONLY JSON {"shots":[...]}. Each shot must satisfy Gameplay Shot v1 exactly:\n- schema:"gameplay_shot", version:1, shotId, momentId, order:0\n- durationSec:${durationSec}\n- purpose:"mechanic"|"failure"|"payoff" (prefer mechanic/failure for first evidence)\n- actors:string[] with all mechanically relevant player roles visible or represented inside the playable frame\n- action, camera, environment\n- continuity:{preserve:[]}\n- expectedEvidence:string[]\n- generationPlan:{keyframeRequired:true,imageModel:"${imageModel}",videoModel:"kling-3",videoMode:"image-to-video",aspectRatio:"16:9",durationSec:${durationSec}}\n- metadata.gameplayAuthenticityPlan is REQUIRED.\nFor each moment, copy EVERY string from moment.requiredVisualEvidence verbatim into shot.expectedEvidence. Produce exactly one shot per moment.\n\n${authenticityInstructions()}`;
+  return `Return ONLY JSON {"shots":[...]}. Each shot must satisfy Gameplay Shot v1 exactly:\n- schema:"gameplay_shot", version:1, shotId, momentId, order:0\n- durationSec:${durationSec}\n- purpose:"mechanic"|"failure"|"payoff" (prefer mechanic/failure for first evidence)\n- actors:string[] with all mechanically relevant player roles visible or represented inside the playable frame\n- action, camera, environment\n- continuity:{preserve:[]}\n- expectedEvidence:string[]\n- generationPlan:{keyframeRequired:true,imageModel:"${imageModel}",videoModel:"${PRIMARY_GAMEPLAY_VIDEO_MODEL}",videoMode:"image-to-video",aspectRatio:"16:9",durationSec:${durationSec}}\n- metadata.gameplayAuthenticityPlan is REQUIRED.\nFor each moment, copy EVERY string from moment.requiredVisualEvidence verbatim into shot.expectedEvidence. Produce exactly one shot per moment.\n\n${authenticityInstructions()}`;
 }
 
 function prompt(input: {
@@ -103,7 +129,7 @@ function prompt(input: {
   durationSec: number;
   imageModel: DiscoveryImageModel;
 }): string {
-  return `Plan one ${input.durationSec}-second fake-gameplay evidence shot for each selected gameplay moment. This is not a trailer shot. It must be plausible as a frame recorded by a person actively playing the game.\n\nDISCOVERY OBJECTIVE:\n${JSON.stringify(input.objective, null, 2)}\n\nSELECTED CONCEPTS:\n${JSON.stringify(input.concepts, null, 2)}\n\nGAMEPLAY MOMENTS:\n${JSON.stringify(input.moments, null, 2)}\n\nPERSISTED HUMAN FEEDBACK MEMORY:\n${JSON.stringify(input.feedback, null, 2)}\n\nRules:\n- source gameplay is always composed as a normal widescreen 16:9 desktop PC capture, like a 1920x1080 gaming monitor; never compose the generated gameplay source for portrait/mobile/TikTok;\n- choose an explicit controllable player; the camera belongs to that player's gameplay viewpoint;\n- default to first-person, third-person follow, or over-the-shoulder; top-down/fixed are allowed only when actually justified by the game design;\n- forbid cinematic, spectator, drone, marketing-wide, detached observer framing;\n- expose a visible PLAYER INPUT -> PLAYER ACTION -> WORLD RESPONSE chain;\n- include at least one meaningful gameplay affordance such as hands, held tool, crosshair, interaction outline, meter, hotbar, contextual prompt, or object state;\n- show why the teammate exists without pulling the camera into a wide marketing composition;\n- if physics affects one object/person but not another, show the physical reason for the exception;\n- show all mechanically necessary player roles or their direct visible evidence;\n- the visible consequence must fit inside one ${input.durationSec}s shot;\n- preserve the game concept; do not invent a prettier replacement mechanic;\n- obey mustShow and mustAvoid feedback; explicit previous error tags are warnings against repeating rejected patterns;\n- expectedEvidence must include every requiredVisualEvidence item verbatim so coverage is mechanically auditable;\n- use ${input.imageModel} for the 16:9 gameplay keyframe and Kling 3 image-to-video for motion.\n\n${schemaInstructions(input.durationSec, input.imageModel)}`;
+  return `Plan one ${input.durationSec}-second fake-gameplay evidence shot for each selected gameplay moment. This is not a trailer shot. It must be plausible as a frame recorded by a person actively playing the game.\n\nDISCOVERY OBJECTIVE:\n${JSON.stringify(input.objective, null, 2)}\n\nSELECTED CONCEPTS:\n${JSON.stringify(input.concepts, null, 2)}\n\nGAMEPLAY MOMENTS:\n${JSON.stringify(input.moments, null, 2)}\n\nPERSISTED HUMAN FEEDBACK MEMORY:\n${JSON.stringify(input.feedback, null, 2)}\n\nRules:\n- source gameplay is always composed as a normal widescreen 16:9 desktop PC capture, like a 1920x1080 gaming monitor; never compose the generated gameplay source for portrait/mobile/TikTok;\n- choose an explicit controllable player; the camera belongs to that player's gameplay viewpoint;\n- default to first-person, third-person follow, or over-the-shoulder; top-down/fixed are allowed only when actually justified by the game design;\n- forbid cinematic, spectator, drone, marketing-wide, detached observer framing;\n- expose a visible PLAYER INPUT -> PLAYER ACTION -> WORLD RESPONSE chain;\n- include at least one meaningful gameplay affordance such as hands, held tool, crosshair, interaction outline, meter, hotbar, contextual prompt, or object state;\n- show why the teammate exists without pulling the camera into a wide marketing composition;\n- if physics affects one object/person but not another, show the physical reason for the exception;\n- show all mechanically necessary player roles or their direct visible evidence;\n- the visible consequence must fit inside one ${input.durationSec}s shot;\n- preserve the game concept; do not invent a prettier replacement mechanic;\n- obey mustShow and mustAvoid feedback; explicit previous error tags are warnings against repeating rejected patterns;\n- expectedEvidence must include every requiredVisualEvidence item verbatim so coverage is mechanically auditable;\n- use ${input.imageModel} for the 16:9 gameplay keyframe and MiniMax H3 / Hailuo 03 image-to-video through KIE for motion. Kling 3 remains a supported fallback but is not the primary generation plan.\n\n${schemaInstructions(input.durationSec, input.imageModel)}`;
 }
 
 function validateCoverage(
@@ -136,7 +162,7 @@ function validateCoverage(
       Math.abs(shot.generationPlan.durationSec - durationSec) > 0.001 ||
       shot.generationPlan.keyframeRequired !== true ||
       shot.generationPlan.imageModel !== imageModel ||
-      shot.generationPlan.videoModel !== "kling-3" ||
+      shot.generationPlan.videoModel !== PRIMARY_GAMEPLAY_VIDEO_MODEL ||
       shot.generationPlan.videoMode !== "image-to-video" ||
       shot.generationPlan.aspectRatio !== "16:9"
     ) {
@@ -193,13 +219,13 @@ async function generateAndParse(input: {
   addUsage(input.usage, response);
 
   try {
-    return parse(response.text);
+    return parse(response.text).map((shot) => normalizeGenerationPolicy(shot, input.durationSec, input.imageModel));
   } catch (firstError) {
     const repairPolicy = getDiscoveryLlmPolicy("schema_repair");
     const repair = await input.llm.generate({
       model: input.repairModel,
       system: "Repair JSON/schema only. Preserve the shot plan semantics. Return JSON only.",
-      prompt: `Repair the following shot response into valid ShotSpec v1 objects including the required gameplayAuthenticityPlan evidence. Keep durationSec=${input.durationSec}, imageModel=${input.imageModel}, videoModel=kling-3 and aspectRatio=16:9. Do not redesign the shots.\n\nINVALID RESPONSE:\n${response.text}\n\n${schemaInstructions(input.durationSec, input.imageModel)}`,
+      prompt: `Repair the following shot response into valid ShotSpec v1 objects including the required gameplayAuthenticityPlan evidence. Keep durationSec=${input.durationSec}, imageModel=${input.imageModel}, videoModel=${PRIMARY_GAMEPLAY_VIDEO_MODEL} and aspectRatio=16:9. Do not redesign the shots.\n\nINVALID RESPONSE:\n${response.text}\n\n${schemaInstructions(input.durationSec, input.imageModel)}`,
       maxTokens: repairPolicy.maxOutputTokens,
       thinking: false,
       signal: input.signal,
@@ -207,7 +233,7 @@ async function generateAndParse(input: {
     input.hashes.push(hash(repair.text));
     addUsage(input.usage, repair);
     try {
-      return parse(repair.text);
+      return parse(repair.text).map((shot) => normalizeGenerationPolicy(shot, input.durationSec, input.imageModel));
     } catch (repairError) {
       throw new Error(
         `SHOT_PLANNER_SCHEMA_INVALID: ${repairError instanceof Error ? repairError.message : String(repairError)}; first=${firstError instanceof Error ? firstError.message : String(firstError)}`,

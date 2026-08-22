@@ -56,13 +56,18 @@ function addUsage(
   total.totalTokens += response.usage.totalTokens ?? 0;
 }
 
-export const KLING_GAMEPLAY_DURATIONS = [5, 10, 15] as const;
-export type KlingGameplayDuration = (typeof KLING_GAMEPLAY_DURATIONS)[number];
+// Hailuo 03 accepts 4-15s, while Kling 3 remains our fallback and accepts 5/10/15s.
+// Keep a shared factory duration bucket so one planned gameplay moment can move between
+// the primary H3 route and the Kling fallback without changing its experiment semantics.
+export const GAMEPLAY_VIDEO_DURATIONS = [5, 10, 15] as const;
+export const KLING_GAMEPLAY_DURATIONS = GAMEPLAY_VIDEO_DURATIONS;
+export type GameplayVideoDuration = (typeof GAMEPLAY_VIDEO_DURATIONS)[number];
+export type KlingGameplayDuration = GameplayVideoDuration;
 
-export function gameplayDurationSeconds(objective: DiscoveryObjectiveSpecV1): KlingGameplayDuration {
-  const configured = Number(objective.metadata?.gameplayDurationSec ?? 5);
-  if (!Number.isFinite(configured)) return 5;
-  return KLING_GAMEPLAY_DURATIONS.reduce((best, candidate) =>
+export function gameplayDurationSeconds(objective: DiscoveryObjectiveSpecV1): GameplayVideoDuration {
+  const configured = Number(objective.metadata?.gameplayDurationSec ?? 10);
+  if (!Number.isFinite(configured)) return 10;
+  return GAMEPLAY_VIDEO_DURATIONS.reduce((best, candidate) =>
     Math.abs(candidate - configured) < Math.abs(best - configured) ? candidate : best,
   );
 }

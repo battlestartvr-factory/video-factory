@@ -9,6 +9,7 @@ function read(relativePath: string): string {
 const v3Migration = read("supabase/migrations/20260821223000_game_discovery_v3_simplified_graph.sql");
 const durationMigration = read("supabase/migrations/20260822062000_stage4_gameplay_duration_contract.sql");
 const progressRegexMigration = read("supabase/migrations/20260822090000_fix_research_progress_event_regex.sql");
+const h3Migration = read("supabase/migrations/20260822170000_stage4_minimax_h3_primary_video.sql");
 
 describe("Game Discovery v3 database migration contract", () => {
   it("admits workflow version 3 with exactly three concepts and a single research pack", () => {
@@ -37,8 +38,17 @@ describe("Game Discovery v3 database migration contract", () => {
     expect(durationMigration).toContain("'mode','image-to-video'");
   });
 
+  it("registers H3 as the primary KIE gameplay video route while keeping Kling enabled", () => {
+    expect(h3Migration).toContain("'minimax-h3'");
+    expect(h3Migration).toContain("'minimax/hailuo-03'");
+    expect(h3Migration).toContain("'default_duration_sec', 10");
+    expect(h3Migration).toContain("model = 'kling-3'");
+    expect(h3Migration).toContain("schema_version='20260822170000'");
+  });
+
   it("advances the deployment schema fence to the newest migration", () => {
-    expect(read("supabase/schema-contract.txt").trim()).toBe("20260822090000");
     expect(progressRegexMigration).toContain("schema_version = '20260822090000'");
+    expect(read("supabase/schema-contract.txt").trim()).toBe("20260822170000");
+    expect(h3Migration).toContain("schema_version='20260822170000'");
   });
 });

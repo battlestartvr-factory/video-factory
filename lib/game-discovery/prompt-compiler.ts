@@ -16,9 +16,10 @@ import {
   type ShotSpecV1,
 } from "./schemas";
 
-export const GAMEPLAY_PROMPT_COMPILER_VERSION = "gameplay_prompt_compiler_v6";
+export const GAMEPLAY_PROMPT_COMPILER_VERSION = "gameplay_prompt_compiler_v7_h3";
 const GAMEPLAY_PROMPT_SCHEMA_MAX_CHARS = 8_000;
 const GAMEPLAY_PROMPT_TARGET_MAX_CHARS = 7_200;
+const MINIMAX_H3_PROMPT_MAX_CHARS = 4_800;
 
 function stableHash(value: unknown): string {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex");
@@ -84,6 +85,13 @@ function assertPromptBudget(label: string, value: string): string {
   return value;
 }
 
+function assertProviderPromptBudget(label: string, value: string, maxChars: number): string {
+  if (value.length > maxChars) {
+    throw new Error(`${label}_BUDGET_EXCEEDED:${value.length}:${maxChars}`);
+  }
+  return value;
+}
+
 export function compileGameplayPromptPlan(input: {
   concept: CoopGameConceptSpecV1;
   moment: GameplayMomentSpecV1;
@@ -122,6 +130,9 @@ export function compileGameplayPromptPlan(input: {
   const imageHumanMustShow = clippedList(feedback.mustShow, { maxItems: 3, maxChars: 100 });
   const imageHumanMustAvoid = clippedList(feedback.mustAvoid, { maxItems: 3, maxChars: 100 });
   const imageHumanErrorTags = clippedList(feedback.errorTags, { maxItems: 3, maxChars: 70 });
+  const h3HumanMustShow = clippedList(feedback.mustShow, { maxItems: 3, maxChars: 120 });
+  const h3HumanMustAvoid = clippedList(feedback.mustAvoid, { maxItems: 3, maxChars: 120 });
+  const h3HumanErrorTags = clippedList(feedback.errorTags, { maxItems: 3, maxChars: 70 });
   const mustShow = clippedList(
     [...feedback.mustShow, ...shot.expectedEvidence, ...moment.requiredVisualEvidence],
     { maxItems: 5, maxChars: 120 },
@@ -155,6 +166,11 @@ export function compileGameplayPromptPlan(input: {
     imageHumanMustAvoid.length ? `Avoid: ${imageHumanMustAvoid.join(" | ")}` : null,
     imageHumanErrorTags.length ? `Rejected tags: ${imageHumanErrorTags.join(", ")}` : null,
   ].filter((item): item is string => Boolean(item)).join("\n") || "No additional human feedback.";
+  const h3HumanFeedbackBlock = [
+    h3HumanMustShow.length ? `Keep visible: ${h3HumanMustShow.join(" | ")}` : null,
+    h3HumanMustAvoid.length ? `Avoid: ${h3HumanMustAvoid.join(" | ")}` : null,
+    h3HumanErrorTags.length ? `Rejected patterns: ${h3HumanErrorTags.join(", ")}` : null,
+  ].filter((item): item is string => Boolean(item)).join("\n") || "No extra human correction.";
   const referenceBlock = compactGameplayReferenceInstructionBlock(gameplayReferences);
   const affordanceBlock = clipText(
     authenticity.gameplayAffordances
@@ -191,10 +207,14 @@ export function compileGameplayPromptPlan(input: {
   const durationLabel = Number.isInteger(motionPlan.durationSec)
     ? String(motionPlan.durationSec)
     : motionPlan.durationSec.toFixed(1);
-  const videoPrompt = assertPromptBudget(
-    "PROMPT_COMPILER_VIDEO",
-    `Animate the approved gameplay reference still into one continuous ${durationLabel}-second capture of one active gameplay session. Preserve character identities, positions, environment, art direction, interactable objects, meaningful HUD/affordances, and the approved player-camera composition.\n\nHARD CAMERA CONTRACT:\ncamera remains physically attached to the playable character for the entire clip\nNo cinematic reframing, camera orbit, dolly shot, cutaway, dramatic zoom, detached camera, spectator movement, or automatic hero framing.\n\nPLAYABLE ${durationLabel}-SECOND BEAT:\n${beatBlock}\n\nCONTROLLABLE PLAYER INPUT:\n${clipText(authenticity.playerInput.input, 220)}\n\nACTION:\n${clipText(authenticity.playerAction.action, 300)}\n\nWORLD RESPONSE CAUSED BY THAT ACTION:\n${clipText(authenticity.worldResponse.response, 360)}\n\nTEAMMATE DEPENDENCY:\n${clipText(authenticity.coop.teammateFunction, 260)}\n${clipText(authenticity.coop.visualEvidence, 280)}\n\nGAMEPLAY MOMENT HYPOTHESIS:\n${clipText(moment.hypothesis, 280)}\n\nHUMAN FEEDBACK MEMORY — APPLY THIS TO THE REGENERATION:\n${humanFeedbackBlock}\n\nVISIBLE EVIDENCE THAT MUST REMAIN LEGIBLE:\n${evidenceBlock(shot)}\n\nCAMERA:\n${clipText(shot.camera, 320)}\n\nThe result must plausibly be ${durationLabel} seconds a player could obtain by pressing Record while actually playing. Do not introduce a new mechanic, location, camera cut, trailer montage, unrelated spectacle, or animation unrelated to player input/gameplay state. Human feedback above is authoritative for what to preserve or correct; never replace an approved creative choice merely because another aesthetic option seems cleaner.`,
-  );
+
+  const genericVideoPrompt = `Animate the approved gameplay reference still into one continuous ${durationLabel}-second capture of one active gameplay session. Preserve character identities, positions, environment, art direction, interactable objects, meaningful HUD/affordances, and the approved player-camera composition.\n\nHARD CAMERA CONTRACT:\ncamera remains physically attached to the playable character for the entire clip\nNo cinematic reframing, camera orbit, dolly shot, cutaway, dramatic zoom, detached camera, spectator movement, or automatic hero framing.\n\nPLAYABLE ${durationLabel}-SECOND BEAT:\n${beatBlock}\n\nCONTROLLABLE PLAYER INPUT:\n${clipText(authenticity.playerInput.input, 220)}\n\nACTION:\n${clipText(authenticity.playerAction.action, 300)}\n\nWORLD RESPONSE CAUSED BY THAT ACTION:\n${clipText(authenticity.worldResponse.response, 360)}\n\nTEAMMATE DEPENDENCY:\n${clipText(authenticity.coop.teammateFunction, 260)}\n${clipText(authenticity.coop.visualEvidence, 280)}\n\nGAMEPLAY MOMENT HYPOTHESIS:\n${clipText(moment.hypothesis, 280)}\n\nHUMAN FEEDBACK MEMORY — APPLY THIS TO THE REGENERATION:\n${humanFeedbackBlock}\n\nVISIBLE EVIDENCE THAT MUST REMAIN LEGIBLE:\n${evidenceBlock(shot)}\n\nCAMERA:\n${clipText(shot.camera, 320)}\n\nThe result must plausibly be ${durationLabel} seconds a player could obtain by pressing Record while actually playing. Do not introduce a new mechanic, location, camera cut, trailer montage, unrelated spectacle, or animation unrelated to player input/gameplay state. Human feedback above is authoritative for what to preserve or correct; never replace an approved creative choice merely because another aesthetic option seems cleaner.`;
+
+  const h3VideoPrompt = `AUTHENTIC PC CO-OP GAMEPLAY — IMAGE TO VIDEO.\nUse the supplied approved gameplay image as the exact frame-0 continuity anchor. Generate ONE continuous real-time ${durationLabel}-second gameplay take. This is recorded play, not a trailer, cutscene, showcase, spectator replay, or cinematic shot.\n\nFRAME-0 CONTINUITY LOCK:\nPreserve the same character identities, clothing, tools, interactable objects, level geometry, materials, lighting, art direction, camera viewpoint, and existing meaningful gameplay UI/affordances. Begin from the supplied image without redesigning the scene or inventing new actors, props, UI, mechanics, or locations.\n\nTIMELINE — FOLLOW IN ORDER ACROSS THE FULL ${durationLabel} SECONDS:\n${beatBlock}\n\nCAUSAL GAMEPLAY CHAIN:\nPlayer input: ${clipText(authenticity.playerInput.input, 170)}\nVisible input evidence: ${clipText(authenticity.playerInput.visibleEvidence, 180)}\nPlayer action: ${clipText(authenticity.playerAction.action, 210)}\nTarget: ${clipText(authenticity.playerAction.target, 150)}\nImmediate world response caused by that action: ${clipText(authenticity.worldResponse.response, 250)}\nTeammate function: ${clipText(authenticity.coop.teammateFunction, 190)}\nDependency visible as: ${clipText(authenticity.coop.visualEvidence, 200)}\n\nGAMEPLAY CAMERA LOCK:\nCamera type: ${authenticity.camera.type}. camera remains physically attached to the playable character for the entire clip. ${clipText(authenticity.camera.visibleEvidence, 180)} Only normal player-input look/aim/movement or normal in-game follow behavior is allowed. Keep the approved framing readable; do not seek a prettier angle.\n\nPHYSICS / STATE CONTINUITY:\n${clipText(authenticity.physics.event, 200)}\nAffected entities: ${clipText(authenticity.physics.affectedEntities.join(", "), 150)}\n${clipText(physicsExceptions, 180)}\nMotion is grounded, causal, game-like and continuous. No morphing, teleporting, object substitution, unexplained sliding, or animation that is not caused by player input or game state.\n\nVISIBLE PROOF TO PRESERVE:\n${clippedList(shot.expectedEvidence, { maxItems: 4, maxChars: 115 }).map((item, index) => `${index + 1}. ${item}`).join("\n")}\n\nHUMAN OVERRIDES:\n${h3HumanFeedbackBlock}\n\nHARD NEGATIVES:\nNo cuts, montage, cinematic reframing, camera orbit, dolly/crane/drone move, detached camera, spectator move, automatic hero framing, dramatic zoom, rack-focus showcase, slow motion, speed ramp, pose-for-camera behavior, promotional composition, unrelated spectacle, decorative HUD redesign, or new mechanic. Keep natural real-time gameplay speed.\n\nEND STATE:\nFinish with the direct readable consequence of the player action and the teammate's gameplay response still visible. The entire result must look like ${durationLabel} seconds captured by pressing Record while actually playing this PC co-op game.`;
+
+  const videoPrompt = shot.generationPlan.videoModel === "minimax-h3"
+    ? assertProviderPromptBudget("PROMPT_COMPILER_VIDEO_MINIMAX_H3", h3VideoPrompt, MINIMAX_H3_PROMPT_MAX_CHARS)
+    : assertPromptBudget("PROMPT_COMPILER_VIDEO", genericVideoPrompt);
 
   const compilerInputsHash = stableHash({
     compiler: GAMEPLAY_PROMPT_COMPILER_VERSION,
@@ -221,6 +241,7 @@ export function compileGameplayPromptPlan(input: {
     metadata: {
       compiler_version: GAMEPLAY_PROMPT_COMPILER_VERSION,
       image_model: shot.generationPlan.imageModel ?? null,
+      video_prompt_profile: shot.generationPlan.videoModel === "minimax-h3" ? "minimax_h3_gameplay_i2v_v1" : "generic_gameplay_v1",
       reference_approval_required: true,
       human_feedback_applied:
         feedback.mustShow.length + feedback.mustAvoid.length + feedback.errorTags.length > 0,
@@ -233,7 +254,8 @@ export function compileGameplayPromptPlan(input: {
       video_authenticity_gate_passed: true,
       prompt_budget: {
         schema_max_chars: GAMEPLAY_PROMPT_SCHEMA_MAX_CHARS,
-        target_max_chars: GAMEPLAY_PROMPT_TARGET_MAX_CHARS,
+        target_max_chars: shot.generationPlan.videoModel === "minimax-h3" ? MINIMAX_H3_PROMPT_MAX_CHARS : GAMEPLAY_PROMPT_TARGET_MAX_CHARS,
+        provider_max_chars: shot.generationPlan.videoModel === "minimax-h3" ? MINIMAX_H3_PROMPT_MAX_CHARS : null,
         image_prompt_chars: imagePrompt.length,
         video_prompt_chars: videoPrompt.length,
       },
