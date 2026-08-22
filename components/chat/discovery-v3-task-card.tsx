@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { AlertCircle, CheckCircle2, ExternalLink, Loader2, RefreshCw, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ConceptReviewPanel, type ConceptReviewDecision } from "@/components/discovery/concept-review-panel";
@@ -110,26 +110,23 @@ export function DiscoveryV3TaskCard({ task, runId }: DiscoveryV3TaskCardProps) {
   const coverage = object(researchPack.coverage);
   const state = object(detail?.factoryJob?.state);
   const strongModel = str(state.strong_concept_model) ?? str(task.settings?.strongConceptModel) ?? "gpt-5-6-terra";
-
-  const concepts = useMemo(() => {
-    const conceptById = new Map(
-      array(rootOutputs.discovery_concepts)
-        .map(object)
-        .map((concept) => [str(concept.conceptId), concept]),
-    );
-    return (detail?.conceptRuns ?? []).flatMap((run) => {
-      const outputs = object(run.outputs);
-      const concept = object(outputs.coop_game_concept);
-      const conceptId = str(concept.conceptId) ?? str(object(run.metadata).concept_id);
-      const conceptRunId = str(run.id);
-      if (!conceptId || !conceptRunId) return [];
-      return [{
-        conceptRunId,
-        conceptId,
-        concept: Object.keys(concept).length ? concept : conceptById.get(conceptId) ?? {},
-      }];
-    });
-  }, [detail, rootOutputs.discovery_concepts]);
+  const conceptById = new Map(
+    array(rootOutputs.discovery_concepts)
+      .map(object)
+      .map((concept) => [str(concept.conceptId), concept]),
+  );
+  const concepts = (detail?.conceptRuns ?? []).flatMap((run) => {
+    const outputs = object(run.outputs);
+    const concept = object(outputs.coop_game_concept);
+    const conceptId = str(concept.conceptId) ?? str(object(run.metadata).concept_id);
+    const conceptRunId = str(run.id);
+    if (!conceptId || !conceptRunId) return [];
+    return [{
+      conceptRunId,
+      conceptId,
+      concept: Object.keys(concept).length ? concept : conceptById.get(conceptId) ?? {},
+    }];
+  });
 
   const submitConceptDecision = useCallback(async (
     conceptRunId: string,
