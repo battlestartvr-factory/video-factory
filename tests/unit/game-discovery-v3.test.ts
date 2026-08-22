@@ -176,9 +176,13 @@ describe("Game Discovery v3 simplified graph", () => {
     expect(strongConceptBatchV1Schema.safeParse({ ...valid, concepts: [...candidates, candidates[0]] }).success).toBe(false);
   });
 
-  it.each([["a"], ["a", "b"], ["a", "b", "c"]])(
-    "sends %s human-approved concepts directly to gameplay moments with no AI veto",
-    (approvedIds) => {
+  it.each([
+    { approvedIds: ["a"] },
+    { approvedIds: ["a", "b"] },
+    { approvedIds: ["a", "b", "c"] },
+  ])(
+    "sends $approvedIds human-approved concepts directly to gameplay moments with no AI veto",
+    ({ approvedIds }) => {
       const legacyOutcome: WorkflowTickOutcome = {
         status: "waiting",
         currentStage: "pre_evaluation_pending",
