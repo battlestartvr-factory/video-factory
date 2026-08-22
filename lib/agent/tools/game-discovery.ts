@@ -37,7 +37,7 @@ function boundedBrief(value: string): string {
 export const startGameDiscoveryTool: AgentTool<typeof startGameDiscoverySchema._output> = {
   name: "start_game_discovery",
   description:
-    "Start the durable simplified PC/Steam co-op Game Discovery Factory. Use this when the user naturally asks to invent, explore or improve co-op game concepts. The factory does bounded web research, one strong synthesis pass into exactly three concepts, waits for human concept decisions, then creates gameplay reference images, Kling gameplay video and human approval gates before assembly. Attached research documents are included automatically; do not ask the user to re-upload or paste them.",
+    "Start the durable simplified PC/Steam co-op Game Discovery Factory. Use this when the user naturally asks to invent, explore or improve co-op game concepts. The factory does bounded web research, one strong synthesis pass into exactly three concepts, waits for human concept decisions, then creates gameplay reference images, MiniMax H3 gameplay video and human approval gates before assembly. Kling 3 remains available as a fallback/baseline. Attached research documents are included automatically; do not ask the user to re-upload or paste them.",
   inputSchema: startGameDiscoverySchema,
   risk: "safe",
   async handler(input, ctx) {
@@ -150,10 +150,10 @@ export const startGameDiscoveryTool: AgentTool<typeof startGameDiscoverySchema._
         userBrief,
         researchDocuments,
         workflowVersion: 3,
-        gameplayDurationSec: 5,
+        gameplayDurationSec: 10,
         strongConceptModel: "gpt-5-6-terra",
         preferredImageModel: "gpt-image-2",
-        preferredVideoModel: "kling-3",
+        preferredVideoModel: "minimax-h3",
         humanGates: ["human_concept_approval_pending", "human_reference_approval_pending", "human_video_approval_pending"],
         externalWebResearchAllowed: true,
         externalResearchProvider: "kie_gemini_google_search_shared_pool",
@@ -199,7 +199,8 @@ export const startGameDiscoveryTool: AgentTool<typeof startGameDiscoverySchema._
             researchProvider: "kie_gemini_google_search_shared_pool",
             strongConceptModel: "gpt-5-6-terra",
             conceptCount: 3,
-            gameplayDurationSec: 5,
+            gameplayDurationSec: 10,
+            videoModel: "minimax-h3",
             humanGates: ["concept", "reference_image", "video"],
           },
         },

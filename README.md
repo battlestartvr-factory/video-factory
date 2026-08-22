@@ -1,26 +1,92 @@
 # AI Co-op Game Discovery Factory
 
-Внутренний AI-завод Battle Start VR для **автономного поиска, прототипирования и накопления evidence по PC/Steam co-op игровым идеям**.
+Внутренний AI-завод Battle Start VR для **поиска, evidence-прототипирования и накопления сигналов по PC/Steam co-op игровым идеям**.
 
-Главная продуктовая рамка: **content is the experiment, the game idea is the product candidate, human interest is evidence, memory is where evidence compounds**. Генерация изображений и видео остаётся важным слоем, но не является конечной целью системы.
+Главная рамка: **content is the experiment, the game idea is the product candidate, human interest is evidence, memory is where evidence compounds**.
 
-## Текущий статус
+## Current production
 
-- Stage 1–3: durable production foundation — закрыты.
-- **Stage 4 — Game Discovery Pipeline: technical DONE.** Канонический путь умеет пройти от discovery objective до разных co-op concepts, human concept gate, gameplay moment/shot planning, gameplay references, image/video evidence, human media gates, assembly и полной lineage.
-- Gameplay Reference Library: 10 игр / 76 архивированных image references. Closeout-indexing оставшихся references запущен через durable `gameplay_reference_index@1`; актуальное состояние и SQL-проверки — в `docs/current-project-state.md`.
-- Следующая продуктовая цель: **Stage 5 + Stage 6 — Gameplay Quality Evaluation + Learning/Memory Loop**, чтобы следующий discovery batch становился измеримо лучше предыдущего.
-- Платный Tilt Salvage authenticity regression остаётся осознанно отложенным acceptance-тестом; он не блокирует техническое закрытие Stage 4.
+Текущий default — **Game Discovery v3 (`game_discovery_batch@3`)**.
 
-## Production
+```text
+естественный запрос в чате
+ -> bounded KIE grounded research + Safe Fetch
+ -> verified Research Pack
+ -> GPT-5.6 Terra -> ровно 3 концепта
+ -> Human Concept Gate
+ -> gameplay moment + evidence shot
+ -> Gameplay Reference Set
+ -> GPT Image 2 gameplay still
+ -> Human Image Gate
+ -> MiniMax H3 / Hailuo 03, 10s, 768P, I2V через KIE
+ -> Human Video Gate
+ -> FFmpeg assembly + lineage/archive
+```
 
-Primary production runtime — **Ubuntu VPS + Docker Compose + Caddy**, публичный host: `https://battlestart-factory.duckdns.org`.
+**Kling 3 не удалён:** он остаётся enabled fallback/baseline. Creative LLM не выбирает video provider самостоятельно — current factory policy deterministic.
 
-GitHub Actions `CI` проверяет lint/typecheck/tests/build. После успешного CI на `main` workflow `Deploy Production` делает SSH deploy на VPS. Vercel больше не является источником истины для production; возможный legacy Vercel status check не определяет здоровье VPS deployment.
+V1/V2 workflow code также сохранён для совместимости/rollback/experiments, но не является current chat default.
 
-Подробнее: `docs/deployment.md` и `docs/current-project-state.md`.
+## Human Gates
 
-## Быстрый старт
+Три durable gates обязательны:
+
+1. concept approve/revise/reject;
+2. generated reference image approve/revise/reject;
+3. generated gameplay video approve/revise/reject.
+
+Generated media после provider call не auto-rejected AI evaluator'ом. Planning/authenticity gates могут остановить spend **до** provider call; решение по уже сгенерированному media остаётся за человеком.
+
+## Research v3
+
+Production research использует shared verified source pool, а не старую default-схему из пяти независимых Scout searches.
+
+- KIE `gemini-3-6-flash` + Google Search grounding;
+- direct URLs + Safe Fetch;
+- canonical/content dedupe;
+- required competitor/mechanics/player_voice/gameplay_visual coverage;
+- minimum 4 verified sources;
+- maximum 10 accepted sources;
+- absolute maximum 6 KIE search/provider calls;
+- targeted recovery only for missing coverage.
+
+## Production runtime
+
+Primary production — **Ubuntu VPS + Docker Compose + Caddy**:
+
+`https://battlestart-factory.duckdns.org`
+
+Services:
+
+- Next.js app;
+- core durable worker, concurrency 1;
+- research durable worker, concurrency 5;
+- Caddy HTTPS;
+- Supabase managed;
+- KIE provider layer;
+- Google Drive durable archive.
+
+Release path:
+
+`PR -> CI -> main -> DB schema fence -> Deploy Production -> exact SHA on VPS`.
+
+A legacy Vercel status check is not production authority.
+
+## Documentation
+
+Start here:
+
+1. [Current implementation — canonical](docs/implementation-current.md)
+2. [Current project state / handoff](docs/current-project-state.md)
+3. [Future roadmap / хотелки](docs/future-roadmap.md)
+4. [Architecture](docs/architecture.md)
+5. [Factory runbook](docs/factory-runbook.md)
+6. [Deployment](docs/deployment.md)
+7. [Environment inventory](docs/environment-inventory.md)
+
+Historical design contracts remain in the repository, but each should be treated as history when it conflicts with the canonical current implementation.
+
+## Local start
 
 ```bash
 git clone https://github.com/battlestartvr-factory/video-factory.git
@@ -30,46 +96,29 @@ cp .env.example .env.local
 pnpm dev
 ```
 
-Для локальной работы нужны Supabase credentials; provider/Drive functionality требует соответствующих server-side secrets. Не копируйте production secrets в Git.
+Provider/Drive features require server-side credentials. Never commit production secrets.
 
-### Cursor / agents
+## Scripts
 
-В репозитории есть agent skills и Supabase MCP configuration. Перед изменением durable workflow новый агент должен сначала прочитать:
-
-1. `docs/current-project-state.md`
-2. `docs/architecture.md`
-3. `docs/factory-runbook.md`
-4. `docs/stage4-game-discovery-pipeline-v1.md` — как design/contract baseline, не как текущий статус
-5. `docs/stage4-economy-approval-feedback-policy.md`
-
-Ключевой принцип: DB state является authoritative; queue delivery — wake-up signal, а не источник workflow state.
-
-## Скрипты
-
-| Команда | Назначение |
+| Command | Purpose |
 |---|---|
 | `pnpm dev` | Dev server |
 | `pnpm build` | Production build |
 | `pnpm lint` | ESLint |
 | `pnpm typecheck` | TypeScript |
-| `pnpm test` | Vitest unit tests |
+| `pnpm test` | Vitest |
 | `pnpm test:e2e` | Playwright smoke |
 
-## Основные каталоги
+## Main directories
 
-- `app/` — Next.js UI + API routes
-- `components/` — UI
-- `lib/orchestrator/` — durable orchestration/recovery/provider lifecycle
-- `lib/game-discovery/` — Stage 4 domain, human gates, reference library, authenticity logic
-- `worker/` — durable worker + workflow handlers
-- `supabase/migrations/` — authoritative DB evolution
-- `docs/` — architecture, runbooks, deployment and current-stage handoff
+- `app/` — Next.js UI + API;
+- `components/` — UI;
+- `lib/agent/` — Universal Agent + turn/tool routing;
+- `lib/orchestrator/` — durable orchestration, provider lifecycle, recovery;
+- `lib/research-intelligence/` — research acquisition/evidence/v2-v3 intelligence;
+- `lib/game-discovery/` — gameplay semantics, Human Gate helpers, references, prompts;
+- `worker/` — durable workflow execution;
+- `supabase/migrations/` — authoritative DB evolution;
+- `docs/` — current architecture/runbooks + clearly separated history/future.
 
-## Документация
-
-- [Current project state / agent handoff](docs/current-project-state.md)
-- [Architecture](docs/architecture.md)
-- [Factory runbook](docs/factory-runbook.md)
-- [Deployment](docs/deployment.md)
-- [Stage 4 pipeline baseline](docs/stage4-game-discovery-pipeline-v1.md)
-- [Stage 4 economy / approval / feedback policy](docs/stage4-economy-approval-feedback-policy.md)
+Ключевой engineering invariant: **DB state authoritative; queue delivery is a wake-up signal, not workflow truth.**

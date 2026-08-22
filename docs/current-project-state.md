@@ -1,176 +1,285 @@
 # Current Project State / Agent Handoff
 
-Last closeout update: **2026-08-20**.
+Last verified update: **2026-08-22**.
 
-This is the first document a new coding agent should read. It records current product intent and production facts; older design documents remain useful for contracts/history but can contain superseded deployment/status wording.
+Первым делом новый агент должен прочитать `docs/implementation-current.md`. Этот файл — короткий operational snapshot, а не полный architecture spec.
 
-## 1. Product intent
+## Product North Star
 
-North Star: an autonomous experimentation and learning system for discovering promising PC/Steam friends co-op games.
+AI Co-op Game Discovery Factory ищет и проверяет перспективные PC/Steam co-op game ideas.
 
 - content is the experiment;
-- the game idea is the product candidate;
+- game idea is the product candidate;
 - human interest is evidence;
-- prototype build is a promotion threshold;
 - memory is where evidence compounds.
 
-Do not optimize the repository as a generic content generator. Image/video generation is evidence production inside the discovery loop.
+Не оптимизировать проект как generic image/video generator.
 
-## 2. Stage status
+## Что сейчас является production default
 
-- Stage 1–3: durable platform/orchestration foundation — DONE.
-- **Stage 4: Game Discovery Pipeline — technical DONE and production closeout accepted.**
-- **Stage 4.5: External Intelligence & Research Council v1 — implementation in progress.** This is a bounded, on-demand research layer for a concrete discovery objective, not the broad Stage 7 Trend Radar.
-- Stage 5/6 follow Stage 4.5: Gameplay Quality Evaluator + Learning/Memory Loop.
-- Stage 7 remains the later broad/periodic external market-intelligence layer after the internal evaluation/learning loop can use evidence correctly.
+**Chat -> `game_discovery_batch@3`.**
 
-Stage 4 technical closure does **not** mean every future paid acceptance smoke must run now. The explicit deferred item is the paid Tilt Salvage authenticity regression; run it later when it answers a real regression/product question.
-
-Stage 4.5 must be additive. `game_discovery_batch@1` remains the known-good fallback. The new path will be versioned as `game_discovery_batch@2` and must re-enter the existing Stage 4 downstream handlers after research/concept curation rather than cloning or rewriting them.
-
-## 3. Stage 4 production evidence
-
-Known-good complete batch:
-
-- factory job: `20287124-5eb2-423d-9abb-4f2d179e3356`
-- root creative run: `16cd334f-6d7b-4b63-bb88-469f1fffa3ca`
-- terminal status: completed
-- 6 concepts
-- 2 gameplay video requests
-- 2 prototype assemblies
-- root `prototype_result` present
-
-An earlier complete batch also reached concept -> media -> assembly end-to-end. Historical failed/cancelled attempts are evidence and must remain queryable.
-
-## 4. Human Gates are non-negotiable
-
-Stage 4 currently has three durable human-controlled gates and Stage 4.5 must preserve all three:
-
-1. **Human Concept Approval Gate** before concept pre-evaluation/media spend.
-2. **Human Reference Image Approval Gate** before gameplay video admission.
-3. **Human Video Approval Gate** before deterministic assembly/finalization.
-
-Decisions remain `approve | revise | reject`.
-
-Critical concept contract: reject removes the active concept and requires a **mechanically new** replacement. Merely changing setting/art direction is not sufficient. Unit coverage lives in `tests/unit/human-concept-gate.test.ts`.
-
-Generated reference images and gameplay videos remain human-controlled evidence. AI inspection cannot silently reject them or bypass the gate; human revise/reject feedback must remain durable and feed the explicit regeneration path.
-
-## 5. Stage 4.5 implementation contract
-
-Canonical repo companion: `docs/stage4-5-external-intelligence-research-council-v1.md`.
-
-The v1 shape is intentionally bounded:
-
-- Research Director -> exactly 5 independent durable Research Scouts -> one Research Synthesizer/Evidence Pack;
-- 3 independent Concept Council designers -> one Curator -> final 6 grounded cards;
-- web/search/fetch/image-search tools are restricted to the Research subsystem;
-- downstream concept/image/video agents consume typed evidence/references rather than browsing directly;
-- Research Memory stores fresh source-backed evidence/cache/provenance and is **not** Stage 6 strategic memory;
-- no always-on trend radar, broad social listening, recursive browsing, or automatic `memory_items` promotion;
-- external web images are evidence/reference candidates, never generated factory assets and never automatically Gameplay Reference Library entries;
-- hard default research caps: 20 web queries, 30 fetched text sources, 24 image candidates, one research round.
-
-PR1 establishes only typed contracts + Research Memory tables/indexes + regression boundaries. It does not perform provider calls and does not change Stage 4 runtime behavior.
-
-## 6. Terminal lineage closeout fix
-
-Production previously contained 7 historical root `creative_runs` left `running/queued` after their `factory_jobs` were already `failed/cancelled`.
-
-Migration `20260820081126_stage4_root_creative_run_terminal_sync.sql`:
-
-- installs an atomic trigger from terminal `factory_jobs.status` to non-terminal **root** `creative_runs.status`;
-- deliberately excludes child creative runs;
-- backfills historical mismatches.
-
-Final production acceptance on 2026-08-20 returned **0 stale root terminal mismatches**. See `docs/factory-runbook.md` for the audit query.
-
-## 7. Gameplay Reference Library
-
-Seed library:
-
-- 10 games
-- **76 / 76 image references indexed**
-- all 76 have durable Google Drive pointers
-- structured schema captures camera, player-control evidence, co-op dependency, mechanics, readability, art/production cues, provenance and dedupe fields
-- deterministic/perceptual dedupe and purpose-aware retrieval are implemented
-- vector-ready HNSW/RPC primitive exists, but current v1 caption indexing does not populate embeddings; do not report vector semantic retrieval as active until embeddings are actually written
-
-Final Stage 4 library closeout was completed on 2026-08-20. The remaining 53 image references were admitted to the existing durable `gameplay_reference_index@1` workflow. The first full pass ended at `71 indexed / 5 failed`; all five failures were provider-format/schema drift with usable paid caption evidence already stored in `caption_debug.rawResponse`.
-
-The deterministic normalizer was hardened for the observed drift classes:
-
-- boolean values in optional descriptive text fields fail closed to `null` instead of inventing prose;
-- missing required visible-response text maps to `none_visible`;
-- finite numeric scalar evidence in descriptive distance/height and `realismLevel` fields is preserved by stringifying the observed number;
-- visibility/readability evidence still fails closed when the model returns unsupported descriptive strings.
-
-After the hardened code passed CI and was deployed to the production worker, five new durable index jobs repaired the failed references from their **stored raw captions**. No second provider call was made: final `caption_usage` on every repaired row remained `modelCalls = 1` and `schemaRepairModelCalls = 0`.
-
-Final live acceptance:
+Текущий high-level flow:
 
 ```text
-indexed = 76
-pending_caption = 0
-captioning = 0
-failed = 0
+natural game-design request
+ -> bounded KIE grounded research + Safe Fetch shared source pool
+ -> compact verified Research Pack
+ -> one strong GPT-5.6 Terra synthesis
+ -> exactly 3 conversational concepts
+ -> Human Concept Gate
+ -> Gameplay Moment Planner
+ -> Shot Planner + authenticity contracts
+ -> purpose-aware Gameplay Reference Set
+ -> GPT Image 2 gameplay still
+ -> Human Image Gate
+ -> MiniMax H3 10s image-to-video through KIE
+ -> Human Video Gate
+ -> FFmpeg prototype assembly
+ -> completed lineage
 ```
 
-Operationally important: deterministic stored-caption repair is intentionally different from a paid retry. A stored repair keeps the reference row in `failed` long enough for `repairGameplayReferenceFromStoredCaption()` to consume `caption_debug.rawResponse`; resetting it to `pending_caption` would bypass that repair gate and can authorize a new provider call. See `docs/factory-runbook.md`.
+`game_discovery_batch@1` и `@2` остаются зарегистрированы как legacy/fallback/experiment paths. V3 не удаляет их.
 
-## 8. Production / deployment
+## Research status
 
-Primary production: `https://battlestart-factory.duckdns.org` on Ubuntu VPS + Docker Compose + Caddy.
+Старая Stage 4.5 идея `5 independent Scouts -> Synthesizer -> 3 Council designers -> Curator` реализована в versioned v2 substrate, но **не является текущим default creative graph**.
 
-Canonical release path:
+V3 production research использует shared source acquisition pool:
 
-`main -> GitHub CI -> Deploy Production -> SSH -> exact commit on VPS`.
+- KIE `gemini-3-6-flash` + Google Search grounding;
+- minimal thinking;
+- direct grounded URLs only;
+- Safe Fetch + canonical/content dedupe;
+- required categories: competitor, mechanics, player_voice, gameplay_visual;
+- min 4 verified sources;
+- max 10 accepted pool sources;
+- absolute max 6 KIE provider calls, дополнительно bounded Research Plan budget;
+- targeted coverage recovery вместо пяти независимых paid searches.
 
-The Stage 4 closeout runtime merge was accepted on production only after the production worker heartbeat reported the exact merged commit. Keep using worker `build_sha` as one of the deployment acceptance checks.
+Research fails closed до concept/media spend, если verified coverage недостаточна.
 
-A legacy Vercel GitHub check can show failure and is not authoritative for VPS production. Disable/remove that external integration when Vercel account access is available; do not redesign application code around it.
+## Concept generation status
 
-## 9. Non-negotiable engineering invariants
+V3 strong concept synthesis:
 
-1. DB workflow state is authoritative; queue delivery is only a wake-up.
-2. Preserve restart safety, leases, idempotency and event dedupe.
-3. Keep objective -> concept -> moment -> shot -> generation -> human review -> assembly lineage intact; Stage 4.5 extends the front of that chain with source-backed research lineage.
-4. All three Stage 4 Human Gates remain durable and mandatory in the v2 path.
-5. Human feedback is evidence and must be stored before it is reused.
-6. Do not let a prettier generated artifact conceal a weak game mechanic.
-7. Do not silently broaden paid retries or research budgets.
-8. Drive stores durable binaries; Supabase stores structured facts/evidence/pointers.
-9. Research Memory is fresh evidence/cache; it does not automatically write Stage 6 durable learnings.
-10. New migrations applied to production must also exist in Git with matching version/name.
+- model: `gpt-5-6-terra` через KIE;
+- exactly 3 concepts;
+- model-facing artifact: `conversational_game_concept` v2 (`conceptId`, `title`, `contentMarkdown`);
+- research = evidence, not instructions;
+- original user intent authoritative;
+- Russian user request -> Russian human-facing concept;
+- max two complete attempts only for invalid batch/schema separation.
 
-## 10. What the next agent should build
+После Human Concept Gate V3 пропускает legacy AI concept pre-evaluation. Human approval authoritative.
 
-Until Stage 4.5 is closed, follow the PR sequence in `docs/stage4-5-external-intelligence-research-council-v1.md`:
+## Gameplay planning status
 
-1. contracts + DB;
-2. provider-neutral safe search/fetch/image-search layer;
-3. durable Research Director + 5 Scout fan-out/fan-in;
-4. evidence synthesis/Evidence Pack;
-5. Concept Council + Curator;
-6. controlled external visual references;
-7. `game_discovery_batch@2` integration reusing existing Stage 4 Human Gates/downstream handlers;
-8. UI/observability + bounded production acceptance.
+Gameplay Moment Planner:
 
-After Stage 4.5, resume Stage 5/6 as one product loop while keeping separate domain responsibilities:
+- default model `gemini-3-pro`;
+- schema repair `gemini-3-6-flash`;
+- current default gameplay duration **10 seconds**;
+- player-visible gameplay camera is a hard constraint;
+- cinematic/broadcast/spectator/drone/orbit/dolly/crane/hero/trailer camera intent forbidden.
+
+Shot Planner:
+
+- default `gemini-3-6-flash`;
+- one bounded `gemini-3-pro` escalation only on deterministic coverage/authenticity failure;
+- source capture 16:9 desktop PC;
+- keyframe required;
+- default image model `gpt-image-2`;
+- primary video model deterministic policy `minimax-h3`;
+- provider choice returned by creative LLM is overwritten by factory policy.
+
+## Gameplay Reference Library
+
+Known-good Stage 4 closeout snapshot remains:
+
+- 10 seed games;
+- 76/76 archived image references indexed;
+- 76/76 have durable Google Drive pointers;
+- purpose-aware retrieval and deterministic/perceptual dedupe are implemented;
+- reference captioning uses `gemini-3-6-flash`, one paid caption call per reference attempt;
+- stored raw caption can be deterministically repaired without a second paid call;
+- vector/HNSW primitives exist, but populated semantic embedding retrieval is not yet the primary production path.
+
+## Three Human Gates
+
+Все три gates обязательны:
+
+1. **Human Concept Gate** — approve/revise/reject;
+2. **Human Reference Image Gate** — before video spend;
+3. **Human Video Gate** — before assembly.
+
+Generated image/video после generation не auto-rejected AI evaluator'ом. Deterministic/AI planning guards работают **до provider call**; final media decision принадлежит человеку.
+
+## MiniMax H3 production status
+
+Release #92 перевёл gameplay video primary route с Kling на H3.
+
+Production provider record:
+
+- factory model: `minimax-h3`;
+- provider: `kie`;
+- KIE model: `minimax/hailuo-03`;
+- unified jobs endpoint: `/api/v1/jobs/createTask`;
+- enabled: true;
+- primary gameplay video: true;
+- default duration: 10 seconds;
+- default resolution: `768P`;
+- Stage 4 mode: image-to-video, no audio;
+- H3 adapter supports 4–15s and optional last frame.
+
+Kling:
+
+- `kling-3` remains registered and enabled;
+- it is fallback/baseline, not current primary.
+
+Prompt compiler:
+
+- `gameplay_prompt_compiler_v7_h3`;
+- H3 profile `minimax_h3_gameplay_i2v_v1`;
+- frame-0 continuity lock;
+- ordered motion timeline;
+- input -> action -> world response -> teammate response;
+- player-bound camera;
+- hard anti-cinematic negatives;
+- H3 prompt hard budget 4800 chars;
+- oversized prompt fails before paid submit, no blind final-string truncation.
+
+## Important audit fix found during docs refresh
+
+Documentation audit on 2026-08-22 found one real code drift: `start_game_discovery` still stamped old metadata `gameplayDurationSec=5` and `preferredVideoModel=kling-3`, even though downstream factory policy had already switched to H3/10s.
+
+The docs refresh branch fixes this launcher drift to:
+
+- `gameplayDurationSec=10`;
+- `preferredVideoModel=minimax-h3`;
+- user/tool metadata reports H3/10s.
+
+This matters because `gameplayDurationSeconds()` respects objective metadata. Without the fix a fresh chat run could remain 5 seconds despite the new H3 database default.
+
+## Production deployment state before this docs PR
+
+H3 release production baseline:
+
+`4529ea2a3478b602e30e7df047f695f87065534d`
+
+Production acceptance already confirmed:
+
+- Supabase schema contract `20260822170000`;
+- `minimax-h3` provider row enabled and primary;
+- Kling row still enabled;
+- core worker heartbeat on exact H3 release SHA;
+- research worker heartbeat on exact H3 release SHA;
+- `mock_workflows=false`;
+- PR #92 full CI green before merge.
+
+This docs/launcher-alignment PR will naturally create a newer exact SHA after merge; production acceptance should again use latest worker `build_sha` rather than assuming the H3 release SHA remains HEAD forever.
+
+## Deployment architecture
+
+Primary production:
+
+`https://battlestart-factory.duckdns.org`
+
+Runtime:
+
+- Ubuntu VPS;
+- Docker Compose;
+- Caddy HTTPS;
+- Next.js app;
+- core worker concurrency 1;
+- research worker concurrency 5;
+- Supabase managed;
+- KIE provider layer;
+- Google Drive durable archive;
+- shared `/srv/ai-factory` assembly workspace.
+
+Canonical release:
 
 ```text
-DISCOVERY
- -> EXPERIMENT
- -> EVALUATION
- -> HUMAN SIGNAL
- -> LEARNING
- -> SMARTER DISCOVERY
+PR
+ -> CI
+ -> merge main
+ -> production DB migration must satisfy schema fence
+ -> Deploy Production workflow
+ -> SSH exact main SHA
+ -> scripts/deploy.sh
+ -> Docker build/up
+ -> Caddy validate/reload
+ -> health + worker heartbeat
 ```
 
-Evaluator dimensions should stay separable: game concept quality, co-op value, novelty, buildability, hook/readability, gameplay authenticity, and artifact/provider defects. A bad artifact should allow selective regeneration; a bad mechanic should kill or demote the concept branch.
+A legacy Vercel GitHub check is not authoritative for VPS health.
 
-Learning should turn evaluator findings + human `Love / Maybe / Reject` rationale + generation outcomes into atomic, evidence-backed reusable learnings. The key product metric is **Learning Lift**: whether later batches measurably improve because of accumulated evidence, rather than simply producing more random concepts.
+## Reliability hardening already present
 
-## 11. Do not redo
+- durable lease + heartbeat;
+- retry/recovery watchdog;
+- provider submit permits/accounting fences;
+- real Stop/cascade cancellation;
+- AbortSignal propagation into provider/search/fetch paths;
+- live Research Trace via durable progress events/SSE;
+- bounded shared source pool and provider-call cap;
+- coverage-aware research recovery;
+- oversized Safe Fetch handling;
+- schema deployment contract fence;
+- explicit Human Gates;
+- no new video spend without approved reference image.
 
-Do not restart Stage 4 from scratch, replace durable orchestration with an ad-hoc agent loop, bypass any Human Gate, or turn Stage 4.5 into broad trend ingestion. Use Stage 4 as the experiment-production substrate and add only the bounded tactical external evidence layer defined for Stage 4.5.
+## What is NOT yet product-accepted
+
+Technical H3 integration is deployed, but the **real 10-second H3 gameplay quality acceptance** is still the next media checkpoint.
+
+Need one controlled fresh chat run and human evaluation of:
+
+- frame-0 preservation;
+- actual player-bound camera;
+- action correctness;
+- world response/physics;
+- teammate dependency;
+- cinematic drift;
+- identity/geometry drift;
+- first-pass Human Video Gate verdict;
+- actual cost / accepted shot.
+
+Do not claim H3 has won the product-quality comparison until that real run is reviewed.
+
+## Next product milestones
+
+Near term:
+
+1. real H3 10s acceptance;
+2. fix only quality defects revealed by evidence;
+3. Stage 5 Gameplay Quality Evaluator separating **game idea defect** from **artifact/provider defect**;
+4. cost-per-accepted-shot instrumentation;
+5. Stage 6 evidence-backed Learning/Memory Loop.
+
+Longer-term ideas are in `docs/future-roadmap.md`, deliberately separated from current implementation.
+
+## Non-negotiable invariants
+
+1. DB state authoritative; queue is wake-up.
+2. Human Concept/Image/Video Gates cannot be bypassed by default automation.
+3. Human media decision cannot be silently replaced by AI aesthetic judgment.
+4. Research without verifiable provenance is not evidence.
+5. Paid retries/budgets are bounded and explicit.
+6. Creative models cannot silently select provider routing.
+7. Gameplay camera must remain actual player-visible camera.
+8. Drive stores durable binaries; Supabase stores structured state/evidence/pointers.
+9. Production app deploy is blocked by DB schema drift.
+10. Historical failed/cancelled runs remain queryable evidence.
+
+## Do not redo
+
+- Do not rebuild Stage 4 from scratch.
+- Do not restore 5-Scout/Council v2 as default merely because an old document calls it the target architecture.
+- Do not switch H3 back to Kling because of stale metadata/comments.
+- Do not bring back 9:16 source gameplay; source gameplay is 16:9.
+- Do not use Vercel as production authority.
+- Do not turn Human Gate feedback into opaque automatic fine-tuning.
+
+For full details see `docs/implementation-current.md`; for future ideas see `docs/future-roadmap.md`.
