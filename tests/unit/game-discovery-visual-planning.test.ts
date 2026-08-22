@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { getDiscoveryLlmPolicy } from "../../lib/game-discovery/model-policy";
 import { compileGameplayPromptPlan } from "../../lib/game-discovery/prompt-compiler";
-import { planGameplayShots } from "../../lib/game-discovery/shot-planner";
+import { planGameplayShots, preferredDiscoveryImageModel } from "../../lib/game-discovery/shot-planner";
 import type {
   CoopGameConceptSpecV1,
   DiscoveryObjectiveSpecV1,
@@ -109,7 +109,7 @@ function validShotResponse() {
         ],
         generationPlan: {
           keyframeRequired: true,
-          imageModel: "nano-banana-2",
+          imageModel: "gpt-image-2",
           videoModel: "kling-3",
           videoMode: "image-to-video",
           aspectRatio: "16:9",
@@ -130,7 +130,7 @@ function validShotResponse() {
 }
 
 describe("Stage 4 token economy and visual approval planning", () => {
-  it("routes simple tasks to cheap models and blocks automatic top-tier use", () => {
+  it("routes simple tasks to cheap models and uses GPT Image 2 as the gameplay still default", () => {
     expect(getDiscoveryLlmPolicy("concept_pre_evaluation").primaryModel).toBe("gemini-3-6-flash");
     expect(getDiscoveryLlmPolicy("schema_repair").primaryModel).toBe("gemini-3-6-flash");
     expect(getDiscoveryLlmPolicy("feedback_structuring").primaryModel).toBe("gemini-3-6-flash");
@@ -140,6 +140,7 @@ describe("Stage 4 token economy and visual approval planning", () => {
       fallbackModels: ["gemini-3-pro"],
       automaticEscalation: true,
     });
+    expect(preferredDiscoveryImageModel(objective)).toBe("gpt-image-2");
   });
 
   it("uses the cheap Gemini model for a valid first shot and keeps required evidence auditable", async () => {
@@ -169,6 +170,8 @@ describe("Stage 4 token economy and visual approval planning", () => {
     expect(calls).toEqual([{ model: "gemini-3-6-flash", thinking: false }]);
     expect(result.escalated).toBe(false);
     expect(result.shots[0]?.expectedEvidence).toEqual(moment.requiredVisualEvidence);
+    expect(result.shots[0]?.generationPlan.imageModel).toBe("gpt-image-2");
+    expect(result.shots[0]?.generationPlan.aspectRatio).toBe("16:9");
     expect(result.shots[0]?.metadata?.gameplayAuthenticity).toMatchObject({
       passed: true,
       hardFailures: [],
@@ -194,8 +197,11 @@ describe("Stage 4 token economy and visual approval planning", () => {
     expect(plan.videoPrompt).toContain(
       "camera remains physically attached to the playable character for the entire clip",
     );
+    expect(plan.videoPrompt).toContain("continuous 5-second capture");
     expect(plan.negativeConstraints).toContain("wide cinematic establishing shot");
     expect(plan.metadata).toMatchObject({
+      compiler_version: "gameplay_prompt_compiler_v6",
+      image_model: "gpt-image-2",
       reference_approval_required: true,
       human_feedback_applied: true,
       gameplay_authenticity_gate_passed: true,
