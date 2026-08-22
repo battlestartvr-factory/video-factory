@@ -1,14 +1,12 @@
 import { z } from "zod";
-import {
-  createWebFetchProvider,
-  urlSha256,
-  type SearchResult,
-} from "../web";
+import { createWebFetchProvider } from "../web/fetch-provider";
+import { urlSha256 } from "../web/normalization";
+import type { SearchResult } from "../web/types";
 import {
   researchSourceCandidateV1Schema,
   type ResearchSourceCandidateV1,
 } from "./evidence-bundle";
-import { sanitizeGroundedEvidenceClaim } from "./kie-research-scout";
+import { sanitizeGroundedEvidenceClaim } from "./grounded-claim";
 import { researchPlanSpecV1Schema, type ResearchPlanSpecV1 } from "./schemas";
 import { createSharedPoolKieSearchProvider } from "./shared-pool-kie-search";
 

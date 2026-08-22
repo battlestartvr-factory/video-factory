@@ -1,6 +1,7 @@
 import { coreSmokeV1 } from "./core-smoke-v1";
 import { externalResearchScoutV1 } from "./external-research-scout-v1";
 import { gameDiscoveryBatchStage4InspectedV1 } from "./game-discovery-batch-stage4-inspected-v1";
+import { gameDiscoveryBatchV3 } from "./game-discovery-batch-v3";
 import {
   conceptCouncilMemberV1Production as conceptCouncilMemberV1,
   gameDiscoveryBatchV2Production,
@@ -18,6 +19,7 @@ const registry = new Map<string, WorkflowTickHandler>([
   ["external_research_scout@1", externalResearchScoutV1],
   ["game_discovery_batch@1", gameDiscoveryBatchStage4InspectedV1],
   ["game_discovery_batch@2", gameDiscoveryBatchV2Production],
+  ["game_discovery_batch@3", gameDiscoveryBatchV3],
   ["gameplay_authenticity_planning_smoke@1", gameplayAuthenticityPlanningSmokeV1],
   ["gameplay_reference_index@1", gameplayReferenceIndexV1],
   ["gameplay_reference_retrieval_smoke@1", gameplayReferenceRetrievalSmokeV1],

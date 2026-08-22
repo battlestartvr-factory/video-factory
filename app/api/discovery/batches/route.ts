@@ -8,6 +8,7 @@ import {
   listGameDiscoveryBatches,
 } from "@/lib/game-discovery/service";
 import { createGameDiscoveryBatchV2 } from "@/lib/game-discovery/service-v2";
+import { createGameDiscoveryBatchV3 } from "@/lib/game-discovery/service-v3";
 import { researchPolicySpecV1Schema } from "@/lib/research-intelligence/schemas";
 
 const createDiscoveryBatchSchema = z
@@ -15,8 +16,8 @@ const createDiscoveryBatchSchema = z
     projectId: z.string().uuid().nullable().optional(),
     hypothesis: z.string().trim().min(1).max(4_000).nullable().optional(),
     objective: discoveryObjectiveSpecV1Schema,
-    // Keep v1 as the product default until PR8 production acceptance explicitly flips it.
-    workflowVersion: z.union([z.literal(1), z.literal(2)]).default(1),
+    // V1/V2 remain accepted for restart/manual compatibility; new product runs use v3.
+    workflowVersion: z.union([z.literal(1), z.literal(2), z.literal(3)]).default(3),
     researchPolicy: researchPolicySpecV1Schema.optional(),
   })
   .strict();
@@ -66,12 +67,17 @@ export async function POST(request: Request) {
       hypothesis: parsed.data.hypothesis ?? null,
     };
     const result =
-      parsed.data.workflowVersion === 2
-        ? await createGameDiscoveryBatchV2({
+      parsed.data.workflowVersion === 3
+        ? await createGameDiscoveryBatchV3({
             ...common,
             researchPolicy: parsed.data.researchPolicy,
           })
-        : await createGameDiscoveryBatch(common);
+        : parsed.data.workflowVersion === 2
+          ? await createGameDiscoveryBatchV2({
+              ...common,
+              researchPolicy: parsed.data.researchPolicy,
+            })
+          : await createGameDiscoveryBatch(common);
 
     return apiSuccess(
       {

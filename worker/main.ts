@@ -19,6 +19,7 @@ import { MockConceptCouncilDesigner } from "../lib/research-intelligence/concept
 import { ConceptCouncilRepository } from "../lib/research-intelligence/concept-council-runtime";
 import { MockConceptCouncilCurator } from "../lib/research-intelligence/concept-curator";
 import { GameDiscoveryV2Repository } from "../lib/research-intelligence/game-discovery-v2";
+import { GameDiscoveryV3Repository } from "../lib/research-intelligence/game-discovery-v3";
 import { MockResearchScoutExecutor } from "../lib/research-intelligence/mock-scout-executor";
 import { ResearchIntelligenceRepository } from "../lib/research-intelligence/repository";
 import { ResearchScoutRepository } from "../lib/research-intelligence/scout-runtime";
@@ -303,6 +304,7 @@ export async function runWorker(): Promise<void> {
     gameDiscovery: new GameDiscoveryWorkerRepository(rpcClient),
     gameDiscoveryVideo: new GameDiscoveryVideoRepository(rpcClient),
     gameDiscoveryV2: new GameDiscoveryV2Repository(rpcClient),
+    gameDiscoveryV3: new GameDiscoveryV3Repository(rpcClient),
     researchScouts,
     researchScoutExecutor: config.mockWorkflows ? new MockResearchScoutExecutor() : null,
     researchIntelligence,

@@ -31,6 +31,53 @@ describe("KIE durable discovery LLM adapter", () => {
     expect(result.usage.totalTokens).toBe(12);
   });
 
+  it("runs GPT 5.6 Terra through the Responses API with bounded reasoning", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          output: [
+            {
+              type: "message",
+              content: [{ type: "output_text", text: '{"concepts":[]}' }],
+            },
+          ],
+          usage: { input_tokens: 8, output_tokens: 4, total_tokens: 12 },
+          status: "completed",
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      ),
+    );
+    const adapter = new KieClaudeTaskAdapter("https://api.kie.ai", "secret", fetchMock as typeof fetch);
+
+    const result = await adapter.generate({
+      model: "gpt-5-6-terra",
+      system: "strong system",
+      prompt: "strong prompt",
+      maxTokens: 2048,
+      thinking: true,
+    });
+
+    const url = String(fetchMock.mock.calls[0]?.[0]);
+    const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    const body = JSON.parse(String(init.body)) as {
+      model?: string;
+      input?: Array<Record<string, unknown>>;
+      max_output_tokens?: number;
+      reasoning?: { effort?: string };
+    };
+    expect(url).toBe("https://api.kie.ai/codex/v1/responses");
+    expect(body.model).toBe("gpt-5-6-terra");
+    expect(body.max_output_tokens).toBe(2048);
+    expect(body.reasoning).toEqual({ effort: "high" });
+    expect(body.input).toEqual([
+      { role: "system", content: [{ type: "input_text", text: "strong system" }] },
+      { role: "user", content: [{ type: "input_text", text: "strong prompt" }] },
+    ]);
+    expect(result.text).toBe('{"concepts":[]}');
+    expect(result.usage).toEqual({ inputTokens: 8, outputTokens: 4, totalTokens: 12 });
+    expect(result.stopReason).toBe("completed");
+  });
+
   it("keeps a bounded provider reason on HTTP failures and redacts auth material", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(

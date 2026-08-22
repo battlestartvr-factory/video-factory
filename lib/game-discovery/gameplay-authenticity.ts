@@ -168,6 +168,10 @@ function round(value: number): number {
   return Math.round(Math.max(0, Math.min(1, value)) * 1000) / 1000;
 }
 
+function roundSeconds(value: number): number {
+  return Math.round(value * 1000) / 1000;
+}
+
 function clipMotionEvidence(value: string, max = 1_900): string {
   const normalized = value.trim();
   if (normalized.length <= max) return normalized;
@@ -317,8 +321,8 @@ export function attachGameplayAuthenticitySpec(shot: ShotSpecV1): ShotSpecV1 {
 
 export const gameplayMotionBeatV1Schema = z
   .object({
-    startSec: z.number().min(0).max(5),
-    endSec: z.number().min(0).max(5),
+    startSec: z.number().min(0).max(15),
+    endSec: z.number().min(0).max(15),
     kind: z.enum(["aim_or_prepare", "player_action", "world_response", "player_adjustment"]),
     description: evidenceText,
   })
@@ -334,7 +338,7 @@ export const gameplayVideoMotionPlanV1Schema = z
     schema: z.literal("gameplay_video_motion_plan"),
     version: z.literal(1),
     shotId: z.string().trim().min(1).max(160),
-    durationSec: z.literal(5),
+    durationSec: z.number().min(3).max(15),
     cameraRemainsPhysicallyAttached: z.literal(true),
     prohibitedCameraMoves: z
       .array(
@@ -354,7 +358,15 @@ export const gameplayVideoMotionPlanV1Schema = z
     gateFailures: z.array(shortText).max(20).default([]),
     passed: z.boolean(),
   })
-  .strict();
+  .strict()
+  .superRefine((value, ctx) => {
+    if (value.beats[0]?.startSec !== 0) {
+      ctx.addIssue({ code: "custom", path: ["beats", 0, "startSec"], message: "motion plan must start at zero" });
+    }
+    if (Math.abs((value.beats.at(-1)?.endSec ?? -1) - value.durationSec) > 0.001) {
+      ctx.addIssue({ code: "custom", path: ["beats"], message: "motion plan must fill the entire shot duration" });
+    }
+  });
 
 export type GameplayVideoMotionPlanV1 = z.infer<typeof gameplayVideoMotionPlanV1Schema>;
 
@@ -363,11 +375,14 @@ export function buildGameplayVideoMotionPlan(
   authenticity: GameplayAuthenticitySpecV1 = gameplayAuthenticitySpecFromShot(shot),
 ): GameplayVideoMotionPlanV1 {
   const failures: string[] = [];
+  const durationSec = shot.durationSec;
   if (!authenticity.passed) failures.push("pre_image_authenticity_not_passed");
   if (!authenticity.camera.physicallyAttached) failures.push("camera_not_physically_attached");
   if (!authenticity.playerInput.visible) failures.push("player_input_not_visible");
   if (!authenticity.worldResponse.causalResponseVisible) failures.push("world_response_not_causal");
-  if (shot.durationSec !== 5 || shot.generationPlan.durationSec !== 5) failures.push("shot_not_five_seconds");
+  if (Math.abs(shot.generationPlan.durationSec - durationSec) > 0.001) {
+    failures.push("generation_duration_mismatch");
+  }
 
   const couldBeRecordedByPlayer =
     failures.length === 0 &&
@@ -375,11 +390,15 @@ export function buildGameplayVideoMotionPlan(
     !authenticity.controllablePlayer.scriptedCharactersOnly;
   if (!couldBeRecordedByPlayer) failures.push("cannot_plausibly_be_recorded_by_active_player");
 
+  const boundary1 = roundSeconds(durationSec * 0.2);
+  const boundary2 = roundSeconds(durationSec * 0.5);
+  const boundary3 = roundSeconds(durationSec * 0.7);
+
   return gameplayVideoMotionPlanV1Schema.parse({
     schema: "gameplay_video_motion_plan",
     version: 1,
     shotId: shot.shotId,
-    durationSec: 5,
+    durationSec,
     cameraRemainsPhysicallyAttached: true,
     prohibitedCameraMoves: [
       "cinematic_reframing",
@@ -392,27 +411,27 @@ export function buildGameplayVideoMotionPlan(
     beats: [
       {
         startSec: 0,
-        endSec: 1,
+        endSec: boundary1,
         kind: "aim_or_prepare",
         description: clipMotionEvidence(
           `Player prepares the input ${authenticity.playerInput.input}; visible evidence: ${authenticity.playerInput.visibleEvidence}`,
         ),
       },
       {
-        startSec: 1,
-        endSec: 2.5,
+        startSec: boundary1,
+        endSec: boundary2,
         kind: "player_action",
         description: clipMotionEvidence(authenticity.playerAction.action),
       },
       {
-        startSec: 2.5,
-        endSec: 3.5,
+        startSec: boundary2,
+        endSec: boundary3,
         kind: "world_response",
         description: clipMotionEvidence(authenticity.worldResponse.response),
       },
       {
-        startSec: 3.5,
-        endSec: 5,
+        startSec: boundary3,
+        endSec: durationSec,
         kind: "player_adjustment",
         description: clipMotionEvidence(
           `Playable adjustment/recovery while teammate function remains visible: ${authenticity.coop.teammateFunction}`,

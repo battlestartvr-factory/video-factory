@@ -128,6 +128,10 @@ function newShotResponse() {
         ...oldShot,
         shotId,
         action: "Driver visibly moves the trolley while Rigger visibly operates a separate tension control.",
+        generationPlan: {
+          ...oldShot.generationPlan,
+          imageModel: "gpt-image-2",
+        },
         metadata: {
           gameplayAuthenticityPlan: validGameplayAuthenticityPlan({
             shotId,
@@ -238,6 +242,7 @@ describe("Stage 4 reference revision loop", () => {
           shots: [
             expect.objectContaining({
               shotId: "revised-shot",
+              generationPlan: expect.objectContaining({ imageModel: "gpt-image-2" }),
               metadata: expect.objectContaining({
                 gameplayAuthenticity: expect.objectContaining({ passed: true }),
               }),

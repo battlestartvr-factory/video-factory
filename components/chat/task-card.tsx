@@ -5,6 +5,7 @@ import { cn } from "@/lib/utils";
 import type { TaskCardData } from "@/lib/types/workspace";
 import { DiscoveryTaskCard } from "./discovery-task-card";
 import { DiscoveryV2TaskCard } from "./discovery-v2-task-card";
+import { DiscoveryV3TaskCard } from "./discovery-v3-task-card";
 
 const STATUS_CONFIG: Record<string, { label: string; icon: typeof Clock; color: string }> = {
   queued: { label: "В очереди", icon: Clock, color: "text-zinc-400" },
@@ -30,9 +31,13 @@ export function TaskCard({ task }: TaskCardProps) {
       : null;
   if (discoveryRunId) {
     const workflowVersion = Number(task.settings?.workflowVersion ?? 1);
-    return workflowVersion === 2
-      ? <DiscoveryV2TaskCard task={task} runId={discoveryRunId} />
-      : <DiscoveryTaskCard task={task} runId={discoveryRunId} />;
+    if (workflowVersion === 3) {
+      return <DiscoveryV3TaskCard task={task} runId={discoveryRunId} />;
+    }
+    if (workflowVersion === 2) {
+      return <DiscoveryV2TaskCard task={task} runId={discoveryRunId} />;
+    }
+    return <DiscoveryTaskCard task={task} runId={discoveryRunId} />;
   }
 
   const config = STATUS_CONFIG[task.status] ?? STATUS_CONFIG.queued;

@@ -1,4 +1,4 @@
-import { createLogger } from "@/lib/logging/logger";
+import { createLogger } from "../../logging/logger";
 import { PROVIDER_ERROR_CODES } from "./types";
 
 const kieLogger = createLogger({ component: "kie_provider" });

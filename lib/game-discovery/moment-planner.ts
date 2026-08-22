@@ -55,8 +55,19 @@ function addUsage(
   total.totalTokens += response.usage.totalTokens ?? 0;
 }
 
-function schemaInstructions(): string {
-  return `Return ONLY JSON {"moments":[...]}. Each moment must satisfy GameplayMomentSpec v1 exactly:\n- schema:"gameplay_moment", version:1, momentId, conceptId, hypothesis\n- durationTargetSec 3..30\n- setup\n- playerActions: at least 2 [{role,action,dependencyOnOthers}]\n- coopDependencyEvidence, socialTension\n- successBeat and/or failureBeat (at least one)\n- expectedViewerUnderstanding, cameraIntent\n- requiredVisualEvidence: non-empty string[]\n- optional metadata object.\nUse momentId as a concise stable ID derived from conceptId.`;
+export const KLING_GAMEPLAY_DURATIONS = [5, 10, 15] as const;
+export type KlingGameplayDuration = (typeof KLING_GAMEPLAY_DURATIONS)[number];
+
+export function gameplayDurationSeconds(objective: DiscoveryObjectiveSpecV1): KlingGameplayDuration {
+  const configured = Number(objective.metadata?.gameplayDurationSec ?? 5);
+  if (!Number.isFinite(configured)) return 5;
+  return KLING_GAMEPLAY_DURATIONS.reduce((best, candidate) =>
+    Math.abs(candidate - configured) < Math.abs(best - configured) ? candidate : best,
+  );
+}
+
+function schemaInstructions(durationSec: number): string {
+  return `Return ONLY JSON {"moments":[...]}. Each moment must satisfy GameplayMomentSpec v1 exactly:\n- schema:"gameplay_moment", version:1, momentId, conceptId, hypothesis\n- durationTargetSec:${durationSec}\n- setup\n- playerActions: at least 2 [{role,action,dependencyOnOthers}]\n- coopDependencyEvidence, socialTension\n- successBeat and/or failureBeat (at least one)\n- expectedViewerUnderstanding, cameraIntent\n- requiredVisualEvidence: non-empty string[]\n- optional metadata object.\nUse momentId as a concise stable ID derived from conceptId.`;
 }
 
 export async function planGameplayMoments(input: {
@@ -72,10 +83,11 @@ export async function planGameplayMoments(input: {
   const policy = getDiscoveryLlmPolicy("gameplay_moment_planning");
   const repairPolicy = getDiscoveryLlmPolicy("schema_repair");
   const model = input.model ?? policy.primaryModel;
+  const durationSec = gameplayDurationSeconds(input.objective);
   const usage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
   const hashes: string[] = [];
   const conceptIds = input.concepts.map((concept) => concept.conceptId);
-  const plannerPrompt = `Choose exactly one short fake-gameplay moment for each selected concept. The purpose is to test the game mechanic, not make a trailer.\n\nDISCOVERY OBJECTIVE:\n${JSON.stringify(input.objective, null, 2)}\n\nSELECTED CONCEPTS:\n${JSON.stringify(input.concepts, null, 2)}\n\nFor each concept, the moment must visibly prove:\n- why the other player is mechanically necessary;\n- what each player is doing at the same time;\n- one social reaction such as coordination, blame, rescue, panic, trust, sacrifice, or synchronized success;\n- a legible success/failure consequence;\n- a camera/framing choice that makes the mechanic understandable without narration.\nKeep the scenario narrow enough for one first production smoke shot later. Do not change the concept to make it easier to visualize.\n\n${schemaInstructions()}`;
+  const plannerPrompt = `Choose exactly one ${durationSec}-second fake-gameplay moment for each selected concept. The purpose is to test the game mechanic, not make a trailer.\n\nDISCOVERY OBJECTIVE:\n${JSON.stringify(input.objective, null, 2)}\n\nSELECTED CONCEPTS:\n${JSON.stringify(input.concepts, null, 2)}\n\nFor each concept, the moment must visibly prove:\n- why the other player is mechanically necessary;\n- what each player is doing at the same time;\n- one social reaction such as coordination, blame, rescue, panic, trust, sacrifice, or synchronized success;\n- a legible success/failure consequence;\n- a camera/framing choice that makes the mechanic understandable without narration.\nKeep the scenario narrow enough for one ${durationSec}s production gameplay shot. Do not change the concept to make it easier to visualize.\n\n${schemaInstructions(durationSec)}`;
 
   const first = await input.llm.generate({
     model,
@@ -96,7 +108,7 @@ export async function planGameplayMoments(input: {
     const repair = await input.llm.generate({
       model: repairPolicy.primaryModel,
       system: "Repair JSON/schema only. Preserve the planned gameplay moments. Return JSON only.",
-      prompt: `Repair this response into exactly one valid GameplayMomentSpec v1 for each concept ID ${JSON.stringify(conceptIds)}.\n\nINVALID RESPONSE:\n${first.text}\n\n${schemaInstructions()}`,
+      prompt: `Repair this response into exactly one valid GameplayMomentSpec v1 for each concept ID ${JSON.stringify(conceptIds)} and set durationTargetSec=${durationSec}.\n\nINVALID RESPONSE:\n${first.text}\n\n${schemaInstructions(durationSec)}`,
       maxTokens: repairPolicy.maxOutputTokens,
       thinking: repairPolicy.thinking,
       signal: input.signal,
@@ -114,7 +126,10 @@ export async function planGameplayMoments(input: {
 
   const expectedIds = new Set(conceptIds);
   const byConcept = new Map<string, GameplayMomentSpecV1>();
-  for (const moment of moments) {
+  for (const rawMoment of moments) {
+    const moment = rawMoment.durationTargetSec === durationSec
+      ? rawMoment
+      : gameplayMomentSpecV1Schema.parse({ ...rawMoment, durationTargetSec: durationSec });
     if (!expectedIds.has(moment.conceptId)) throw new Error(`GAMEPLAY_MOMENT_UNKNOWN_CONCEPT:${moment.conceptId}`);
     if (byConcept.has(moment.conceptId)) throw new Error(`GAMEPLAY_MOMENT_DUPLICATE_CONCEPT:${moment.conceptId}`);
     byConcept.set(moment.conceptId, moment);

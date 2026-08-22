@@ -29,19 +29,54 @@ function compactConcept(spec: unknown) {
   };
 }
 
+function v3PackSources(pack: Record<string, unknown>) {
+  if (pack.schema !== "game_discovery_research_pack" || pack.version !== 1 || !Array.isArray(pack.sources)) {
+    return [];
+  }
+  return pack.sources.flatMap((raw, index) => {
+    const source = compactObject(raw);
+    const url = typeof source.canonicalUrl === "string" ? source.canonicalUrl : null;
+    if (!url) return [];
+    return [{
+      id: typeof source.sourceRef === "string" ? source.sourceRef : `v3-source-${index}`,
+      title: typeof source.title === "string" ? source.title : null,
+      url,
+      sourceType: "verified_web_source",
+      publishedAt: null,
+      observedAt: typeof source.observedAt === "string" ? source.observedAt : null,
+      scoutRole: null,
+      relevanceScore: null,
+      selected: true,
+      reusedFromCache: false,
+      categories: Array.isArray(source.categories) ? source.categories : [],
+      groundedClaims: Array.isArray(source.groundedClaims) ? source.groundedClaims : [],
+    }];
+  });
+}
+
 export async function GET(_request: Request, context: { params: Promise<{ runId: string }> }) {
   const requestId = generateRequestId();
   const user = await getSessionUser();
   if (!user) return apiError("UNAUTHORIZED", "Требуется авторизация", 401, requestId);
   const { runId } = await context.params;
 
+  let root;
   try {
-    await getGameDiscoveryBatch({ userId: user.id, runId });
+    root = await getGameDiscoveryBatch({ userId: user.id, runId });
+    if (!root) return apiError("NOT_FOUND", "Запуск не найден", 404, requestId);
   } catch (error) {
     const message = error instanceof Error ? error.message : "unknown";
     if (message === "FORBIDDEN") return apiError("FORBIDDEN", "Нет доступа к запуску", 403, requestId);
     return apiError("NOT_FOUND", "Запуск не найден", 404, requestId);
   }
+
+  const rootOutputs = compactObject(root.outputs);
+  const candidateV3Pack = compactObject(rootOutputs.research_pack);
+  const researchPack =
+    candidateV3Pack.schema === "game_discovery_research_pack" && candidateV3Pack.version === 1
+      ? candidateV3Pack
+      : null;
+  const simplifiedSources = researchPack ? v3PackSources(researchPack) : [];
 
   const service = createSupabaseServiceClient();
   const { data: researchRun, error: runError } = await service
@@ -53,13 +88,14 @@ export async function GET(_request: Request, context: { params: Promise<{ runId:
     .maybeSingle();
 
   if (runError) {
-    return apiError("RESEARCH_OBSERVABILITY_FAILED", "Не удалось загрузить Research Council", 500, requestId);
+    return apiError("RESEARCH_OBSERVABILITY_FAILED", "Не удалось загрузить исследование", 500, requestId);
   }
   if (!researchRun) {
     return apiSuccess({
       researchRun: null,
+      researchPack,
       scouts: [],
-      sources: [],
+      sources: simplifiedSources,
       evidence: [],
       evidencePack: null,
       conceptDesigners: [],
@@ -85,7 +121,7 @@ export async function GET(_request: Request, context: { params: Promise<{ runId:
 
   const queryError = [scoutAssignments.error, runSources.error, evidenceResult.error, packResult.error, designerAssignments.error, candidatesResult.error, curationResult.error, assetsResult.error, referenceSetsResult.error].find(Boolean);
   if (queryError) {
-    return apiError("RESEARCH_OBSERVABILITY_FAILED", "Не удалось собрать Stage 4.5 observability", 500, requestId);
+    return apiError("RESEARCH_OBSERVABILITY_FAILED", "Не удалось собрать observability исследования", 500, requestId);
   }
 
   const sourceIds = [...new Set((runSources.data ?? []).map((row) => String(row.source_id)).filter(Boolean))];
@@ -136,7 +172,7 @@ export async function GET(_request: Request, context: { params: Promise<{ runId:
       updatedAt: job?.updated_at ?? null,
     };
   });
-  const sources = (sourcesResult.data ?? []).map((row) => {
+  const legacySources = (sourcesResult.data ?? []).map((row) => {
     const usage = sourceUse.get(String(row.id));
     return {
       id: row.id,
@@ -153,9 +189,10 @@ export async function GET(_request: Request, context: { params: Promise<{ runId:
   });
 
   return apiSuccess({
-    researchRun: researchRun,
+    researchRun,
+    researchPack,
     scouts,
-    sources,
+    sources: simplifiedSources.length ? simplifiedSources : legacySources,
     evidence: evidenceResult.data ?? [],
     evidencePack: packResult.data ?? null,
     conceptDesigners,
