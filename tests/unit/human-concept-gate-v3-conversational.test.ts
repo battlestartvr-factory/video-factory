@@ -62,10 +62,14 @@ function review(
   };
 }
 
+interface PromptCall {
+  prompt: string;
+}
+
 function llmWithArtifacts(values: ConversationalGameConceptV2[]) {
   const queue = [...values];
   return {
-    generate: vi.fn(async () => {
+    generate: vi.fn(async (_input: PromptCall) => {
       const next = queue.shift();
       if (!next) throw new Error("unexpected LLM call");
       return {
@@ -116,7 +120,7 @@ describe("Game Discovery v3 conversational Human Concept Gate", () => {
 
     const call = llm.generate.mock.calls[0]?.[0];
     expect(call?.prompt).toContain("contentMarkdown");
-    expect(call?.prompt).toContain("не реконструировать старую schema");
+    expect(call?.prompt).toContain("reconstruct the old schema");
     expect(call?.prompt).not.toContain("npcAiDependency:\"none\"|\"light\"|\"heavy\"");
   });
 
