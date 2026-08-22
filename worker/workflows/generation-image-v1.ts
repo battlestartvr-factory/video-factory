@@ -10,6 +10,8 @@ import type { WorkflowTickContext, WorkflowTickHandler, WorkflowTickOutcome } fr
 const NORMAL_POLL_MS = 4_000;
 const AMBIGUOUS_SUBMIT_RECHECK_MS = 60_000;
 const MAX_DOCUMENT_CONTEXT_CHARS = 24_000;
+const MAX_PROVIDER_RETRIES = 2;
+const PROVIDER_RETRY_BASE_MS = 5_000;
 
 export interface ImageProviderRequest {
   model: string;
@@ -148,6 +150,26 @@ function nextAt(delayMs: number): string {
   return new Date(Date.now() + delayMs).toISOString();
 }
 
+function providerRetryCount(state: Record<string, unknown>): number {
+  const value = state.provider_retry_count;
+  return typeof value === "number" && Number.isFinite(value) && value >= 0
+    ? Math.trunc(value)
+    : 0;
+}
+
+function providerRetryDelayMs(retryCount: number): number {
+  return PROVIDER_RETRY_BASE_MS * 2 ** Math.max(0, Math.min(retryCount, MAX_PROVIDER_RETRIES));
+}
+
+function providerSubmissionKey(generationId: string, variantIndex: number, retryCount: number): string {
+  const base = `generation:${generationId}:image:v1:${variantIndex}`;
+  return retryCount > 0 ? `${base}:retry:${retryCount}` : base;
+}
+
+function providerStageAttempt(variantIndex: number, retryCount: number): number {
+  return variantIndex + 1 + retryCount * 10;
+}
+
 function waitingOutcome(input: {
   context: WorkflowTickContext;
   generationId: string;
@@ -188,6 +210,59 @@ function waitingOutcome(input: {
   };
 }
 
+function retryOutcome(input: {
+  context: WorkflowTickContext;
+  generationId: string;
+  variantIndex: number;
+  outputs: Array<{ url: string; kind: "image"; mimeType?: string }>;
+  providerTaskId: string;
+  retryCount: number;
+  code: string;
+  message: string;
+  source: "submit" | "provider_terminal";
+}): WorkflowTickOutcome {
+  const nextRetryCount = input.retryCount + 1;
+  const delayMs = providerRetryDelayMs(input.retryCount);
+  const nextActionAt = nextAt(delayMs);
+  return {
+    status: "waiting",
+    state: {
+      ...input.context.state,
+      generation_id: input.generationId,
+      variant_index: input.variantIndex,
+      outputs: input.outputs,
+      provider_task_id: null,
+      external_task_id: null,
+      ambiguous_submit: false,
+      provider_retry_count: nextRetryCount,
+      last_provider_retry_error: {
+        code: input.code,
+        message: input.message,
+        source: input.source,
+        provider_task_id: input.providerTaskId,
+      },
+    },
+    currentStage: "provider_image",
+    progress: Math.min(95, 10 + input.variantIndex * 10),
+    nextActionAt,
+    stateReason: `provider_transient_failure_retry_scheduled:${input.code}`,
+    eventType: "provider.retry_scheduled",
+    eventPayload: {
+      generation_id: input.generationId,
+      variant_index: input.variantIndex,
+      failed_provider_task_id: input.providerTaskId,
+      provider_retry_count: nextRetryCount,
+      max_provider_retries: MAX_PROVIDER_RETRIES,
+      delay_ms: delayMs,
+      next_action_at: nextActionAt,
+      error_code: input.code,
+      error_message: input.message,
+      source: input.source,
+    },
+    enqueueReason: "provider_retry",
+  };
+}
+
 function requireRuntime(context: WorkflowTickContext) {
   if (!context.workerId || !context.leaseToken || !context.services) {
     throw new DurableWorkflowError({
@@ -218,6 +293,8 @@ function providerErrorPayload(error: unknown): Record<string, unknown> {
       message: error.message,
       retryable: error.retryable,
       ambiguous_submit: error.ambiguousSubmit,
+      provider_code: error.providerCode,
+      provider_message: error.providerMessage,
     };
   }
   return {
@@ -225,6 +302,35 @@ function providerErrorPayload(error: unknown): Record<string, unknown> {
     message: error instanceof Error ? error.message : String(error),
     retryable: false,
   };
+}
+
+function retryableProviderTerminalFailure(code: string | null, message: string | null): boolean {
+  const normalizedCode = (code ?? "").trim();
+  const numericCode = Number(normalizedCode);
+  if (
+    Number.isFinite(numericCode) &&
+    (numericCode === 408 || numericCode === 429 || (numericCode >= 500 && numericCode <= 599))
+  ) {
+    return true;
+  }
+
+  const haystack = `${normalizedCode} ${message ?? ""}`.toLowerCase();
+  return [
+    "timeout",
+    "timed out",
+    "internal error",
+    "internal server error",
+    "service unavailable",
+    "temporarily unavailable",
+    "temporary failure",
+    "rate limit",
+    "too many requests",
+    "bad gateway",
+    "gateway timeout",
+    "connection reset",
+    "connection aborted",
+    "try again",
+  ].some((marker) => haystack.includes(marker));
 }
 
 function pollError(error: unknown): DurableWorkflowError {
@@ -325,6 +431,7 @@ export const generationImageV1: WorkflowTickHandler = async (context) => {
       ? Math.trunc(context.state.variant_index)
       : 0;
   const outputs = outputState(context.state.outputs);
+  const retryCount = providerRetryCount(context.state);
   const providerRequest = buildImageProviderRequest(generation);
   const stableRequestPayload = { model: providerRequest.model, input: providerRequest.input };
   const requestPayloadHash = hashPayload(stableRequestPayload);
@@ -340,10 +447,10 @@ export const generationImageV1: WorkflowTickHandler = async (context) => {
       workerId,
       leaseToken,
       stage: "provider_image",
-      stageAttempt: variantIndex + 1,
+      stageAttempt: providerStageAttempt(variantIndex, retryCount),
       provider: "kie",
       model: providerRequest.model,
-      submissionKey: `generation:${generation.id}:image:v1:${variantIndex}`,
+      submissionKey: providerSubmissionKey(generation.id, variantIndex, retryCount),
       variantIndex,
       requestPayload: stableRequestPayload,
       requestPayloadHash,
@@ -378,6 +485,31 @@ export const generationImageV1: WorkflowTickHandler = async (context) => {
         }
 
         const persistedError = providerErrorPayload(error);
+        if (
+          error instanceof KieMarketTaskError &&
+          error.retryable &&
+          retryCount < MAX_PROVIDER_RETRIES
+        ) {
+          await services.providerTasks.recordRetryableSubmitFailure({
+            providerTaskId,
+            error: persistedError,
+          });
+          return retryOutcome({
+            context,
+            generationId: generation.id,
+            variantIndex,
+            outputs,
+            providerTaskId,
+            retryCount,
+            code:
+              error.providerCode === null || error.providerCode === undefined
+                ? "KIE_SUBMIT_RETRYABLE"
+                : String(error.providerCode),
+            message: error.providerMessage ?? error.message,
+            source: "submit",
+          });
+        }
+
         await services.providerTasks.recordSubmitFailure({ providerTaskId, error: persistedError });
         await services.generationImages.fail({
           jobId: context.jobId,
@@ -481,6 +613,23 @@ export const generationImageV1: WorkflowTickHandler = async (context) => {
   if (detail.state === "fail") {
     const code = detail.failCode || "KIE_GENERATION_FAILED";
     const message = detail.failMessage || "KIE image generation failed";
+    if (
+      retryCount < MAX_PROVIDER_RETRIES &&
+      retryableProviderTerminalFailure(detail.failCode, detail.failMessage)
+    ) {
+      return retryOutcome({
+        context,
+        generationId: generation.id,
+        variantIndex,
+        outputs,
+        providerTaskId,
+        retryCount,
+        code,
+        message,
+        source: "provider_terminal",
+      });
+    }
+
     await services.generationImages.fail({
       jobId: context.jobId,
       providerTaskId,
@@ -493,7 +642,11 @@ export const generationImageV1: WorkflowTickHandler = async (context) => {
       providerTaskId,
       code,
       message,
-      details: { provider_state: detail.state },
+      details: {
+        provider_state: detail.state,
+        provider_retry_count: retryCount,
+        max_provider_retries: MAX_PROVIDER_RETRIES,
+      },
     });
   }
 
@@ -526,6 +679,8 @@ export const generationImageV1: WorkflowTickHandler = async (context) => {
         provider_task_id: null,
         external_task_id: null,
         ambiguous_submit: false,
+        provider_retry_count: 0,
+        last_provider_retry_error: null,
       },
       currentStage: "provider_image",
       progress: Math.min(90, Math.round(((variantIndex + 1) / requestedOutputs) * 90)),
@@ -556,6 +711,8 @@ export const generationImageV1: WorkflowTickHandler = async (context) => {
       provider_task_id: providerTaskId,
       external_task_id: externalTaskId,
       ambiguous_submit: false,
+      provider_retry_count: 0,
+      last_provider_retry_error: null,
     },
     currentStage: "complete",
     progress: 100,
