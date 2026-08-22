@@ -70,6 +70,10 @@ export function ConceptReviewPanel({
   const noveltyAxes = array(concept.noveltyAxes).map(object);
   const interactionModel = array(concept.interactionModel).map(String);
   const decision = review?.decision;
+  const metadata = object(concept.metadata);
+  const conversationalArtifact = object(metadata.v3ConceptArtifact);
+  const conversationalTitle = str(conversationalArtifact.title);
+  const conversationalText = str(conversationalArtifact.contentMarkdown);
 
   return (
     <div className="space-y-4 border-b border-border bg-background/10 p-4">
@@ -95,71 +99,82 @@ export function ConceptReviewPanel({
         </Badge>
       </div>
 
-      <div className="grid gap-4 rounded-xl border border-border bg-background/30 p-4 md:grid-cols-2">
-        <Section title="Основная механика" value={concept.coreMechanic} />
-        <Section title="Почему нужен совместный режим" value={concept.coopDependency} />
-        <Section title="Главная игровая фишка" value={concept.gameplayHook} />
-        <Section title="Провал / напряжение" value={concept.failureMode} />
-        <Section title="Социальный момент" value={concept.socialMoment} />
-        <Section title="Зрелищность" value={concept.spectacle} />
-        <Section title="Место действия" value={concept.setting} />
-        <Section title="Художественное направление" value={concept.artDirection} />
-        <Section title="Камера" value={concept.camera} />
-        <Section title="Читаемость" value={concept.readability} />
+      {conversationalText ? (
+        <div className="rounded-xl border border-border bg-background/30 p-4">
+          {conversationalTitle && (
+            <p className="text-base font-semibold text-foreground">{conversationalTitle}</p>
+          )}
+          <p className="mt-3 whitespace-pre-wrap text-sm leading-7 text-muted-foreground">
+            {conversationalText}
+          </p>
+        </div>
+      ) : (
+        <div className="grid gap-4 rounded-xl border border-border bg-background/30 p-4 md:grid-cols-2">
+          <Section title="Основная механика" value={concept.coreMechanic} />
+          <Section title="Почему нужен совместный режим" value={concept.coopDependency} />
+          <Section title="Главная игровая фишка" value={concept.gameplayHook} />
+          <Section title="Провал / напряжение" value={concept.failureMode} />
+          <Section title="Социальный момент" value={concept.socialMoment} />
+          <Section title="Зрелищность" value={concept.spectacle} />
+          <Section title="Место действия" value={concept.setting} />
+          <Section title="Художественное направление" value={concept.artDirection} />
+          <Section title="Камера" value={concept.camera} />
+          <Section title="Читаемость" value={concept.readability} />
 
-        {interactionModel.length > 0 && (
-          <div>
-            <p className="text-[11px] font-semibold uppercase tracking-wider text-muted">Модель взаимодействия</p>
-            <div className="mt-2 flex flex-wrap gap-1.5">
-              {interactionModel.map((item) => (
-                <Badge key={item} variant="secondary">{item}</Badge>
-              ))}
+          {interactionModel.length > 0 && (
+            <div>
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-muted">Модель взаимодействия</p>
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {interactionModel.map((item) => (
+                  <Badge key={item} variant="secondary">{item}</Badge>
+                ))}
+              </div>
             </div>
-          </div>
-        )}
+          )}
 
-        {playerRoles.length > 0 && (
-          <div>
-            <p className="text-[11px] font-semibold uppercase tracking-wider text-muted">Роли игроков</p>
-            <ul className="mt-1 space-y-1.5 text-sm text-muted-foreground">
-              {playerRoles.map((role, index) => (
-                <li key={`${str(role.role) ?? "role"}-${index}`}>
-                  <span className="font-medium text-foreground">{str(role.role) ?? `Игрок ${index + 1}`}:</span>{" "}
-                  {str(role.responsibility) ?? "—"}
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
+          {playerRoles.length > 0 && (
+            <div>
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-muted">Роли игроков</p>
+              <ul className="mt-1 space-y-1.5 text-sm text-muted-foreground">
+                {playerRoles.map((role, index) => (
+                  <li key={`${str(role.role) ?? "role"}-${index}`}>
+                    <span className="font-medium text-foreground">{str(role.role) ?? `Игрок ${index + 1}`}:</span>{" "}
+                    {str(role.responsibility) ?? "—"}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
 
-        {noveltyAxes.length > 0 && (
-          <div>
-            <p className="text-[11px] font-semibold uppercase tracking-wider text-muted">Что здесь нового</p>
-            <ul className="mt-1 space-y-1.5 text-sm text-muted-foreground">
-              {noveltyAxes.slice(0, 5).map((axis, index) => (
-                <li key={`${str(axis.axis) ?? "axis"}-${index}`}>
-                  <span className="font-medium text-foreground">{str(axis.axis) ?? "Ось"}:</span>{" "}
-                  {str(axis.choice) ?? "—"}
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
+          {noveltyAxes.length > 0 && (
+            <div>
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-muted">Что здесь нового</p>
+              <ul className="mt-1 space-y-1.5 text-sm text-muted-foreground">
+                {noveltyAxes.slice(0, 5).map((axis, index) => (
+                  <li key={`${str(axis.axis) ?? "axis"}-${index}`}>
+                    <span className="font-medium text-foreground">{str(axis.axis) ?? "Ось"}:</span>{" "}
+                    {str(axis.choice) ?? "—"}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
 
-        {Object.keys(buildability).length > 0 && (
-          <div>
-            <p className="text-[11px] font-semibold uppercase tracking-wider text-muted">Сложность реализации</p>
-            <p className="mt-1 text-sm leading-6 text-muted-foreground">
-              Сеть: {buildabilityLevel(buildability.networking)}; физика: {buildabilityLevel(buildability.physics)}; объём контента: {buildabilityLevel(buildability.contentBurden)}; зависимость от ИИ NPC: {buildabilityLevel(buildability.npcAiDependency)}.
-            </p>
-            {array(buildability.mainRisks).length > 0 && (
-              <p className="mt-1 text-xs leading-5 text-muted-foreground">
-                Риски: {array(buildability.mainRisks).map(String).join("; ")}
+          {Object.keys(buildability).length > 0 && (
+            <div>
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-muted">Сложность реализации</p>
+              <p className="mt-1 text-sm leading-6 text-muted-foreground">
+                Сеть: {buildabilityLevel(buildability.networking)}; физика: {buildabilityLevel(buildability.physics)}; объём контента: {buildabilityLevel(buildability.contentBurden)}; зависимость от ИИ NPC: {buildabilityLevel(buildability.npcAiDependency)}.
               </p>
-            )}
-          </div>
-        )}
-      </div>
+              {array(buildability.mainRisks).length > 0 && (
+                <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                  Риски: {array(buildability.mainRisks).map(String).join("; ")}
+                </p>
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
       <textarea
         value={feedback}
