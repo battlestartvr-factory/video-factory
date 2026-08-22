@@ -78,12 +78,14 @@ function validPlan() {
   });
 }
 
-const shot = {
-  shotId: "tilt-shot",
-  momentId: "tilt-moment",
-  durationSec: 5,
-  generationPlan: { durationSec: 5 },
-} as unknown as ShotSpecV1;
+function shot(durationSec = 5) {
+  return {
+    shotId: "tilt-shot",
+    momentId: "tilt-moment",
+    durationSec,
+    generationPlan: { durationSec },
+  } as unknown as ShotSpecV1;
+}
 
 describe("GameplayAuthenticitySpec v1", () => {
   it("passes a player-bound input -> action -> response co-op shot", () => {
@@ -124,8 +126,9 @@ describe("GameplayAuthenticitySpec v1", () => {
 
   it("builds a continuous four-beat five-second motion plan with a player-recordability gate", () => {
     const spec = evaluateGameplayAuthenticityPlan(validPlan());
-    const motion = buildGameplayVideoMotionPlan(shot, spec);
+    const motion = buildGameplayVideoMotionPlan(shot(), spec);
     expect(motion.passed).toBe(true);
+    expect(motion.durationSec).toBe(5);
     expect(motion.couldBeRecordedByPlayer).toBe(true);
     expect(motion.beats.map((beat) => [beat.startSec, beat.endSec])).toEqual([
       [0, 1],
@@ -136,13 +139,37 @@ describe("GameplayAuthenticitySpec v1", () => {
     expect(motion.prohibitedCameraMoves).toContain("detached_camera");
   });
 
+  it("scales the same causal four-beat plan to a ten-second Kling clip", () => {
+    const spec = evaluateGameplayAuthenticityPlan(validPlan());
+    const motion = buildGameplayVideoMotionPlan(shot(10), spec);
+    expect(motion.passed).toBe(true);
+    expect(motion.durationSec).toBe(10);
+    expect(motion.beats.map((beat) => [beat.startSec, beat.endSec])).toEqual([
+      [0, 2],
+      [2, 5],
+      [5, 7],
+      [7, 10],
+    ]);
+  });
+
+  it("fails the video gate when shot and generation duration diverge", () => {
+    const spec = evaluateGameplayAuthenticityPlan(validPlan());
+    const mismatched = {
+      ...shot(10),
+      generationPlan: { durationSec: 5 },
+    } as unknown as ShotSpecV1;
+    const motion = buildGameplayVideoMotionPlan(mismatched, spec);
+    expect(motion.passed).toBe(false);
+    expect(motion.gateFailures).toContain("generation_duration_mismatch");
+  });
+
   it("fails the video gate when the image plan itself is not playable", () => {
     const bad = validPlan();
     const spec = evaluateGameplayAuthenticityPlan({
       ...bad,
       controllablePlayer: { ...bad.controllablePlayer, viewpointPlausiblyPlayable: false },
     });
-    const motion = buildGameplayVideoMotionPlan(shot, spec);
+    const motion = buildGameplayVideoMotionPlan(shot(), spec);
     expect(motion.passed).toBe(false);
     expect(motion.couldBeRecordedByPlayer).toBe(false);
     expect(motion.gateFailures).toContain("cannot_plausibly_be_recorded_by_active_player");
