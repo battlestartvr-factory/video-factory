@@ -1,7 +1,7 @@
 import {
   parseKieGroundedPayloads,
   readKieProviderPayloads,
-} from "../web/kie-grounded-search";
+} from "../web/kie-grounding-parser";
 import { isDomainAllowed } from "../web/normalization";
 import {
   domainFromUrl,
