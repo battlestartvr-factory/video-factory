@@ -274,7 +274,7 @@ export const gameDiscoveryBatchV3: WorkflowTickHandler = async (context) => {
         jobId: context.jobId,
         rootCreativeRunId: creativeRunId,
         objective,
-        researchPolicy: policy,
+        researchPolicy: { ...policy },
         plan,
       });
       if (plan.researchRunId !== researchRun.researchRunId) {
@@ -287,7 +287,7 @@ export const gameDiscoveryBatchV3: WorkflowTickHandler = async (context) => {
           jobId: context.jobId,
           rootCreativeRunId: creativeRunId,
           objective,
-          researchPolicy: policy,
+          researchPolicy: { ...policy },
           plan,
         });
       }
