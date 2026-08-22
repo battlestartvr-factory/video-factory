@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import type { KieClaudeGenerateResult, KieClaudeTaskAdapter } from "../models/kie/claude-task";
+import { getConversationalGameConceptV2 } from "./conversational-concept";
 import { getDiscoveryLlmPolicy } from "./model-policy";
 import {
   gameplayMomentSpecV1Schema,
@@ -70,6 +71,19 @@ function schemaInstructions(durationSec: number): string {
   return `Return ONLY JSON {"moments":[...]}. Each moment must satisfy GameplayMomentSpec v1 exactly:\n- schema:"gameplay_moment", version:1, momentId, conceptId, hypothesis\n- durationTargetSec:${durationSec}\n- setup\n- playerActions: at least 2 [{role,action,dependencyOnOthers}]\n- coopDependencyEvidence, socialTension\n- successBeat and/or failureBeat (at least one)\n- expectedViewerUnderstanding, cameraIntent\n- requiredVisualEvidence: non-empty string[]\n- optional metadata object.\nUse momentId as a concise stable ID derived from conceptId.`;
 }
 
+function conceptForPlanner(concept: CoopGameConceptSpecV1): unknown {
+  const artifact = getConversationalGameConceptV2(concept);
+  if (!artifact) return concept;
+  const metadata = concept.metadata ?? {};
+  return {
+    conceptId: artifact.conceptId,
+    title: artifact.title,
+    approvedConceptText: artifact.contentMarkdown,
+    sourceRefs: Array.isArray(metadata.v3SourceRefs) ? metadata.v3SourceRefs : [],
+    note: "This complete human-approved text is authoritative. Do not infer creative meaning from legacy compatibility fields.",
+  };
+}
+
 export async function planGameplayMoments(input: {
   llm: GameplayMomentPlannerLlm;
   objective: DiscoveryObjectiveSpecV1;
@@ -87,7 +101,7 @@ export async function planGameplayMoments(input: {
   const usage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
   const hashes: string[] = [];
   const conceptIds = input.concepts.map((concept) => concept.conceptId);
-  const plannerPrompt = `Choose exactly one ${durationSec}-second fake-gameplay moment for each selected concept. The purpose is to test the game mechanic, not make a trailer.\n\nDISCOVERY OBJECTIVE:\n${JSON.stringify(input.objective, null, 2)}\n\nSELECTED CONCEPTS:\n${JSON.stringify(input.concepts, null, 2)}\n\nFor each concept, the moment must visibly prove:\n- why the other player is mechanically necessary;\n- what each player is doing at the same time;\n- one social reaction such as coordination, blame, rescue, panic, trust, sacrifice, or synchronized success;\n- a legible success/failure consequence;\n- a camera/framing choice that makes the mechanic understandable without narration.\nKeep the scenario narrow enough for one ${durationSec}s production gameplay shot. Do not change the concept to make it easier to visualize.\n\n${schemaInstructions(durationSec)}`;
+  const plannerPrompt = `Choose exactly one ${durationSec}-second fake-gameplay moment for each selected concept. The purpose is to test the game mechanic, not make a trailer.\n\nDISCOVERY OBJECTIVE:\n${JSON.stringify(input.objective, null, 2)}\n\nSELECTED CONCEPTS — FULL HUMAN-APPROVED TEXT IS AUTHORITATIVE:\n${JSON.stringify(input.concepts.map(conceptForPlanner), null, 2)}\n\nFor each concept, the moment must visibly prove:\n- why the other player is mechanically necessary;\n- what each player is doing at the same time;\n- one social reaction such as coordination, blame, rescue, panic, trust, sacrifice, or synchronized success;\n- a legible success/failure consequence;\n- a camera/framing choice that makes the mechanic understandable without narration.\nKeep the scenario narrow enough for one ${durationSec}s production gameplay shot. Do not change the concept to make it easier to visualize. For v3 conversational concepts, read the complete approvedConceptText like a strong model would read a normal ChatGPT answer; do not rely on internal compatibility fields.\n\n${schemaInstructions(durationSec)}`;
 
   const first = await input.llm.generate({
     model,
