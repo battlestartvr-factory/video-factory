@@ -55,10 +55,15 @@ function addUsage(
   total.totalTokens += response.usage.totalTokens ?? 0;
 }
 
-export function gameplayDurationSeconds(objective: DiscoveryObjectiveSpecV1): number {
+export const KLING_GAMEPLAY_DURATIONS = [5, 10, 15] as const;
+export type KlingGameplayDuration = (typeof KLING_GAMEPLAY_DURATIONS)[number];
+
+export function gameplayDurationSeconds(objective: DiscoveryObjectiveSpecV1): KlingGameplayDuration {
   const configured = Number(objective.metadata?.gameplayDurationSec ?? 5);
   if (!Number.isFinite(configured)) return 5;
-  return Math.min(15, Math.max(3, Math.round(configured)));
+  return KLING_GAMEPLAY_DURATIONS.reduce((best, candidate) =>
+    Math.abs(candidate - configured) < Math.abs(best - configured) ? candidate : best,
+  );
 }
 
 function schemaInstructions(durationSec: number): string {
