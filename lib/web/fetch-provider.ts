@@ -1,6 +1,6 @@
-import { CONTENT_LIMITS } from "@/lib/agent/config";
-import { htmlToText } from "@/lib/knowledge/extraction";
-import { truncateText } from "@/lib/agent/redaction";
+import { CONTENT_LIMITS } from "../agent/config";
+import { htmlToText } from "../knowledge/extraction";
+import { truncateText } from "../agent/redaction";
 import { readImageDimensions, sniffImageMime } from "./image-metadata";
 import { canonicalizeWebUrl, sha256Hex, textContentSha256, urlSha256 } from "./normalization";
 import { extractPageImageCandidates } from "./page-images";
