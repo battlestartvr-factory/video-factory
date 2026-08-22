@@ -11,6 +11,7 @@ import type { WorkflowTickContext, WorkflowTickHandler, WorkflowTickOutcome } fr
 
 const NORMAL_POLL_MS = 5_000;
 const AMBIGUOUS_SUBMIT_RECHECK_MS = 60_000;
+const MINIMAX_H3_PROMPT_MAX_CHARS = 5_000;
 const KLING_SINGLE_SHOT_PROMPT_MAX_CHARS = 2_000;
 const KLING_MULTI_SHOT_PROMPT_MAX_CHARS = 500;
 const KLING_PROMPT_OMISSION_MARKER = "\n\n[...provider-safe compacted context...]\n\n";
@@ -95,6 +96,24 @@ function klingQuality(generation: DurableVideoGeneration): string {
   return quality === "low" ? "std" : quality === "high" ? "4K" : "pro";
 }
 
+function minimaxH3Resolution(generation: DurableVideoGeneration): "768P" | "2K" {
+  const configured = stringSetting(generation.settings, "resolution")?.toUpperCase();
+  return configured === "2K" ? "2K" : "768P";
+}
+
+function minimaxH3Duration(generation: DurableVideoGeneration): number {
+  const configured = numericSetting(generation.settings, "durationSec", "duration_sec", "duration");
+  const duration = Math.trunc(configured ?? 10);
+  if (duration < 4 || duration > 15) {
+    throw new DurableWorkflowError({
+      code: "VIDEO_DURATION_NOT_SUPPORTED",
+      message: `MiniMax H3 / Hailuo 03 duration must be between 4 and 15 seconds; received ${duration}`,
+      retryable: false,
+    });
+  }
+  return duration;
+}
+
 function veoModel(generation: DurableVideoGeneration): string {
   const effective = stringSetting(generation.settings, "effectiveQuality", "effective_quality");
   if (effective === "lite") return "veo3_lite";
@@ -114,6 +133,72 @@ export function buildVideoProviderRequest(generation: DurableVideoGeneration): V
   const urls = modeAssets(generation);
   const startFrame = assetUrls(generation, "start_frame")[0];
   const endFrame = assetUrls(generation, "end_frame")[0];
+
+  if (generation.modelId === "minimax-h3") {
+    const h3Duration = minimaxH3Duration(generation);
+    const h3Resolution = minimaxH3Resolution(generation);
+    const providerPrompt = generation.prompt.replace(/\r\n?/g, "\n").trim();
+    if (providerPrompt.length > MINIMAX_H3_PROMPT_MAX_CHARS) {
+      throw new DurableWorkflowError({
+        code: "VIDEO_PROMPT_TOO_LONG",
+        message: `MiniMax H3 gameplay prompt exceeds the ${MINIMAX_H3_PROMPT_MAX_CHARS}-character provider budget`,
+        retryable: false,
+      });
+    }
+
+    if (generation.mode === "image-to-video" || generation.mode === "start-end-frames") {
+      if (!startFrame) {
+        throw new DurableWorkflowError({
+          code: "VIDEO_INPUT_MISSING",
+          message: "MiniMax H3 image-to-video requires an approved start frame",
+          retryable: false,
+        });
+      }
+      return {
+        adapter: "market",
+        model: "minimax/hailuo-03",
+        input: {
+          first_frame_url: startFrame,
+          ...(endFrame ? { last_frame_url: endFrame } : {}),
+          prompt: providerPrompt,
+          duration: h3Duration,
+          resolution: h3Resolution,
+        },
+      };
+    }
+
+    if (generation.mode === "reference-to-video") {
+      if (!urls.length) {
+        throw new DurableWorkflowError({
+          code: "VIDEO_INPUT_MISSING",
+          message: "MiniMax H3 reference-to-video requires at least one reference asset",
+          retryable: false,
+        });
+      }
+      return {
+        adapter: "market",
+        model: "minimax/hailuo-03",
+        input: {
+          prompt: providerPrompt,
+          reference_image_urls: urls.slice(0, 9),
+          duration: h3Duration,
+          aspect_ratio: aspectRatio,
+          resolution: h3Resolution,
+        },
+      };
+    }
+
+    return {
+      adapter: "market",
+      model: "minimax/hailuo-03",
+      input: {
+        prompt: providerPrompt,
+        duration: h3Duration,
+        aspect_ratio: aspectRatio,
+        resolution: h3Resolution,
+      },
+    };
+  }
 
   if (generation.modelId === "kling-3") {
     if (generation.mode === "reference-to-video") {
