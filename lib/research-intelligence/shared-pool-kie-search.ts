@@ -272,6 +272,8 @@ export class SharedPoolKieSearchProvider {
       };
     }
 
+    // Empty visible output cannot provide a reliable recovery instruction. Stop after
+    // the first paid call and preserve provider usage/diagnostics for production triage.
     if (!primary.parsed.answer.trim() || this.signal?.aborted) {
       throw groundingMissingError({
         message: "KIE Gemini returned no verifiable source URLs or visible grounded answer",
@@ -279,6 +281,8 @@ export class SharedPoolKieSearchProvider {
       });
     }
 
+    // Coverage-recovery searches use the final global provider-call slot and therefore
+    // may never spend an additional provenance-recovery call of their own.
     if (this.options.allowProvenanceRecovery === false) {
       throw groundingMissingError({
         message: "KIE Gemini returned visible text without provenance and provenance recovery is disabled for this bounded search",
@@ -286,6 +290,7 @@ export class SharedPoolKieSearchProvider {
       });
     }
 
+    // Meaningful visible text without provenance gets exactly one compact recovery call.
     const recovery = await this.requestGrounded(input, "provenance_recovery");
     if (recovery.parsed.chunks.length === 0) {
       throw groundingMissingError({
