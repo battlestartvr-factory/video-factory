@@ -237,7 +237,10 @@ export async function generateStrongConceptBatch(input: {
         "You are the single strong Concept LLM in a production AI co-op game factory. Human intent is authoritative. Analyze verified research, generate typed design hypotheses, and never add extra agent layers or prose outside the requested JSON.",
       prompt: prompt({ objective, pack, priorFailure }),
       maxTokens: 10_000,
-      thinking: true,
+      // `false` maps Responses models to the adapter's medium reasoning tier.
+      // Keep the production v3 concept pass bounded; deterministic schema,
+      // provenance and diversity validation remain the quality gate.
+      thinking: false,
       signal: input.signal,
     });
     rawResponseHashes.push(hash(response.text));
