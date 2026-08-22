@@ -8,7 +8,7 @@ function read(relativePath: string): string {
 
 const v3Migration = read("supabase/migrations/20260821223000_game_discovery_v3_simplified_graph.sql");
 const durationMigration = read("supabase/migrations/20260822062000_stage4_gameplay_duration_contract.sql");
-const progressMigration = read("supabase/migrations/20260822084500_allow_v3_research_progress.sql");
+const progressRegexMigration = read("supabase/migrations/20260822090000_fix_research_progress_event_regex.sql");
 
 describe("Game Discovery v3 database migration contract", () => {
   it("admits workflow version 3 with exactly three concepts and a single research pack", () => {
@@ -38,7 +38,7 @@ describe("Game Discovery v3 database migration contract", () => {
   });
 
   it("advances the deployment schema fence to the newest migration", () => {
-    expect(read("supabase/schema-contract.txt").trim()).toBe("20260822084500");
-    expect(progressMigration).toContain("schema_version = '20260822084500'");
+    expect(read("supabase/schema-contract.txt").trim()).toBe("20260822090000");
+    expect(progressRegexMigration).toContain("schema_version = '20260822090000'");
   });
 });
