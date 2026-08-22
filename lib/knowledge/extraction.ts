@@ -1,4 +1,4 @@
-import { CONTENT_LIMITS } from "@/lib/agent/config";
+import { CONTENT_LIMITS } from "../agent/config";
 
 export function chunkText(text: string, chunkSize: number = CONTENT_LIMITS.knowledgeChunkSize): string[] {
   const trimmed = text.trim();
