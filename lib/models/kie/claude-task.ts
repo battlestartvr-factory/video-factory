@@ -39,17 +39,107 @@ function retryableHttpStatus(status: number): boolean {
   return status === 408 || status === 409 || status === 425 || status === 429 || status >= 500;
 }
 
-async function parsePayload(response: Response): Promise<Record<string, unknown>> {
-  const text = await response.text();
+function parseJsonObject(text: string): Record<string, unknown> | null {
   try {
-    return asObject(JSON.parse(text));
+    const parsed = JSON.parse(text) as unknown;
+    const object = asObject(parsed);
+    return Object.keys(object).length ? object : null;
   } catch {
-    throw new KieClaudeTaskError(
-      `KIE LLM returned invalid JSON (HTTP ${response.status})`,
-      retryableHttpStatus(response.status),
-      response.status,
-    );
+    return null;
   }
+}
+
+function parseSsePayloads(text: string): Record<string, unknown>[] {
+  const payloads: Record<string, unknown>[] = [];
+  let dataLines: string[] = [];
+
+  const flush = () => {
+    if (!dataLines.length) return;
+    const data = dataLines.join("\n").trim();
+    dataLines = [];
+    if (!data || data === "[DONE]") return;
+    const parsed = parseJsonObject(data);
+    if (parsed) payloads.push(parsed);
+  };
+
+  for (const rawLine of text.split(/\r?\n/)) {
+    const line = rawLine.trimStart();
+    if (!line) {
+      flush();
+      continue;
+    }
+    if (line.startsWith(":")) continue;
+    if (line.startsWith("data:")) dataLines.push(line.slice(5).trimStart());
+  }
+  flush();
+  return payloads;
+}
+
+function responseCandidate(payload: Record<string, unknown>): Record<string, unknown> | null {
+  const nested = asObject(payload.response);
+  if (Object.keys(nested).length) return nested;
+  if (
+    Array.isArray(payload.output) ||
+    typeof payload.output_text === "string" ||
+    typeof payload.status === "string" ||
+    Object.keys(asObject(payload.usage)).length
+  ) {
+    return payload;
+  }
+  return null;
+}
+
+function synthesizeResponsesPayload(payloads: Record<string, unknown>[]): Record<string, unknown> | null {
+  for (let index = payloads.length - 1; index >= 0; index -= 1) {
+    const candidate = responseCandidate(payloads[index] ?? {});
+    if (candidate && (Array.isArray(candidate.output) || typeof candidate.output_text === "string")) {
+      return candidate;
+    }
+  }
+
+  const deltas: string[] = [];
+  let usage: Record<string, unknown> = {};
+  let status: string | null = null;
+  let creditsConsumed: number | null = null;
+  for (const payload of payloads) {
+    const nested = asObject(payload.response);
+    const source = Object.keys(nested).length ? nested : payload;
+    const delta = source.delta ?? payload.delta;
+    if (typeof delta === "string") deltas.push(delta);
+    const outputText = source.output_text ?? payload.output_text;
+    if (typeof outputText === "string") deltas.push(outputText);
+    const sourceUsage = asObject(source.usage);
+    if (Object.keys(sourceUsage).length) usage = sourceUsage;
+    if (typeof source.status === "string") status = source.status;
+    const credits = source.credits_consumed ?? payload.credits_consumed;
+    if (typeof credits === "number") creditsConsumed = credits;
+  }
+  const text = deltas.join("");
+  if (!text.trim()) return null;
+  return {
+    output_text: text,
+    ...(Object.keys(usage).length ? { usage } : {}),
+    ...(status ? { status } : {}),
+    ...(creditsConsumed !== null ? { credits_consumed: creditsConsumed } : {}),
+  };
+}
+
+async function parsePayload(response: Response, responsesApi = false): Promise<Record<string, unknown>> {
+  const text = await response.text();
+  const direct = parseJsonObject(text.trim());
+  if (direct) return direct;
+
+  if (responsesApi) {
+    const payloads = parseSsePayloads(text);
+    const synthesized = synthesizeResponsesPayload(payloads);
+    if (synthesized) return synthesized;
+  }
+
+  throw new KieClaudeTaskError(
+    `KIE LLM returned invalid JSON response (HTTP ${response.status})`,
+    retryableHttpStatus(response.status),
+    response.status,
+  );
 }
 
 function extractClaudeText(payload: Record<string, unknown>): string {
@@ -171,6 +261,7 @@ export class KieClaudeTaskAdapter {
     const body = isResponses
       ? {
           model: model.providerModel,
+          stream: false,
           input: [
             { role: "system", content: [{ type: "input_text", text: input.system }] },
             { role: "user", content: [{ type: "input_text", text: input.prompt }] },
@@ -217,7 +308,7 @@ export class KieClaudeTaskAdapter {
       );
     }
 
-    const payload = await parsePayload(response);
+    const payload = await parsePayload(response, isResponses);
     if (!response.ok) {
       const detail = safeProviderErrorDetail(payload);
       throw new KieClaudeTaskError(
