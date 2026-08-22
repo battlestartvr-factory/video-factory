@@ -1,109 +1,292 @@
-# Архитектура — current production state
+# Architecture — current production state
 
-> Canonical current-state companion: `docs/current-project-state.md`. Старые документы про Vercel/n8n-first MVP следует читать как историю миграции, а не как production topology.
+**Updated:** 2026-08-22  
+Full implementation reference: `docs/implementation-current.md`.
 
-## North Star
+## Product boundary
 
-Система строится как autonomous experimentation and learning loop для поиска PC/Steam friends co-op игр. Контент — эксперимент; игровая идея — product candidate; human interest — evidence; durable memory должна делать следующие эксперименты лучше.
+AI Co-op Game Discovery Factory — durable experimentation system для поиска и проверки PC/Steam co-op game ideas.
 
-## Production topology
+```text
+DISCOVERY -> EVIDENCE PROTOTYPE -> HUMAN SIGNAL -> EVALUATION -> LEARNING
+```
+
+Current production закрывает Discovery + evidence prototype + Human Gates. Stage 5/6 evaluation/learning ещё впереди.
+
+## Runtime topology
 
 ```text
 Browser
-  -> Caddy (VPS, HTTPS)
+  -> HTTPS / Caddy on Ubuntu VPS
   -> Next.js app container
-       -> Supabase PostgreSQL/Auth
-       -> KIE/provider APIs
+       -> Supabase managed Postgres/Auth
+       -> KIE APIs
        -> Google Drive durable archive
-       -> Backblaze B2 temporary ingest where required
+       -> Backblaze B2 temp ingest where needed
+       -> internal app services used by workers
 
-Supabase pgmq/core_orchestrator_v1
-  -> durable worker container
-       -> workflow handlers
+Supabase PGMQ
+  -> core worker container, concurrency 1
+  -> research worker container, concurrency 5
+       -> durable workflow ticks
        -> provider submit/poll
+       -> Safe Fetch / research
        -> FFmpeg assembly
-       -> Drive archive
-       -> Supabase state/events/lineage
 
-GitHub main -> CI -> Deploy Production -> SSH -> VPS Docker Compose
+/srv/ai-factory
+  -> shared assembly staging/output
+
+GitHub main
+  -> CI exact SHA
+  -> Deploy Production workflow
+  -> SSH VPS
+  -> schema fence
+  -> Docker Compose exact SHA
 ```
 
-Public production host: `https://battlestart-factory.duckdns.org`.
+Public production: `https://battlestart-factory.duckdns.org`.
 
-## Durable orchestration invariants
+## Durable orchestration
 
-1. **Database state is authoritative.** PGMQ delivery only wakes a job; it does not define workflow truth.
-2. Every paid/provider operation has durable admission, lineage, state and terminal outcome.
-3. Lease/heartbeat/watchdog recovery must remain restart-safe and idempotent.
-4. Terminal `factory_jobs.status` is synchronized to its **root** `creative_runs.status` by `factory_jobs_sync_root_creative_run_terminal`; child concept/media runs are deliberately not bulk-mutated.
-5. Human gates are explicit durable state, not UI-only buttons. Stage 4 currently has concept, reference-image and video approval/revise/reject paths.
-6. Reject/revise evidence is retained and fed back into later generation/planning; reject must not be satisfied by a cosmetic reskin of the same mechanic.
-7. Google Drive is the durable binary archive for Gameplay Reference and generated evidence. Supabase stores structured semantics, provenance and pointers.
-8. No new subsystem should bypass `factory_jobs`/`creative_runs` lineage simply because a provider call is easy to make directly.
+Authoritative state lives in Supabase.
 
-## Stage 4 canonical flow
+Core entities:
+
+- `factory_jobs` — execution state/lease/retry/cancellation;
+- `creative_runs` — experiment and creative lineage;
+- `factory_workflow_events` — durable event trail/progress/wakeups;
+- PGMQ queues — delivery only;
+- `generations` + provider task/accounting rows — paid media lifecycle;
+- research/reference/review domain tables — evidence and Human Gate decisions.
+
+Invariant:
+
+> Queue delivery never becomes workflow truth. Worker must always re-read/claim durable DB state.
+
+Worker lifecycle:
+
+1. queue read;
+2. atomic claim + lease token;
+3. one workflow tick;
+4. lease heartbeat;
+5. durable transition;
+6. ack;
+7. watchdog recovery for due/stale work.
+
+Stop/cancel is durable: root cancellation removes active lease, heartbeat observes loss and aborts in-flight work through `AbortSignal`. Cancelled lineage must not authorize new paid submits.
+
+## Current workflow graph: `game_discovery_batch@3`
 
 ```text
-DiscoveryObjective
- -> Concept Explorer + Diversity Guard
- -> Human Concept Approval Gate
- -> Concept Pre-Evaluation
- -> Gameplay Moment Planner
- -> Gameplay Reference retrieval / purpose separation
- -> Gameplay Shot + Prompt planning
- -> Reference image generation
- -> Gameplay Authenticity inspection
- -> Human Reference Approval Gate
- -> Image-to-video generation
- -> Human Video Approval Gate
- -> deterministic prototype assembly + Drive archive
- -> root prototype_result + complete lineage
+Natural chat game-design request
+ -> start_game_discovery
+ -> DiscoveryObjective
+ -> bounded shared external research
+      KIE Gemini + Google grounding
+      Safe Fetch
+      source/provenance/coverage gates
+ -> verified Research Pack
+ -> GPT-5.6 Terra strong synthesis
+ -> exactly 3 conversational concepts
+ -> HUMAN CONCEPT GATE
+ -> gameplay moment planning
+ -> shot planning + deterministic gameplay authenticity
+ -> purpose-aware Gameplay Reference Set
+ -> deterministic image/H3 prompt compilation
+ -> GPT Image 2 gameplay still
+ -> HUMAN REFERENCE IMAGE GATE
+ -> deterministic GameplayVideoMotionPlan + pre-video authenticity gate
+ -> MiniMax H3 / Hailuo 03 through KIE
+ -> HUMAN VIDEO GATE
+ -> deterministic FFmpeg assembly
+ -> asset graph + Drive archive
+ -> prototype_result
 ```
 
-Known-good production batches and acceptance evidence are recorded in `docs/current-project-state.md`.
+### Compatibility workflows
 
-## Stage 4.5 additive intelligence boundary
+- `game_discovery_batch@1` — legacy Stage 4 path;
+- `game_discovery_batch@2` — Stage 4.5 Council architecture;
+- `game_discovery_batch@3` — current default.
 
-Stage 4.5 adds a tactical external sensing layer **in front of** the known-good Stage 4 pipeline. It does not replace orchestration or any Human Gate.
+Do not infer current production from the mere presence of v1/v2 handlers.
 
-Target v2 front-end flow:
+## Research boundary
+
+Current v3 production does **not** run five independent paid Scout searches.
+
+`lib/research-intelligence/shared-source-pool.ts` owns bounded acquisition:
+
+- one broad KIE grounded source acquisition;
+- Safe Fetch selected pages;
+- canonical/content dedupe;
+- title/source identity verification;
+- coverage classification;
+- targeted recovery only for missing categories;
+- hard provider-call cap;
+- fail closed before concept/media spend if evidence quality is insufficient.
+
+Required coverage: competitor, mechanics, player_voice, gameplay_visual.
+
+Research pages are untrusted evidence. They never become system instructions. Downstream creative/media models do not browse them directly; they receive compact typed artifacts.
+
+## Concept boundary
+
+V3 uses one strong Concept LLM (`gpt-5-6-terra`) instead of the v2 Council/Curator fan-out.
+
+Model-facing concept artifact is intentionally conversational:
+
+`conceptId + title + contentMarkdown + sourceRefs`
+
+Exactly 3 concepts are required. The full human-readable artifact is authoritative. A deterministic compatibility projection feeds older Stage 4 downstream schemas.
+
+After Human Concept Gate, v3 skips legacy AI concept pre-evaluation. Human approval is authoritative.
+
+## Gameplay planning boundary
+
+Gameplay semantics stay provider-neutral until deterministic provider policy is applied.
 
 ```text
-DiscoveryObjective
- -> Research Director
- -> 5 independent durable Research Scouts
- -> Research Memory
- -> one Evidence Pack synthesis
- -> 3 Concept Council members
- -> one Concept Curator
- -> Human Concept Approval Gate
- -> existing Stage 4 downstream flow unchanged
+approved concept
+ -> GameplayMomentSpec
+ -> ShotSpec
+ -> GameplayAuthenticitySpec
+ -> GameplayVideoMotionPlan
+ -> PromptPlan
+ -> provider request
 ```
 
-Research Memory is an evidence/cache/index layer. Its tables link back to `factory_jobs` and root `creative_runs`; they are not authoritative workflow state. Fresh research evidence does not automatically become Stage 6 `memory_items`.
+Camera is product semantics, not decoration. Allowed camera must be the actual player-visible/control-bound gameplay camera. Cinematic/broadcast/spectator intent is rejected before paid media.
 
-Only the Research subsystem may later receive web search/fetch/image-search tools. Concept, Image and Video planners consume bounded typed evidence/reference inputs and do not browse directly.
+Shot Planner cannot select the video provider. `normalizeGenerationPolicy()` enforces current factory policy:
 
-The canonical contract is `docs/stage4-5-external-intelligence-research-council-v1.md`.
+- 16:9;
+- GPT Image 2 still;
+- MiniMax H3 video;
+- image-to-video;
+- current duration policy.
 
-## Main domain/storage boundaries
+## Human Gate boundary
 
-- `creative_runs`: experiment/domain lineage.
-- `factory_jobs`: durable execution state.
-- `factory_workflow_events`: auditable transitions/wakeups.
-- `generations`: image/video provider lineage.
-- `gameplay_references`: structured real-gameplay reference library.
-- `gameplay_*_reviews` + `gameplay_authenticity_inspections`: human/evaluator evidence.
-- `research_runs` / `research_queries` / `research_sources` / `research_evidence` / `research_assets` / `research_packs`: Stage 4.5 fresh external evidence/cache/provenance; not an orchestration engine and not Stage 6 strategic memory.
-- `lib/game-discovery/`: typed Stage 4 semantics; prompts are compiled artifacts, not the source of product truth.
-- `lib/research-intelligence/`: typed Stage 4.5 research/evidence/reference contracts.
+Three durable human gates:
 
-## What comes next
+1. concept;
+2. generated reference image;
+3. generated gameplay video.
 
-The immediate architecture milestone is the bounded Stage 4.5 External Intelligence & Research Council path. It must remain versioned/additive and preserve `game_discovery_batch@1` as the fallback while `game_discovery_batch@2` is built.
+All support approve/revise/reject.
 
-After Stage 4.5 closes, continue Stage 5/6:
+Generated media is **not** post-generation auto-rejected by AI. Pre-generation authenticity checks may stop spend; after generation the artifact decision belongs to the human reviewer.
 
-`DISCOVERY -> EXPERIMENT -> EVALUATION -> HUMAN SIGNAL -> LEARNING -> SMARTER DISCOVERY`
+This boundary prevents an evaluator from silently replacing product judgment with aesthetic preference.
 
-Evaluation must distinguish concept/gameplay quality from artifact/provider defects; learning writes must be evidence-backed and reusable by future discovery batches.
+## Reference boundary
+
+Gameplay Reference Library stores curated real-gameplay visual evidence. References are selected by purpose, not simply visual similarity.
+
+Purpose firewall separates camera, interaction, co-op and art-direction influence. External research images do not automatically enter this library.
+
+Durable binary original -> Google Drive. Structured semantics/provenance/index state -> Supabase.
+
+## Media boundary
+
+### Image
+
+- default `gpt-image-2`;
+- 16:9 gameplay still;
+- keyframe/approval checkpoint;
+- no video admission before Human Image Gate.
+
+### Video
+
+Primary:
+
+- factory id `minimax-h3`;
+- KIE model `minimax/hailuo-03`;
+- 10s default;
+- 768P default;
+- image-to-video;
+- audio off for discovery evidence.
+
+Fallback:
+
+- `kling-3` remains enabled.
+
+Current H3 prompt compiler is provider-specific but product semantics remain typed. Oversized H3 prompt fails before paid submit instead of being chopped after compilation.
+
+## Assembly boundary
+
+FFmpeg runs on the durable VPS worker path, never in browser/Vercel Functions.
+
+Assembly requires human-approved video whose lineage matches the current approved reference image and concept/moment/shot.
+
+Current v1 assembly supports one evidence shot per concept. Multishot is a future feature and fails explicitly rather than silently assembling ambiguous inputs.
+
+## Storage boundaries
+
+### Supabase
+
+Structured authoritative state:
+
+- orchestration;
+- creative lineage;
+- research provenance/evidence;
+- generation state;
+- reference metadata;
+- Human Gate decisions;
+- usage/accounting;
+- deployment schema contract.
+
+### Google Drive
+
+Durable binary archive:
+
+- knowledge originals;
+- curated Gameplay Reference originals;
+- completed media/archive outputs.
+
+Production deploy requires owner OAuth/archive root health.
+
+### Backblaze B2
+
+Temporary asset-ingest storage for the ingest path. It is not the discovery system's durable semantic memory.
+
+### VPS filesystem
+
+Shared assembly staging/output only. Product truth must not exist solely there.
+
+## Release architecture
+
+CI exact commit checks:
+
+- schema contract script;
+- lint;
+- app typecheck;
+- worker TypeScript compile;
+- worker Docker image;
+- FFmpeg runtime;
+- full unit tests;
+- Next production build.
+
+`Deploy Production` runs only after successful CI on `main` (or explicit manual action).
+
+`scripts/deploy.sh` compares application schema fence with production DB RPC **before** application deployment. DB drift blocks release.
+
+Then deployment verifies Drive OAuth, Docker services, Caddy config, shared workspace, app health and worker running state. Acceptance should verify `orchestrator_workers.build_sha` equals the exact merged commit.
+
+## Architectural regressions to reject
+
+- Vercel becomes production authority again without explicit migration decision;
+- n8n becomes owner of current discovery workflow state;
+- queue payload becomes authoritative state;
+- provider call bypasses generation/job lineage;
+- paid video is admitted without Human Image Gate;
+- AI silently rejects generated media after generation;
+- ungrounded web prose is accepted as evidence;
+- external page content is treated as trusted instruction;
+- creative LLM selects provider policy;
+- H3 prompt is blindly truncated;
+- cinematic camera replaces real gameplay camera;
+- production application deploys against older DB schema.
+
+Future architecture belongs in `docs/future-roadmap.md`, not in this current-state document.
