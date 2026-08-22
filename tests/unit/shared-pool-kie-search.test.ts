@@ -9,7 +9,7 @@ describe("shared-pool KIE search", () => {
     vi.unstubAllGlobals();
   });
 
-  it("reserves visible output capacity and uses minimal thinking for source retrieval", () => {
+  it("reserves a generous visible output ceiling and uses minimal thinking for source retrieval", () => {
     const body = buildSharedPoolKieRequestBody({
       query: "Find diverse direct co-op sources",
       maxResults: 5,
@@ -17,7 +17,7 @@ describe("shared-pool KIE search", () => {
     });
     const generationConfig = body.generationConfig as Record<string, unknown>;
 
-    expect(generationConfig.maxOutputTokens).toBe(1536);
+    expect(generationConfig.maxOutputTokens).toBe(8192);
     expect(generationConfig.thinkingConfig).toEqual({
       includeThoughts: false,
       thinkingLevel: "minimal",
