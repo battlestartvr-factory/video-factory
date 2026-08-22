@@ -9,7 +9,7 @@ describe("shared-pool KIE search", () => {
     vi.unstubAllGlobals();
   });
 
-  it("uses low thinking without returning thought summaries", () => {
+  it("reserves visible output capacity and uses minimal thinking for source retrieval", () => {
     const body = buildSharedPoolKieRequestBody({
       query: "Find diverse direct co-op sources",
       maxResults: 5,
@@ -17,13 +17,15 @@ describe("shared-pool KIE search", () => {
     });
     const generationConfig = body.generationConfig as Record<string, unknown>;
 
-    expect(generationConfig.maxOutputTokens).toBe(768);
+    expect(generationConfig.maxOutputTokens).toBe(1536);
     expect(generationConfig.thinkingConfig).toEqual({
       includeThoughts: false,
-      thinkingLevel: "low",
+      thinkingLevel: "minimal",
     });
     expect(JSON.stringify(body)).toContain("source acquisition, not design analysis");
+    expect(JSON.stringify(body)).toContain("Do not spend tokens reasoning about game concepts");
     expect(JSON.stringify(body)).toContain("DIVERSITY IS REQUIRED");
+    expect(JSON.stringify(body)).toContain("competitor, mechanics, player-authored voice, and real gameplay/visual evidence");
     expect(JSON.stringify(body)).toContain("SOURCE|");
   });
 
@@ -95,11 +97,19 @@ describe("shared-pool KIE search", () => {
       usage: expect.objectContaining({
         provider_calls: 1,
         provenance_recovery_used: false,
-        thinking_level: "low",
+        thinking_level: "minimal",
         include_thoughts: false,
         promptTokenCount: 120,
         thoughtsTokenCount: 90,
         credits_consumed: 0.02,
+        response_diagnostics: {
+          primary: expect.objectContaining({
+            candidate_count: 1,
+            finish_reasons: ["MAX_TOKENS"],
+            answer_chars: 0,
+            grounding_chunk_count: 0,
+          }),
+        },
         failure_diagnostics: {
           primary: expect.objectContaining({
             candidate_count: 1,
@@ -109,6 +119,55 @@ describe("shared-pool KIE search", () => {
           }),
         },
       }),
+    });
+  });
+
+  it("preserves response diagnostics on a successful grounded result", async () => {
+    const fetchMock = vi.fn(async () => new Response(
+      JSON.stringify({
+        candidates: [
+          {
+            content: {
+              parts: [
+                { text: "SOURCE|https://example.com/game|Example Game|The game supports cooperative play." },
+              ],
+            },
+            finishReason: "STOP",
+          },
+        ],
+        usageMetadata: {
+          promptTokenCount: 100,
+          candidatesTokenCount: 30,
+          thoughtsTokenCount: 5,
+          totalTokenCount: 135,
+        },
+        credits_consumed: 0.01,
+      }),
+      { status: 200, headers: { "Content-Type": "application/json" } },
+    ));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const provider = new SharedPoolKieSearchProvider(
+      "https://api.kie.ai",
+      "test-key",
+      "gemini-3-6-flash",
+      new AbortController().signal,
+    );
+    const results = await provider.searchText({ query: "co-op source acquisition", maxResults: 4 });
+
+    expect(results).toHaveLength(1);
+    expect(results[0]?.providerMetadata?.usage).toMatchObject({
+      provider_calls: 1,
+      thinking_level: "minimal",
+      candidatesTokenCount: 30,
+      thoughtsTokenCount: 5,
+      response_diagnostics: {
+        primary: expect.objectContaining({
+          finish_reasons: ["STOP"],
+          answer_chars: expect.any(Number),
+          grounding_chunk_count: 1,
+        }),
+      },
     });
   });
 
@@ -164,15 +223,19 @@ describe("shared-pool KIE search", () => {
     expect(results[0]?.providerMetadata?.usage).toMatchObject({
       provider_calls: 2,
       provenance_recovery_used: true,
-      thinking_level: "low",
+      thinking_level: "minimal",
       include_thoughts: false,
       credits_consumed: 0.02,
+      response_diagnostics: {
+        primary: expect.any(Object),
+        recovery: expect.any(Object),
+      },
     });
 
     const recoveryRequest = JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body));
     expect(recoveryRequest.generationConfig).toMatchObject({
-      maxOutputTokens: 384,
-      thinkingConfig: { includeThoughts: false, thinkingLevel: "low" },
+      maxOutputTokens: 768,
+      thinkingConfig: { includeThoughts: false, thinkingLevel: "minimal" },
     });
   });
 });
