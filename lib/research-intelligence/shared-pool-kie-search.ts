@@ -23,7 +23,7 @@ export interface SharedPoolKieSearchProviderOptions {
   allowProvenanceRecovery?: boolean;
 }
 
-const PRIMARY_MAX_OUTPUT_TOKENS = 1_536;
+const PRIMARY_MAX_OUTPUT_TOKENS = 8_192;
 const RECOVERY_MAX_OUTPUT_TOKENS = 768;
 const SEARCH_THINKING_LEVEL = "minimal" as const;
 
