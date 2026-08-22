@@ -161,6 +161,30 @@ describe("human concept reject contract", () => {
     expect(llm.generate).not.toHaveBeenCalled();
   });
 
+  it("keeps one approved survivor after two rejects without any replacement call", async () => {
+    const first = concept({ conceptId: "concept-a" });
+    const second = concept({ conceptId: "concept-b" });
+    const third = concept({ conceptId: "concept-c" });
+    const llm = llmWithConcepts([]);
+
+    const result = await applyHumanConceptReviews({
+      llm,
+      objective,
+      activeConcepts: [first, second, third],
+      reviews: [
+        review(first.conceptId, "reject", "Drop A."),
+        review(second.conceptId, "approve"),
+        review(third.conceptId, "reject", "Drop C."),
+      ],
+      history: [],
+    });
+
+    expect(result.activeConcepts.map((item) => item.conceptId)).toEqual(["concept-b"]);
+    expect(result.regeneratedConcepts).toEqual([]);
+    expect(result.attempts).toBe(0);
+    expect(llm.generate).not.toHaveBeenCalled();
+  });
+
   it("revises only the card explicitly marked revise", async () => {
     const source = concept({ conceptId: "concept-a" });
     const revisedDraft = concept({
@@ -185,6 +209,37 @@ describe("human concept reject contract", () => {
       action: "revise",
       sourceConceptId: "concept-a",
     });
+    expect(result.attempts).toBe(1);
+    expect(llm.generate).toHaveBeenCalledTimes(1);
+  });
+
+  it("handles approve + revise + reject as one revision, one survivor and one prune", async () => {
+    const approved = concept({ conceptId: "concept-a" });
+    const reviseSource = concept({ conceptId: "concept-b" });
+    const rejected = concept({ conceptId: "concept-c" });
+    const revisedDraft = concept({
+      conceptId: "provider-revision-id",
+      setting: "Flooded orbital salvage tunnels.",
+    });
+    const llm = llmWithConcepts([revisedDraft]);
+
+    const result = await applyHumanConceptReviews({
+      llm,
+      objective,
+      activeConcepts: [approved, reviseSource, rejected],
+      reviews: [
+        review(approved.conceptId, "approve"),
+        review(reviseSource.conceptId, "revise", "Keep the mechanic but move it underwater."),
+        review(rejected.conceptId, "reject", "Drop this direction."),
+      ],
+      history: [],
+    });
+
+    expect(result.activeConcepts).toHaveLength(2);
+    expect(result.activeConcepts.some((item) => item.conceptId === approved.conceptId)).toBe(true);
+    expect(result.activeConcepts.some((item) => item.conceptId === rejected.conceptId)).toBe(false);
+    expect(result.regeneratedConcepts).toHaveLength(1);
+    expect(result.regeneratedConcepts[0]?.conceptId).toContain("concept-b-rev-");
     expect(result.attempts).toBe(1);
     expect(llm.generate).toHaveBeenCalledTimes(1);
   });
