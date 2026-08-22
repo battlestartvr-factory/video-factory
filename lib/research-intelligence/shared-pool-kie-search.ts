@@ -23,6 +23,10 @@ export interface SharedPoolKieSearchProviderOptions {
   allowProvenanceRecovery?: boolean;
 }
 
+const PRIMARY_MAX_OUTPUT_TOKENS = 1_536;
+const RECOVERY_MAX_OUTPUT_TOKENS = 768;
+const SEARCH_THINKING_LEVEL = "minimal" as const;
+
 function object(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown>
@@ -100,11 +104,12 @@ function buildPrompt(input: TextSearchRequest, mode: GroundedRequestMode): strin
     ? Math.min(4, boundedMaxResults(input.maxResults))
     : boundedMaxResults(input.maxResults);
   return [
-    "Use Google Search grounding. This is source acquisition, not design analysis.",
+    "Use Google Search grounding. This is source acquisition, not design analysis. Do not spend tokens reasoning about game concepts.",
     `Research query: ${input.query.trim()}`,
     `Return at most ${maxResults} verified direct source lines and nothing else.`,
     "Each line must be exactly: SOURCE|<direct final https URL>|<short title>|<one short factual claim supported by that source>.",
     "DIVERSITY IS REQUIRED: do not fill the set with store pages. When the query needs broad discovery, aim to include evidence from multiple source families: official/store/developer; mechanics or developer documentation/interviews; player reviews/community discussion; real gameplay/video/screenshots or gameplay descriptions; critical/comparison/counterexample material.",
+    "For a broad four-source request, prioritize one Safe-Fetchable source for each core purpose: competitor, mechanics, player-authored voice, and real gameplay/visual evidence.",
     "Prefer independent source domains and different evidence purposes. Two URLs that resolve to the same page or repeat the same fact are not diverse.",
     "Player sentiment requires actual player/review/community evidence; a store rating alone is not a player-voice substitute. Gameplay/visual evidence must describe or show real play, not only key art or marketing copy.",
     "Never invent, shorten, truncate, or guess a URL. Never return Google grounding redirect URLs when a direct final URL is available. Omit any source whose direct final URL cannot be verified.",
@@ -123,10 +128,12 @@ export function buildSharedPoolKieRequestBody(
     contents: [{ role: "user", parts: [{ text: buildPrompt(input, mode) }] }],
     tools: [{ googleSearch: {} }],
     generationConfig: {
-      maxOutputTokens: mode === "provenance_recovery" ? 384 : 768,
+      maxOutputTokens: mode === "provenance_recovery"
+        ? RECOVERY_MAX_OUTPUT_TOKENS
+        : PRIMARY_MAX_OUTPUT_TOKENS,
       thinkingConfig: {
         includeThoughts: false,
-        thinkingLevel: "low",
+        thinkingLevel: SEARCH_THINKING_LEVEL,
       },
     },
   };
@@ -181,6 +188,21 @@ function mergeProviderUsage(
   };
 }
 
+function usageWithDiagnostics(
+  primary: GroundedAttempt,
+  recovery?: GroundedAttempt,
+): Record<string, unknown> {
+  return {
+    ...mergeProviderUsage(primary.parsed.usage, recovery?.parsed.usage),
+    thinking_level: SEARCH_THINKING_LEVEL,
+    include_thoughts: false,
+    response_diagnostics: {
+      primary: primary.diagnostics,
+      ...(recovery ? { recovery: recovery.diagnostics } : {}),
+    },
+  };
+}
+
 function groundingMissingError(input: {
   message: string;
   primary: GroundedAttempt;
@@ -190,9 +212,7 @@ function groundingMissingError(input: {
     usage?: Record<string, unknown>;
   };
   error.usage = {
-    ...mergeProviderUsage(input.primary.parsed.usage, input.recovery?.parsed.usage),
-    thinking_level: "low",
-    include_thoughts: false,
+    ...usageWithDiagnostics(input.primary, input.recovery),
     failure_diagnostics: {
       primary: input.primary.diagnostics,
       ...(input.recovery ? { recovery: input.recovery.diagnostics } : {}),
@@ -248,11 +268,7 @@ export class SharedPoolKieSearchProvider {
     if (primary.parsed.chunks.length > 0) {
       return {
         ...primary.parsed,
-        usage: {
-          ...mergeProviderUsage(primary.parsed.usage),
-          thinking_level: "low",
-          include_thoughts: false,
-        },
+        usage: usageWithDiagnostics(primary),
       };
     }
 
@@ -290,11 +306,7 @@ export class SharedPoolKieSearchProvider {
         ...primary.parsed.webSearchQueries,
         ...recovery.parsed.webSearchQueries,
       ])],
-      usage: {
-        ...mergeProviderUsage(primary.parsed.usage, recovery.parsed.usage),
-        thinking_level: "low",
-        include_thoughts: false,
-      },
+      usage: usageWithDiagnostics(primary, recovery),
     };
   }
 
