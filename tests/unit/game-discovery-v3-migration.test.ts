@@ -17,7 +17,7 @@ describe("Game Discovery v3 database migration contract", () => {
     expect(v3Migration).toContain("maxConceptsToPrototype')::INTEGER, 0) <> 3");
     expect(v3Migration).toContain("orchestrator_persist_game_discovery_v3_research_pack");
     expect(v3Migration).toContain("orchestrator_persist_game_discovery_v3_concepts");
-    expect(v3Migration).toContain("jsonb_array_length(v_concepts) <> 3");
+    expect(v3Migration).toContain("jsonb_array_length(v_candidates) <> 3");
     expect(v3Migration).toContain("workflow_version IN (1, 2, 3)");
   });
 
