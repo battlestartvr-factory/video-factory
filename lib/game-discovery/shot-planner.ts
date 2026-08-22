@@ -77,6 +77,30 @@ export function preferredDiscoveryImageModel(objective: DiscoveryObjectiveSpecV1
   return "gpt-image-2";
 }
 
+function normalizeGenerationPolicy(
+  shot: ShotSpecV1,
+  durationSec: number,
+  imageModel: DiscoveryImageModel,
+): ShotSpecV1 {
+  // Provider routing is factory policy, not a creative decision. The LLM may describe the
+  // shot, but it cannot silently choose an older video provider or stale duration. This also
+  // avoids paying for a stronger repair pass when the creative shot is valid and only the
+  // provider-policy fields drifted.
+  return shotSpecV1Schema.parse({
+    ...shot,
+    durationSec,
+    generationPlan: {
+      ...shot.generationPlan,
+      keyframeRequired: true,
+      imageModel,
+      videoModel: PRIMARY_GAMEPLAY_VIDEO_MODEL,
+      videoMode: "image-to-video",
+      aspectRatio: "16:9",
+      durationSec,
+    },
+  });
+}
+
 function authenticityInstructions(): string {
   return `Every shot.metadata MUST contain gameplayAuthenticityPlan with this exact typed evidence contract:\n{
   "schema":"gameplay_authenticity_plan","version":1,"shotId":"<same shotId>","momentId":"<same momentId>",
@@ -195,7 +219,7 @@ async function generateAndParse(input: {
   addUsage(input.usage, response);
 
   try {
-    return parse(response.text);
+    return parse(response.text).map((shot) => normalizeGenerationPolicy(shot, input.durationSec, input.imageModel));
   } catch (firstError) {
     const repairPolicy = getDiscoveryLlmPolicy("schema_repair");
     const repair = await input.llm.generate({
@@ -209,7 +233,7 @@ async function generateAndParse(input: {
     input.hashes.push(hash(repair.text));
     addUsage(input.usage, repair);
     try {
-      return parse(repair.text);
+      return parse(repair.text).map((shot) => normalizeGenerationPolicy(shot, input.durationSec, input.imageModel));
     } catch (repairError) {
       throw new Error(
         `SHOT_PLANNER_SCHEMA_INVALID: ${repairError instanceof Error ? repairError.message : String(repairError)}; first=${firstError instanceof Error ? firstError.message : String(firstError)}`,
