@@ -1,6 +1,6 @@
 import { promises as dns } from "node:dns";
 import { isIP } from "node:net";
-import { isBlockedIp } from "@/lib/asset-ingest/url-safety";
+import { isBlockedIp } from "../asset-ingest/url-safety";
 
 export type DnsLookupFn = (
   hostname: string,
